@@ -12,7 +12,7 @@ import traceback
 app = FastAPI()
 
 origins = [
-    "http://localhost:5173",
+    "https://frontend-development-development.up.railway.app/",
 ]
 # Permitir CORS
 app.add_middleware(
