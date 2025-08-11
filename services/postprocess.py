@@ -6,10 +6,7 @@ def compute_stats(
     camiones: Optional[List[Dict[str, Any]]],
     pedidos_no: Optional[List[Dict[str, Any]]]
 ) -> Dict[str, Any]:
-    print("camiones")
-    print(camiones)
-    print("pedidos no inlcuidos")
-    print(pedidos_no)
+    
     camiones = camiones or []
     pedidos_no = pedidos_no or []
 
@@ -51,34 +48,68 @@ def move_orders(
 ) -> Dict[str, Any]:
     camiones = state.get("camiones") or []
     no_incl = state.get("pedidos_no_incluidos") or []
+    pedidos_sel = pedidos or []
 
-    ids = {p.get("PEDIDO") for p in (pedidos or [])}
+    # 1) Eliminar pedidos seleccionados de camiones existentes
+    seleccion_ids = {p.get("PEDIDO") for p in pedidos_sel}
     for cam in camiones:
-        cam["pedidos"] = [p for p in cam.get("pedidos") or [] if p.get("PEDIDO") not in ids]
+        cam["pedidos"] = [p for p in cam.get("pedidos") or [] if p.get("PEDIDO") not in seleccion_ids]
 
-    no_incl = [p for p in no_incl if p.get("PEDIDO") not in ids]
+    # 2) Eliminar pedidos seleccionados de no_incluidos
+    no_incl = [p for p in no_incl if p.get("PEDIDO") not in seleccion_ids]
 
+    # 3) Reinsertar pedidos en camión destino o en no_incluidos
     if target_truck_id:
         for cam in camiones:
             if cam.get("id") == target_truck_id:
-                cam.setdefault("pedidos", []).extend(pedidos or [])
+                cam.setdefault("pedidos", []).extend(pedidos_sel)
                 break
     else:
-        no_incl.extend(pedidos or [])
+        no_incl.extend(pedidos_sel)
 
+    # 4) Recalcular métricas de cada camión
     for cam in camiones:
-        vvol = sum(p.get("VCU_VOL") or 0 for p in cam.get("pedidos") or [])
-        vpes = sum(p.get("VCU_PESO") or 0 for p in cam.get("pedidos") or [])
+        pedidos_cam = cam.get("pedidos") or []
+
+        # VCU y otros
+        vvol = sum(p.get("VCU_VOL") or 0 for p in pedidos_cam)
+        vpes = sum(p.get("VCU_PESO") or 0 for p in pedidos_cam)
         cam["vcu_vol"] = vvol
         cam["vcu_peso"] = vpes
         cam["vcu_max"] = max([vvol, vpes], default=0)
-        cam["pallets_conf"] = sum(p.get("PALLETS") or 0 for p in cam.get("pedidos") or [])
-        cam["valor_total"] = sum(p.get("VALOR") or 0 for p in cam.get("pedidos") or [])
-        cam["chocolates"] = "SI" if any(p.get("CHOCOLATES") == "SI" for p in cam.get("pedidos") or []) else "NO"
+        cam["pallets_conf"] = sum(p.get("PALLETS") or 0 for p in pedidos_cam)
+        cam["valor_total"] = sum(p.get("VALOR") or 0 for p in pedidos_cam)
+        cam["valor_cafe"] = sum(p.get("VALOR_CAFE") or 0 for p in pedidos_cam)
+        cam["chocolates"] = "SI" if any(p.get("CHOCOLATES") == "SI" for p in pedidos_cam) else "NO"
+        cam["skus_valiosos"] = any(p.get("VALIOSO") for p in pedidos_cam)
+        cam["pdq"] = any(p.get("PDQ") for p in pedidos_cam)
+        cam["baja_vu"] = any(p.get("BAJA_VU") for p in pedidos_cam)
+        cam["lote_dir"] = any(p.get("LOTE_DIR") for p in pedidos_cam)
 
+        # Flujo OC
+        oc_vals = {p.get("OC") for p in pedidos_cam if p.get("OC") not in (None, "")}      
+        if not oc_vals:
+            cam["flujo_oc"] = ""
+        elif len(oc_vals) == 1:
+            cam["flujo_oc"] = oc_vals.pop()
+        else:
+            cam["flujo_oc"] = "MIX"
+
+        # Tipo de ruta
+        ce_vals = {p.get("CE") for p in pedidos_cam if p.get("CE") not in (None, "")}        
+        cd_vals = {p.get("CD") for p in pedidos_cam if p.get("CD") not in (None, "")}        
+        if len(ce_vals) > 1:
+            cam["tipo_ruta"] = "multi_ce"
+        elif len(cd_vals) > 1:
+            cam["tipo_ruta"] = "multi_cd"
+        else:
+            cam["tipo_ruta"] = "normal"
+
+    # 5) Reenumerar números de camión
     for idx, cam in enumerate(camiones, start=1):
         cam["numero"] = idx
 
+    # 6) Recalcular estadísticas globales
     stats = compute_stats(camiones, no_incl)
     return {"camiones": camiones, "pedidos_no_incluidos": no_incl, "estadisticas": stats}
 

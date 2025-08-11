@@ -7,7 +7,7 @@ class DisvetConfig:
     AGRUPAR_POR_PO = False
 
     # Parámetros de Optimización
-    VCU_MIN = 0.8
+    VCU_MIN = 0.85
     MAX_ORDENES = 50
     MAX_PALLETS_CONF = 60
     MAX_PALLETS_REAL = 120
@@ -36,6 +36,8 @@ class DisvetConfig:
             "VALOR": "$$ Conf.",
             "CHOCOLATES": "Chocolates",
             "VALOR_CAFE": "Valor Cafe",
+            "BAJA_VU": "Baja VU Disvet",
+            "LOTE_DIR": "Lote Dirigido Disvet",
             "BASE": "Base",
             "SUPERIOR": "Superior",
             "FLEXIBLE": "Flexible",

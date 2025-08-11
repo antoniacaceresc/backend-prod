@@ -99,7 +99,7 @@ def _contar_grupos(df, config):
     de modo de distribuir el tiempo total.
     """
     total = 0
-    tipos_ruta = ['normal', 'multi_ce', 'multi_cd', 'bh']
+    tipos_ruta = ['multi_ce_prioridad', 'normal', 'multi_ce', 'multi_cd', 'bh']
     fases = [(tipo, config.RUTAS_POSIBLES[tipo]) for tipo in tipos_ruta if tipo in config.RUTAS_POSIBLES]
  
     lo_ag = '6009 Lo Aguirre'
@@ -137,7 +137,7 @@ def _contar_grupos(df, config):
                 total += len(df_sub['OC'].unique()) if config.USA_OC else 1
  
  
-        else:  # multi_ce y multi_cd
+        else:  # multi_ce y multi_cd y multi_ce_prioridad
             for cds, ces in rutas:
                 mask = df['CD'].isin(cds) & df['CE'].isin(ces)
                 if cds == [lo_ag]:
@@ -193,7 +193,7 @@ def ejecutar_optimizacion(df, raw_pedidos, config, modo, tiempo_por_grupo, REQUE
     start_total = time.time()
  
     # Selección de fases según modo
-    tipos_ruta = ['normal'] if modo == 'binpacking' else ['normal', 'multi_ce', 'multi_cd', 'bh']
+    tipos_ruta = ['normal'] if modo == 'binpacking' else ['multi_ce_prioridad', 'normal', 'multi_ce', 'multi_cd', 'bh']
     fases = [(tipo, config.RUTAS_POSIBLES[tipo]) for tipo in tipos_ruta if tipo in config.RUTAS_POSIBLES]
  
     total_orders = len(pedidos_all)
@@ -321,8 +321,8 @@ def generar_rutas(tipo, rutas, df, mix_grupos, usa_oc):
  
             ce_presentes = set(df_sub['CE'].unique())
             cd_presentes = set(df_sub['CD'].unique())
- 
-            if tipo == 'multi_ce' and not all(ce in ce_presentes for ce in ces):
+
+            if tipo in ('multi_ce', 'multi_ce_prioridad') and not all(ce in ce_presentes for ce in ces):
                 continue
             if tipo == 'multi_cd' and not all(cd in cd_presentes for cd in cds):
                 continue
@@ -377,6 +377,8 @@ def optimizar_vcu( df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg,
     valuable_map = dict(zip(pedidos, df_g['VALIOSO']))
     pdq_map = dict(zip(pedidos, df["PDQ"]))
     pallets_conf_map    = dict(zip(pedidos, df['PALLETS']))
+    baja_vu_map = dict(zip(pedidos, df_g["BAJA_VU"]))
+    lote_dir_map = dict(zip(pedidos, df_g["LOTE_DIR"]))
 
     # MAPEOS DE APILABILIDAD
     base_map        = dict(zip(pedidos, df['BASE']))
@@ -632,6 +634,8 @@ def optimizar_vcu( df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg,
                 'CHOCOLATES':   chocolates_map[i],
                 'VALIOSO':      valuable_map[i],
                 'PDQ':          pdq_map[i],
+                'BAJA_VU':      baja_vu_map[i],
+                'LOTE_DIR':     lote_dir_map[i],
                 'PO':           po_map[i],
                 'OC':           oc_map[i],
                 'PALLETS':      pallets_conf_map[i],
@@ -647,6 +651,8 @@ def optimizar_vcu( df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg,
         pallets_conf = sum(pallets_conf_map[i] for i in grp)
         valioso = any(valuable_map.get(i) == 1 for i in grp)
         pdq = any(pdq_map.get(i) == 1 for i in grp)
+        baja_vu = any(baja_vu_map.get(i) == 1 for i in grp)
+        lote_dir = any(lote_dir_map.get(i) == 1 for i in grp)
        
         camiones.append({
             'id':               uuid.uuid4().hex,
@@ -661,6 +667,8 @@ def optimizar_vcu( df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg,
             'chocolates':       tiene_chocolates,
             'skus_valiosos':    valioso,
             'pdq':              pdq,
+            'baja_vu': baja_vu,
+            'lote_dir': lote_dir,
             'valor_total':      valor_total,
             'valor_cafe':       valor_cafe,
             'pallets_conf':     pallets_conf,
@@ -728,6 +736,8 @@ def optimizar_bin(df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg, v
     
     valuable_map = dict(zip(pedidos, df_g['VALIOSO']))
     pdq_map = dict(zip(pedidos, df_g["PDQ"]))
+    baja_vu_map = dict(zip(pedidos, df_g["BAJA_VU"]))
+    lote_dir_map = dict(zip(pedidos, df_g["LOTE_DIR"]))
  
     # MAPEOS DE APILABILIDAD
     base_map        = dict(zip(pedidos, df_g['BASE']))
@@ -942,6 +952,8 @@ def optimizar_bin(df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg, v
                 'CHOCOLATES':   chocolates_map[i],
                 'VALIOSO':      valuable_map[i],
                 'PDQ':          pdq_map[i],
+                'BAJA_VU':      baja_vu_map[i],
+                'LOTE_DIR':     lote_dir_map[i],
                 'PO':           po_map[i],
                 'OC':           oc_map[i],
                 'PALLETS':      pallets_conf_map[i],
@@ -957,6 +969,8 @@ def optimizar_bin(df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg, v
         pallets_conf = sum(pallets_conf_map[i] for i in grp)
         valioso = any(valuable_map.get(i) == 1 for i in grp)
         pdq = any(pdq_map.get(i) == 1 for i in grp)
+        baja_vu = any(baja_vu_map.get(i) == 1 for i in grp)
+        lote_dir = any(lote_dir_map.get(i) == 1 for i in grp)
 
         camiones.append({
             'id': uuid.uuid4().hex,
@@ -971,6 +985,8 @@ def optimizar_bin(df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg, v
             'chocolates': tiene_chocolates,
             'skus_valiosos': valioso,
             'pdq': pdq,
+            'baja_vu': baja_vu,
+            'lote_dir': lote_dir,
             'valor_total': valor_total,
             'valor_cafe': valor_cafe,
             'pallets_conf': pallets_conf,

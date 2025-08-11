@@ -79,6 +79,13 @@ class WalmartConfig:
     # Configuración agrupamiento especial
 
     RUTAS_POSIBLES = {
+        "multi_ce_prioridad": [
+            (["6009 Lo Aguirre"],["0088", "3598"]),
+            (["6020 Peñón"],["0088", "3598"]),
+            (["6003 Antofagasta"],["0088", "3598"]),
+            (["6010 Chillán"],["0088", "3598"]),
+            (["6024 Temuco"],["0088", "3598"]),
+        ],
         "normal": [
             (["6009 Lo Aguirre"],["0079"]),
             (["6009 Lo Aguirre"],["0080"]),

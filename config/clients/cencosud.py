@@ -8,7 +8,7 @@ class CencosudConfig:
     MIX_GRUPOS = []
 
     # Parámetros de Optimización
-    VCU_MIN = 0.8
+    VCU_MIN = 0.85
     MAX_ORDENES = 100
     MAX_PALLETS_REAL = 60
     MAX_PALLETS_CONF = 60

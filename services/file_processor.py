@@ -5,10 +5,11 @@ from typing import Tuple, List, Dict, Any
 def read_file(content: bytes, filename: str, client_config, venta: str) -> pd.DataFrame:
     sheet_name = venta.upper()
     header_row = client_config.HEADER_ROW
+    print("Leyendo excel")
     try:
         if filename.endswith((".xlsx", ".xlsm")):
             df = pd.read_excel(BytesIO(content), sheet_name=sheet_name, header=header_row, engine="openpyxl")
-            print("Leyendo excel...")
+            print("Excel leído")
             return df
         else:
             raise ValueError("Formato de archivo no soportado")
@@ -65,7 +66,7 @@ def process_dataframe(df_full: pd.DataFrame, client_config, cliente:str, venta: 
     df_proc["FLEXIBLE"]     = pd.to_numeric(df_proc["FLEXIBLE"], errors="coerce")
     df_proc["NO_APILABLE"]  = pd.to_numeric(df_proc["NO_APILABLE"], errors="coerce")
 
-    for flag in ["VALIOSO", "PDQ"]:
+    for flag in ["VALIOSO", "PDQ", "BAJA_VU", "LOTE_DIR"]:
         if flag in df_proc.columns:
             df_proc[flag] = (pd.to_numeric(df_proc[flag], errors="coerce").fillna(0).astype(int).clip(0, 1))
         else:
