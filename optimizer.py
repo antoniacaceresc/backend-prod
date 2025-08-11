@@ -385,6 +385,8 @@ def optimizar_vcu( df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg,
     superior_map    = dict(zip(pedidos, df['SUPERIOR']))
     flexible_map    = dict(zip(pedidos, df['FLEXIBLE']))
     no_apil_map     = dict(zip(pedidos, df['NO_APILABLE']))
+    si_mismo_map    = dict(zip(pedidos, df['SI_MISMO']))
+
 
     # Escalamiento a enteros (igual que haces con pallets_conf)
     PALLETS_SCALE = 10
@@ -392,6 +394,7 @@ def optimizar_vcu( df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg,
     superior_int = {i: int(superior_map[i]  * PALLETS_SCALE) for i in pedidos}
     flex_int     = {i: int(flexible_map[i]  * PALLETS_SCALE) for i in pedidos}
     noap_int     = {i: int(no_apil_map[i]   * PALLETS_SCALE) for i in pedidos}
+    self_int     = {i: int(si_mismo_map[i]  * PALLETS_SCALE) for i in pedidos}
  
     # Información camión
     truck = client_config.TRUCK_TYPES[0]
@@ -547,13 +550,31 @@ def optimizar_vcu( df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg,
         model.Add(m2 == abs_diff + (-1) * flex_sum).OnlyEnforceIf(b2)
         model.Add(m2 == 0).OnlyEnforceIf(b2.Not())
 
+        # SI_MISMO: pares cuentan como posiciones, el resto se suma a NO_APILABLE
+        self_sum_expr = sum(self_int[i] * x[(i,j)] for i in lista_i)
+
+        # Para usar AddDivisionEquality, ligamos la suma a una IntVar
+        self_sum = model.NewIntVar(0, MAX_POSITIONS * PALLETS_SCALE * truck['levels'] * 2, f"self_sum_{j}")
+        model.Add(self_sum == self_sum_expr)
+
+        pair_q = model.NewIntVar(0, MAX_POSITIONS, f"self_pairs_q_{j}")  # cantidad de pares (no escalado)
+        model.AddDivisionEquality(pair_q, self_sum, 2 * PALLETS_SCALE)    # q = floor(self_sum / (2*scale))
+
+        self_rem = model.NewIntVar(0, 2 * PALLETS_SCALE - 1, f"self_rem_{j}")  # resto en unidades PALLETS_SCALE
+        model.Add(self_rem == self_sum - pair_q * (2 * PALLETS_SCALE))
+
+        # pares expresados en "posiciones escaladas"
+        self_pairs_scaled = model.NewIntVar(0, MAX_POSITIONS * PALLETS_SCALE, f"self_pairs_scaled_{j}")
+        model.Add(self_pairs_scaled == pair_q * PALLETS_SCALE)
+
+        
         # 6) total_stack = m0 + m1 + half + m2
         total_stack = model.NewIntVar(
             -MAX_POSITIONS*PALLETS_SCALE*2,
             MAX_POSITIONS*PALLETS_SCALE*4,
             f"total_stack_{j}"
         )
-        model.Add(total_stack == m0 + m1 + half + m2 + noap_sum)
+        model.Add(total_stack == m0 + m1 + half + m2 + noap_sum + self_pairs_scaled + self_rem)
 
         # 7) umbral: total_stack ≤ max_positions * PALLETS_SCALE  si el camión está usado
         model.Add(
@@ -744,6 +765,7 @@ def optimizar_bin(df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg, v
     superior_map    = dict(zip(pedidos, df_g['SUPERIOR']))
     flexible_map    = dict(zip(pedidos, df_g['FLEXIBLE']))
     no_apil_map     = dict(zip(pedidos, df_g['NO_APILABLE']))
+    si_mismo_map    = dict(zip(pedidos, df_g['SI_MISMO']))
 
     # Escalamiento a enteros (igual que haces con pallets_conf)
     PALLETS_SCALE = 10
@@ -751,6 +773,8 @@ def optimizar_bin(df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg, v
     superior_int = {i: int(superior_map[i]  * PALLETS_SCALE) for i in pedidos}
     flex_int     = {i: int(flexible_map[i]  * PALLETS_SCALE) for i in pedidos}
     noap_int     = {i: int(no_apil_map[i]   * PALLETS_SCALE) for i in pedidos}
+    self_int     = {i: int(si_mismo_map[i]  * PALLETS_SCALE) for i in pedidos}
+
  
     # Información camión
     truck       = client_config.TRUCK_TYPES[0]
@@ -879,13 +903,29 @@ def optimizar_bin(df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg, v
         model.Add(m2 == abs_diff + (-1) * flex_sum).OnlyEnforceIf(b2)
         model.Add(m2 == 0).OnlyEnforceIf(b2.Not())
 
+        # SI_MISMO
+        self_sum_expr = sum(self_int[i] * x[(i,j)] for i in pedidos)
+
+        self_sum = model.NewIntVar(0, MAX_POSITIONS * PALLETS_SCALE * truck['levels'] * 2, f"self_sum_{j}")
+        model.Add(self_sum == self_sum_expr)
+
+        pair_q = model.NewIntVar(0, MAX_POSITIONS, f"self_pairs_q_{j}")
+        model.AddDivisionEquality(pair_q, self_sum, 2 * PALLETS_SCALE)
+
+        self_rem = model.NewIntVar(0, 2 * PALLETS_SCALE - 1, f"self_rem_{j}")
+        model.Add(self_rem == self_sum - pair_q * (2 * PALLETS_SCALE))
+
+        self_pairs_scaled = model.NewIntVar(0, MAX_POSITIONS * PALLETS_SCALE, f"self_pairs_scaled_{j}")
+        model.Add(self_pairs_scaled == pair_q * PALLETS_SCALE)
+
+
         # 6) total_stack = m0 + m1 + half + m2
         total_stack = model.NewIntVar(
             -MAX_POSITIONS*PALLETS_SCALE*2,
             MAX_POSITIONS*PALLETS_SCALE*4,
             f"total_stack_{j}"
         )
-        model.Add(total_stack == m0 + m1 + half + m2 + noap_sum)
+        model.Add(total_stack == m0 + m1 + half + m2 + noap_sum + self_pairs_scaled + self_rem)
 
         # 7) umbral: total_stack ≤ max_positions * PALLETS_SCALE  si el camión está usado
         model.Add(

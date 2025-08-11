@@ -46,6 +46,7 @@ class WalmartConfig:
             "SUPERIOR": "Superior",
             "FLEXIBLE": "Flexible",
             "NO_APILABLE": "No Apilable",
+            "SI_MISMO": "Apilable por si mismo",
             "PDQ": "PDQ"
 
         },

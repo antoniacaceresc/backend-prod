@@ -39,6 +39,7 @@ class CencosudConfig:
             "SUPERIOR": "Superior",
             "FLEXIBLE": "Flexible",
             "NO_APILABLE": "No Apilable",
+            "SI_MISMO": "Apilable por si mismo",
             "VALIOSO": "Valioso Cencosud",
             "PDQ": "PDQ"
         },

@@ -65,6 +65,7 @@ def process_dataframe(df_full: pd.DataFrame, client_config, cliente:str, venta: 
     df_proc["SUPERIOR"]     = pd.to_numeric(df_proc["SUPERIOR"], errors="coerce")
     df_proc["FLEXIBLE"]     = pd.to_numeric(df_proc["FLEXIBLE"], errors="coerce")
     df_proc["NO_APILABLE"]  = pd.to_numeric(df_proc["NO_APILABLE"], errors="coerce")
+    df_proc["SI_MISMO"]  = pd.to_numeric(df_proc["SI_MISMO"], errors="coerce")
 
     for flag in ["VALIOSO", "PDQ", "BAJA_VU", "LOTE_DIR"]:
         if flag in df_proc.columns:

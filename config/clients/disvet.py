@@ -41,7 +41,8 @@ class DisvetConfig:
             "BASE": "Base",
             "SUPERIOR": "Superior",
             "FLEXIBLE": "Flexible",
-            "NO_APILABLE": "No Apilable"
+            "NO_APILABLE": "No Apilable",
+            "SI_MISMO": "Apilable por si mismo",
         },
     }
 
