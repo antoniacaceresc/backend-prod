@@ -128,9 +128,9 @@ class DisvetConfig:
             (["HN"],["0088", "0103"]),
             (["Jama"],["0088", "0103"]),
             (["Kameid"],["0088", "0103"]),
+            (["Maxima"],["0088", "0103"]),
             (["Norkoshe"],["0088", "0103"]),
             (["Pan de Azucar"],["0088", "0103"]),
-            (["PDA"],["0088", "0103"]),
             (["Relun"],["0088", "0103"]),
             (["Vivancos SPA"],["0088", "0103"]),
 
@@ -139,13 +139,13 @@ class DisvetConfig:
             # Desde Quilicura
             (["Bioñuble","Relun"],["0088"]),
             (["Norkoshe", "HN"],["0088"]),
-            (["PDA", "Jama"],["0088"]),
+            (["Pan de Azucar", "Jama"],["0088"]),
             (["Ferrbest", "Comech"],["0088"]),
 
             # Desde Maipú
             (["Bioñuble","Relun"],["0103"]),
             (["Norkoshe", "HN"],["0103"]),
-            (["PDA", "Jama"],["0103"]),
+            (["Pan de Azucar", "Jama"],["0103"]),
             (["Ferrbest", "Comech"],["0103"]),
 
         ],

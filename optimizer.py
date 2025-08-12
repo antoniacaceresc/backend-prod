@@ -674,6 +674,8 @@ def optimizar_vcu( df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg,
         pdq = any(pdq_map.get(i) == 1 for i in grp)
         baja_vu = any(baja_vu_map.get(i) == 1 for i in grp)
         lote_dir = any(lote_dir_map.get(i) == 1 for i in grp)
+        ts_val = solver.Value(total_stack_vars[j]) if j in total_stack_vars else 0
+        pos_total = ts_val / PALLETS_SCALE
        
         camiones.append({
             'id':               uuid.uuid4().hex,
@@ -693,7 +695,8 @@ def optimizar_vcu( df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg,
             'valor_total':      valor_total,
             'valor_cafe':       valor_cafe,
             'pallets_conf':     pallets_conf,
-            'pedidos':          datos_asig
+            'pedidos':          datos_asig,
+            'pos_total':        pos_total,
         })
         idx_cam += 1
  
@@ -1011,6 +1014,8 @@ def optimizar_bin(df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg, v
         pdq = any(pdq_map.get(i) == 1 for i in grp)
         baja_vu = any(baja_vu_map.get(i) == 1 for i in grp)
         lote_dir = any(lote_dir_map.get(i) == 1 for i in grp)
+        ts_val = solver.Value(total_stack_vars[j]) if j in total_stack_vars else 0
+        pos_total = ts_val / PALLETS_SCALE
 
         camiones.append({
             'id': uuid.uuid4().hex,
@@ -1030,7 +1035,8 @@ def optimizar_bin(df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg, v
             'valor_total': valor_total,
             'valor_cafe': valor_cafe,
             'pallets_conf': pallets_conf,
-            'pedidos': datos_asig[-len(grp):]
+            'pedidos': datos_asig[-len(grp):],
+            'pos_total':        pos_total,
         })
         idx_cam += 1
  

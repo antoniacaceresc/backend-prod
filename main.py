@@ -7,12 +7,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 import optimizer as optimizer
 import traceback  
+from typing import List, Dict, Any, Optional
+from pydantic import BaseModel, Field
+from services.postprocess import move_orders, add_truck, delete_truck, compute_stats
 
 
 app = FastAPI()
 
 origins = [
-    "http://localhost:5173",
+    os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
 ]
 # Permitir CORS
 app.add_middleware(
@@ -143,9 +146,6 @@ async def optimizar(
 async def ping():
     return {"message": "pong"}
 
-from typing import List, Dict, Any, Optional
-from pydantic import BaseModel, Field
-from services.postprocess import move_orders, add_truck, delete_truck, compute_stats
 
 class PostProcessRequest(BaseModel):
     camiones: List[Dict[str, Any]]              = Field(default_factory=list)
@@ -155,6 +155,7 @@ class PostProcessRequest(BaseModel):
     cd: Optional[List[str]]                     = Field(default_factory=list)
     ce: Optional[List[str]]                     = Field(default_factory=list)
     ruta: Optional[str]                         = None
+    cliente: Optional[str]                      = None
 
 
 class PostProcessResponse(BaseModel):
@@ -165,8 +166,13 @@ class PostProcessResponse(BaseModel):
 @app.post("/postprocess/move_orders", response_model=PostProcessResponse)
 async def api_move_orders(req: PostProcessRequest = Body(...)):
     state = {"camiones": req.camiones, "pedidos_no_incluidos": req.pedidos_no_incluidos}
-    result = move_orders(state, req.pedidos, req.target_truck_id)
-    return result
+    try:
+        result = move_orders(state, req.pedidos, req.target_truck_id, req.cliente)
+        return result
+    except Exception as e:
+        # importante: devuelve 400 para que el front avise
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/postprocess/add_truck", response_model=PostProcessResponse)
 async def api_add_truck(req: PostProcessRequest = Body(...)):
