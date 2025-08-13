@@ -19,7 +19,7 @@ class CencosudConfig:
     BH_MAX_POSICIONES = 26
     BH_MAX_PALLETS = 26
     BH_VCU_MAX = 1
-    BH_VCU_MIN = 0.55
+    BH_VCU_MIN = 0.5
 
 
     # Mapeo de columnas
