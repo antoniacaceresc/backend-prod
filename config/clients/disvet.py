@@ -17,7 +17,7 @@ class DisvetConfig:
     CD_CON_BH = ['Cerro Grande', 'Kameid']
     BH_MAX_POSICIONES = 28
     BH_VCU_MAX = 1
-    BH_VCU_MIN = 0.55
+    BH_VCU_MIN = 0.5
     BH_MAX_PALLETS = 56
 
     # MIX Flujo
