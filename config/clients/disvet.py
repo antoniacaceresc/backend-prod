@@ -67,10 +67,6 @@ class DisvetConfig:
             (["Bioñuble"],["0088"]),
             (["Bioñuble"],["0097"]),
             (["Bioñuble"],["0103"]),
-
-            (["Cerro Grande"],["0088"]),
-            (["Cerro Grande"],["0097"]),
-            (["Cerro Grande"],["0103"]),
             
             (["Comech"],["0088"]),
             (["Comech"],["0097"]),
@@ -91,10 +87,6 @@ class DisvetConfig:
             (["Jama"],["0088"]),
             (["Jama"],["0097"]),
             (["Jama"],["0103"]),
-
-            (["Kameid"],["0088"]),
-            (["Kameid"],["0097"]),
-            (["Kameid"],["0103"]),
 
             (["Maxima"],["0088"]),
             (["Maxima"],["0097"]),
@@ -121,13 +113,11 @@ class DisvetConfig:
             
             # Ces: Quilicura y Maipú
             (["Bioñuble"],["0088", "0103"]),
-            (["Cerro Grande"],["0088", "0103"]),
             (["Comech"],["0088", "0103"]),
             (["Ferrbest"],["0088", "0103"]),
             (["Friex"],["0088", "0103"]),
             (["HN"],["0088", "0103"]),
             (["Jama"],["0088", "0103"]),
-            (["Kameid"],["0088", "0103"]),
             (["Maxima"],["0088", "0103"]),
             (["Norkoshe"],["0088", "0103"]),
             (["Pan de Azucar"],["0088", "0103"]),
