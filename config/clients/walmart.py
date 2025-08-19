@@ -7,7 +7,7 @@ class WalmartConfig:
     AGRUPAR_POR_PO = False
 
     # Parámetros de Optimización
-    VCU_MIN = 0.8
+    VCU_MIN = 0.9
     MAX_ORDENES = 10
     MAX_PALLETS_CONF = 60
     MAX_PALLETS_REAL = 120
