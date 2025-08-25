@@ -7,10 +7,7 @@ class WalmartConfig:
     AGRUPAR_POR_PO = False
 
     # Parámetros de Optimización
-    VCU_MIN = 0.8
     MAX_ORDENES = 10
-    MAX_PALLETS_CONF = 60
-    MAX_PALLETS_REAL = 120
 
     # CRR
     MAX_PALLETS_REAL_CRR = 90
@@ -18,10 +15,7 @@ class WalmartConfig:
     # BH
     PERMITE_BH = True
     CD_CON_BH = ['6009 Lo Aguirre', '6020 Peñón']
-    BH_MAX_POSICIONES = 28
     BH_VCU_MAX = 1
-    BH_VCU_MIN = 0.55
-    BH_MAX_PALLETS = 56
 
     # MIX Flujo
     MIX_GRUPOS = [
@@ -75,7 +69,10 @@ class WalmartConfig:
     }
 
     # Tipos de camiones
-    TRUCK_TYPES = [{'type':'normal','cap_weight':23000,'cap_volume':70000, 'max_positions': 30, 'levels': 2}]
+    TRUCK_TYPES = {
+        'normal': {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.90, 'max_pallets': 60},
+        'bh':     {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.55, 'max_pallets': 56}
+    }
 
     # Configuración agrupamiento especial
 
@@ -87,6 +84,7 @@ class WalmartConfig:
             (["6010 Chillán"],["0088", "3598"]),
             (["6024 Temuco"],["0088", "3598"]),
         ],
+        
         "normal": [
             (["6009 Lo Aguirre"],["0079"]),
             (["6009 Lo Aguirre"],["0080"]),

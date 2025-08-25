@@ -6,24 +6,30 @@ class DisvetConfig:
     USA_OC = False
     AGRUPAR_POR_PO = False
 
-    # Parámetros de Optimización
-    VCU_MIN = 0.85
-    MAX_ORDENES = 50
-    MAX_PALLETS_CONF = 60
-    MAX_PALLETS_REAL = 120
 
     # BH
     PERMITE_BH = True
     CD_CON_BH = ['Cerro Grande', 'Kameid']
-    BH_MAX_POSICIONES = 28
     BH_VCU_MAX = 1
-    BH_VCU_MIN = 0.55
-    BH_MAX_PALLETS = 56
 
     # MIX Flujo
     MIX_GRUPOS = []
 
-    # Mapeo de columnas
+    # Qué tipos de ruta usa BIN PACKING para este cliente
+    BINPACKING_TIPOS_RUTA = ['normal', 'bh']
+    # Si no se define un tipo aquí, se usa RUTAS_POSIBLES[tipo] por defecto.
+    RUTAS_BINPACKING = {
+        'bh': [
+            (["Cerro Grande"],["0088"]),
+            (["Cerro Grande"],["0097"]),
+            (["Cerro Grande"],["0103"]),
+            (["Kameid"],["0088"]),
+            (["Kameid"],["0097"]),
+            (["Kameid"],["0103"]),
+        ]
+    }
+
+    # Mapeo de columnas 
     COLUMN_MAPPING = {
         "Secos": {   
             "CD": "CD",
@@ -57,7 +63,10 @@ class DisvetConfig:
     }
 
     # Tipos de camiones
-    TRUCK_TYPES = [{'type':'normal','cap_weight':23000,'cap_volume':70000, 'max_positions': 30, 'levels': 2}]
+    TRUCK_TYPES = [
+        {'type':'normal','cap_weight':23000,'cap_volume':70000, 'max_positions':30,'levels':2,'vcu_min':0.90,'max_pallets':60},
+        {'type':'bh','cap_weight':23000,'cap_volume':70000, 'max_positions':28,'levels':2,'vcu_min':0.55,'max_pallets':56}
+    ]
 
     # Configuración agrupamiento especial
 
@@ -67,10 +76,6 @@ class DisvetConfig:
             (["Bioñuble"],["0088"]),
             (["Bioñuble"],["0097"]),
             (["Bioñuble"],["0103"]),
-
-            (["Cerro Grande"],["0088"]),
-            (["Cerro Grande"],["0097"]),
-            (["Cerro Grande"],["0103"]),
             
             (["Comech"],["0088"]),
             (["Comech"],["0097"]),
@@ -91,10 +96,6 @@ class DisvetConfig:
             (["Jama"],["0088"]),
             (["Jama"],["0097"]),
             (["Jama"],["0103"]),
-
-            (["Kameid"],["0088"]),
-            (["Kameid"],["0097"]),
-            (["Kameid"],["0103"]),
 
             (["Maxima"],["0088"]),
             (["Maxima"],["0097"]),
@@ -121,13 +122,11 @@ class DisvetConfig:
             
             # Ces: Quilicura y Maipú
             (["Bioñuble"],["0088", "0103"]),
-            (["Cerro Grande"],["0088", "0103"]),
             (["Comech"],["0088", "0103"]),
             (["Ferrbest"],["0088", "0103"]),
             (["Friex"],["0088", "0103"]),
             (["HN"],["0088", "0103"]),
             (["Jama"],["0088", "0103"]),
-            (["Kameid"],["0088", "0103"]),
             (["Maxima"],["0088", "0103"]),
             (["Norkoshe"],["0088", "0103"]),
             (["Pan de Azucar"],["0088", "0103"]),
@@ -151,7 +150,6 @@ class DisvetConfig:
         ],
         
         "bh": [
-            #estas igua estan incluidas en  noramles y multi
             (["Cerro Grande"],["0088"]),
             (["Cerro Grande"],["0097"]),
             (["Cerro Grande"],["0103"]),

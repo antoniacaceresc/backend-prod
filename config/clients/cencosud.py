@@ -8,18 +8,12 @@ class CencosudConfig:
     MIX_GRUPOS = []
 
     # Parámetros de Optimización
-    VCU_MIN = 0.85
-    MAX_ORDENES = 100
-    MAX_PALLETS_REAL = 60
-    MAX_PALLETS_CONF = 60
 
     # BH
     PERMITE_BH = True
     CD_CON_BH = ['N725 Bodega Noviciado', 'N641 Bodega Noviciado PYP']
     BH_MAX_POSICIONES = 26
-    BH_MAX_PALLETS = 26
     BH_VCU_MAX = 1
-    BH_VCU_MIN = 0.55
 
 
     # Mapeo de columnas
@@ -30,6 +24,7 @@ class CencosudConfig:
             "PEDIDO": "N° Pedido",
             "CE": "Ce.",
             "PALLETS": "Pal. Conf.",
+            "PALLETS_REAL": "Pal. Conf. Real",
             "PESO": "Peso Conf.",
             "VOL": "Vol. Conf.",
             "VALOR": "$$ Conf.",
@@ -66,7 +61,12 @@ class CencosudConfig:
     }
 
     # Tipos de camiones
-    TRUCK_TYPES = [{'type':'normal','cap_weight':23000,'cap_volume':70000, 'max_positions': 30, 'levels': 2}]
+    TRUCK_TYPES = {
+        'normal': {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.85, 'max_pallets': 60},
+        'bh':     {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.55, 'max_pallets': 56}
+    }
+
+
 
     # Configuración agrupamiento especial
 

@@ -4,21 +4,24 @@ import uuid
 import time
 from datetime import datetime
 from ortools.sat.python import cp_model
- 
+from typing import List, Dict, Any, Optional
 from services.file_processor import read_file, process_dataframe
 from config import get_client_config
 from services.math_utils import format_dates
+import os
+import concurrent.futures
+
  
 # ---------------------------------------------------------
 # Constantes para capping
 # ---------------------------------------------------------
-MAX_CAMIONES_CP_SAT = 15   # nunca crear más de 15 camiones en CP-SAT
+MAX_CAMIONES_CP_SAT = 20   # nunca crear más de 15 camiones en CP-SAT
 MAX_TIEMPO_POR_GRUPO = 30  # segundos máximo que permitimos a un solo CP-SAT
 SCALE = 1000
- 
-# ---------------------------------------------------------
-from typing import List, Dict, Any
- 
+# [NUEVO] — paralelismo por grupos
+GROUP_MAX_WORKERS = max((os.cpu_count() or 4) - 1, 1)  # por defecto: cores-1
+GROUP_MAX_WORKERS = int(os.getenv("GROUP_MAX_WORKERS", GROUP_MAX_WORKERS))
+
 # --- Helpers for timing ---
  
 def calcular_tiempo_por_grupo(df, config, total_timeout: int, max_por_grupo: int):
@@ -73,11 +76,31 @@ def optimizar_con_dos_fases(raw_df, client_config, cliente, venta, request_timeo
  
 # --- Endpoint de procesamiento ---
  
-def procesar(content, filename, client, venta, REQUEST_TIMEOUT):
+def procesar(content, filename, client, venta, REQUEST_TIMEOUT, vcuTarget, vcuTargetBH):
     try:
-        config = get_client_config(client)
+        config = get_client_config(client)        
         df_full = read_file(content, filename, config, venta)
         print("Excel leído correctamente")
+
+        # Permitir override del VCU_MIN desde el front
+        if vcuTarget is not None:
+            try:
+                vcuTarget = int(vcuTarget)
+                vcuTarget = max(1, min(100, vcuTarget))
+                config.VCU_MIN = float(vcuTarget) / 100.0
+                print(f"[CONFIG] VCU_MIN override a {config.VCU_MIN:.2f} (target {vcuTarget}%)")
+            except Exception:
+                pass
+        # Permitir override del BH_VCU_MIN desde el front
+        if vcuTargetBH is not None:
+            try:
+                vcuTargetBH = int(vcuTargetBH)
+                vcuTargetBH = max(1, min(100, vcuTargetBH))
+                config.BH_VCU_MIN = float(vcuTargetBH) / 100.0
+                print(f"[CONFIG] BH_VCU_MIN override a {config.BH_VCU_MIN:.2f} (target {vcuTargetBH}%)")
+            except Exception:
+                pass
+
         result = optimizar_con_dos_fases(df_full, config, client, venta, REQUEST_TIMEOUT, MAX_TIEMPO_POR_GRUPO)
  
         return result
@@ -152,6 +175,7 @@ def _contar_grupos(df, config):
  
     return total
  
+
 def postprocesar_camiones(camiones, config):
     """
     Añade flujo OC, chocolates.
@@ -170,6 +194,13 @@ def postprocesar_camiones(camiones, config):
 def ejecutar_optimizacion(df, raw_pedidos, config, modo, tiempo_por_grupo, REQUEST_TIMEOUT):
     """
     Ejecuta optimización en fases según modo.
+
+    Notas:
+    - En modo 'binpacking', si el cliente define:
+        * config.BINPACKING_TIPOS_RUTA (p.ej. ['normal','bh'])
+        * config.RUTAS_BINPACKING      (dicc opcional por tipo)
+      se usan esas listas. Si no existen, se cae a RUTAS_POSIBLES.
+    - En otros modos, se usa el flujo estándar con RUTAS_POSIBLES.
     """
     # Precalculamos raw_map y métricas globales
     raw_map = {r['PEDIDO']: r.copy() for r in raw_pedidos}
@@ -179,12 +210,18 @@ def ejecutar_optimizacion(df, raw_pedidos, config, modo, tiempo_por_grupo, REQUE
     # Precalculamos fracciones VCU escaladas
     vcu_vol_int_all = {}
     vcu_peso_int_all = {}
-    truck = config.TRUCK_TYPES[0]
-    cap_vol = truck['cap_volume']
-    cap_peso = truck['cap_weight']
+
+    if isinstance(config.TRUCK_TYPES, dict):
+        truck_types = config.TRUCK_TYPES
+    else:
+        truck_types = {t.get('type'): t for t in config.TRUCK_TYPES}
+
+    truck = truck_types.get('normal') or next(iter(truck_types.values()))
+    cap_volume = truck['cap_volume']
+    cap_weight = truck['cap_weight']
     for i in pedidos_all:
-        frac_vol = vol_raw_all[i] / cap_vol if cap_vol else 0.0
-        frac_peso = peso_raw_all[i] / cap_peso if cap_peso else 0.0
+        frac_vol = vol_raw_all[i] / cap_volume if cap_volume else 0.0
+        frac_peso = peso_raw_all[i] / cap_weight if cap_weight else 0.0
         vcu_vol_int_all[i] = max(0, min(SCALE, int(math.ceil(frac_vol * SCALE))))
         vcu_peso_int_all[i] = max(0, min(SCALE, int(math.ceil(frac_peso * SCALE))))
  
@@ -193,9 +230,21 @@ def ejecutar_optimizacion(df, raw_pedidos, config, modo, tiempo_por_grupo, REQUE
     start_total = time.time()
  
     # Selección de fases según modo
-    tipos_ruta = ['normal'] if modo == 'binpacking' else ['multi_ce_prioridad', 'normal', 'multi_ce', 'multi_cd', 'bh']
-    fases = [(tipo, config.RUTAS_POSIBLES[tipo]) for tipo in tipos_ruta if tipo in config.RUTAS_POSIBLES]
- 
+    if modo == 'binpacking':
+        # Permitir que el cliente acote los tipos/rutas de bin packing
+        tipos_ruta = getattr(config, 'BINPACKING_TIPOS_RUTA', ['normal'])
+        rutas_bp = getattr(config, 'RUTAS_BINPACKING', {})
+
+        def rutas_for(tipo: str):
+            # Usa rutas específicas si existen; si no, cae a RUTAS_POSIBLES
+            return rutas_bp.get(tipo, config.RUTAS_POSIBLES.get(tipo, []))
+    else:
+        tipos_ruta = ['multi_ce_prioridad', 'normal', 'multi_ce', 'multi_cd', 'bh']
+        def rutas_for(tipo: str):
+            return config.RUTAS_POSIBLES.get(tipo, [])
+
+    fases = [(t, rutas_for(t)) for t in tipos_ruta if rutas_for(t)]
+
     total_orders = len(pedidos_all)
     mix_grupos = config.MIX_GRUPOS
     for tipo, rutas in fases:
@@ -243,7 +292,7 @@ def ejecutar_optimizacion(df, raw_pedidos, config, modo, tiempo_por_grupo, REQUE
             continue
         raw = raw_map[pid]
         pedido = {'PEDIDO': pid, 'CE': raw.get('CE'), 'CD': raw.get('CD'), 'OC': raw.get('OC') if 'OC' in raw else None,
-                  'VCU_VOL': vol_raw_all[pid] / float(cap_vol), 'VCU_PESO': peso_raw_all[pid] / float(cap_peso),
+                  'VCU_VOL': vol_raw_all[pid] / float(cap_volume), 'VCU_PESO': peso_raw_all[pid] / float(cap_weight),
                  'PO': raw.get('PO'),
                   'CHOCOLATES': raw.get('CHOCOLATES'), 'Fecha preferente de entrega': raw.get('Fecha preferente de entrega')}
         pedidos_no_incl.append(completar_metadata_pedido(pedido, raw_map))
@@ -258,19 +307,19 @@ def heuristica_ffd(pedidos, peso_raw, vol_raw, truck_caps):
     """
     Igual que antes, ordenamos por recurso más crítico.
     """
-    cap_peso = truck_caps['cap_weight']
-    cap_vol = truck_caps['cap_volume']
+    cap_weight = truck_caps['cap_weight']
+    cap_volume = truck_caps['cap_volume']
     pedidos_orden = sorted(
         pedidos,
-        key=lambda i: max(peso_raw[i] / cap_peso, vol_raw[i] / cap_vol),
+        key=lambda i: max(peso_raw[i] / cap_weight, vol_raw[i] / cap_volume),
         reverse=True
     )
     camiones = []  # cada elemento: (peso_ocupado, vol_ocupado)
     for i in pedidos_orden:
         asignado = False
         for idx in range(len(camiones)):
-            if (camiones[idx][0] + peso_raw[i] <= cap_peso
-                and camiones[idx][1] + vol_raw[i] <= cap_vol):
+            if (camiones[idx][0] + peso_raw[i] <= cap_weight
+                and camiones[idx][1] + vol_raw[i] <= cap_volume):
                 camiones[idx] = (camiones[idx][0] + peso_raw[i], camiones[idx][1] + vol_raw[i])
                 asignado = True
                 break
@@ -377,6 +426,9 @@ def optimizar_vcu( df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg,
     valuable_map = dict(zip(pedidos, df_g['VALIOSO']))
     pdq_map = dict(zip(pedidos, df["PDQ"]))
     pallets_conf_map    = dict(zip(pedidos, df['PALLETS']))
+    pallets_real_map = dict(zip(pedidos, df['PALLETS_REAL'])) if 'PALLETS_REAL' in df.columns else None
+    pallets_cap_map = pallets_real_map if pallets_real_map is not None else pallets_conf_map
+
     baja_vu_map = dict(zip(pedidos, df_g["BAJA_VU"]))
     lote_dir_map = dict(zip(pedidos, df_g["LOTE_DIR"]))
 
@@ -397,24 +449,32 @@ def optimizar_vcu( df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg,
     self_int     = {i: int(si_mismo_map[i]  * PALLETS_SCALE) for i in pedidos}
  
     # Información camión
-    truck = client_config.TRUCK_TYPES[0]
-    cap_volume   = truck['cap_volume']
-    cap_weight   = truck['cap_weight']
- 
-    if grupo_cfg['tipo'] == 'bh':
-        VCU_MIN = client_config.BH_VCU_MIN
-        MAX_POSITIONS = client_config.BH_MAX_POSICIONES
-        MAX_PALLETS_CONF = client_config.BH_MAX_PALLETS
+    # Normalización a dict + selección por tipo
+    if isinstance(client_config.TRUCK_TYPES, dict):
+        truck_types = client_config.TRUCK_TYPES
     else:
-        VCU_MIN = client_config.VCU_MIN
-        MAX_POSITIONS = truck['max_positions']
-        MAX_PALLETS_CONF = client_config.MAX_PALLETS_CONF
- 
+        truck_types = {t.get('type'): t for t in client_config.TRUCK_TYPES}
+
+    tipo = (grupo_cfg.get('tipo') or 'normal').lower()
+    tsel  = truck_types.get(tipo)    or truck_types.get('normal') or next(iter(truck_types.values()))
+    tnorm = truck_types.get('normal') or tsel
+
+    # Capacidades (si BH tiene mismas capacidades no importa; si difiere, se respeta lo que tenga tsel)
+    cap_volume  = tsel.get('cap_volume', tnorm['cap_volume'])
+    cap_weight  = tsel.get('cap_weight', tnorm['cap_weight'])
+
+    # Umbrales/param
+    VCU_MIN         = tsel.get('vcu_min', getattr(client_config, 'BH_VCU_MIN' if tipo=='bh' else 'VCU_MIN', 0.85))
+    MAX_POSITIONS   = int(tsel.get('max_positions', 30))
+    MAX_PALLETS_CONF= int(tsel.get('max_pallets', getattr(client_config, 'MAX_PALLETS_CONF', 60)))
+    levels          = int(tsel.get('levels', 2))
+
  
     # --- Escalamiento a enteros ---
     VCU_MIN_int     = int(round(VCU_MIN * SCALE))
     pallets_conf_int = { i: int(pallets_conf_map[i] * PALLETS_SCALE) for i in pedidos}
- 
+    pallets_cap_int = { i: int(pallets_cap_map[i] * PALLETS_SCALE) for i in pedidos }
+
  
     # 1) Estimamos n_cam con heurística FFD
     n_cam_heur = heuristica_ffd( pedidos, peso_raw, vol_raw, {'cap_weight': cap_weight, 'cap_volume': cap_volume} )
@@ -450,6 +510,16 @@ def optimizar_vcu( df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg,
         v = model.NewIntVar(0, SCALE, f"vcu_max_int_{j}")
         model.AddMaxEquality(v, [vol_cam_int[j], peso_cam_int[j]])
         vcu_max_int[j] = v
+    
+    # --- NUEVO: límites duros de capacidad por camión (no exceder 100%) ---
+    for j in range(n_cam):
+        # si el camión j está activo (y_truck[j] = 1), la suma no puede superar SCALE
+        model.Add(vol_cam_int[j]  <= SCALE * y_truck[j])
+        model.Add(peso_cam_int[j] <= SCALE * y_truck[j])
+
+        # (opcional pero redundante) Acotar también vcu_max_int por seguridad:
+        model.Add(vcu_max_int[j] <= SCALE * y_truck[j])
+    
  
  
     # 6) Restricciones
@@ -471,9 +541,24 @@ def optimizar_vcu( df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg,
     # Restricción de pallets y número de órdenes
     for j in range(n_cam):
         lista_i = [i for i in pedidos if (i, j) in x]
-        model.Add(sum(pallets_conf_int[i] * x[(i,j)] for i in lista_i) <= MAX_PALLETS_CONF * PALLETS_SCALE * y_truck[j])
-        model.Add(sum(x[(i, j)] for i in lista_i) <= client_config.MAX_ORDENES * y_truck[j])
         
+        # Camión abierto debe tener mínimo un pedido
+        if lista_i:
+            model.Add(sum(x[(i, j)] for i in lista_i) >= y_truck[j])
+    
+        model.Add(sum(pallets_cap_int[i] * x[(i,j)] for i in lista_i) <= MAX_PALLETS_CONF * PALLETS_SCALE * y_truck[j])
+
+        # ——— SOLO WALMART + multi_cd: máx. 10 por CD y 20 total ———
+        if (grupo_cfg['tipo'] == 'multi_cd') and (client_config.__name__ == 'WalmartConfig'):
+            cds_en_grupo = {cd_map[i] for i in lista_i}
+            for cd in cds_en_grupo:
+                pedidos_de_cd = [i for i in lista_i if cd_map[i] == cd]
+                if pedidos_de_cd:
+                    model.Add(sum(x[(i, j)] for i in pedidos_de_cd) <= 10 * y_truck[j])
+            model.Add(sum(x[(i, j)] for i in lista_i) <= 20 * y_truck[j])
+        elif (client_config.__name__ == 'WalmartConfig'):
+            model.Add(sum(x[(i, j)] for i in lista_i) <= client_config.MAX_ORDENES * y_truck[j])
+
         # —– NUEVAS RESTRICCIONES DE APILABILIDAD —–
         # 1) totales de cada tipo
         model.Add( sum(base_int[i]     * x[(i,j)] for i in lista_i)
@@ -483,7 +568,7 @@ def optimizar_vcu( df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg,
         model.Add( sum(noap_int[i]     * x[(i,j)] for i in lista_i)
                    <= MAX_POSITIONS * PALLETS_SCALE * y_truck[j] )
         model.Add( sum(flex_int[i]     * x[(i,j)] for i in lista_i)
-                   <= MAX_POSITIONS * truck['levels'] * PALLETS_SCALE * y_truck[j] )
+                   <= MAX_POSITIONS * levels * PALLETS_SCALE * y_truck[j] )
 
         # 2) combinaciones
         model.Add( sum((base_int[i] + noap_int[i]) * x[(i,j)] for i in lista_i)
@@ -554,7 +639,7 @@ def optimizar_vcu( df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg,
         self_sum_expr = sum(self_int[i] * x[(i,j)] for i in lista_i)
 
         # Para usar AddDivisionEquality, ligamos la suma a una IntVar
-        self_sum = model.NewIntVar(0, MAX_POSITIONS * PALLETS_SCALE * truck['levels'] * 2, f"self_sum_{j}")
+        self_sum = model.NewIntVar(0, MAX_POSITIONS * PALLETS_SCALE * levels * 2, f"self_sum_{j}")
         model.Add(self_sum == self_sum_expr)
 
         pair_q = model.NewIntVar(0, MAX_POSITIONS, f"self_pairs_q_{j}")  # cantidad de pares (no escalado)
@@ -615,7 +700,7 @@ def optimizar_vcu( df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg,
     if grupo_cfg['tipo'] == 'bh':
         tt = 'bh'
     else:
-        tt = truck['type']
+        tt = 'normal'
 
     for j, ts_var in total_stack_vars.items():
         # Sólo imprime si el camión j está usado (opcional)
@@ -753,6 +838,9 @@ def optimizar_bin(df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg, v
     valor_map = dict(zip(pedidos, df_g['VALOR']))
     cafe_map = dict(zip(pedidos, df_g['VALOR_CAFE']))
     pallets_conf_map    = dict(zip(pedidos, df_g['PALLETS']))
+    pallets_real_map = dict(zip(pedidos, df_g['PALLETS_REAL'])) if 'PALLETS_REAL' in df_g.columns else None
+    pallets_cap_map  = pallets_real_map if pallets_real_map is not None else pallets_conf_map # real si es Cencosud, sino Pall. Conf.
+
     if 'CHOCOLATES' in df_g.columns:
         chocolates_map = dict(zip(pedidos, df_g['CHOCOLATES']))
     else:
@@ -780,16 +868,28 @@ def optimizar_bin(df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg, v
 
  
     # Información camión
-    truck       = client_config.TRUCK_TYPES[0]
-    cap_peso    = int(round(truck['cap_weight']))
-    cap_vol     = int(round(truck['cap_volume']))
+    if isinstance(client_config.TRUCK_TYPES, dict):
+        truck_types = client_config.TRUCK_TYPES
+    else:
+        truck_types = {t.get('type'): t for t in client_config.TRUCK_TYPES}
 
-    MAX_PALLETS_CONF = client_config.MAX_PALLETS_CONF
+    tipo = (grupo_cfg.get('tipo') or 'normal').lower()
+    tsel  = truck_types.get(tipo)    or truck_types.get('normal') or next(iter(truck_types.values()))
+    tnorm = truck_types.get('normal') or tsel
+
+    cap_volume  = tsel.get('cap_volume', tnorm['cap_volume'])
+    cap_weight  = tsel.get('cap_weight', tnorm['cap_weight'])
+
+    MAX_PALLETS_CONF = int(tsel.get('max_pallets', getattr(client_config, 'MAX_PALLETS_CONF', 60)))
+    MAX_POSITIONS    = int(tsel.get('max_positions', 30))
+    levels           = int(tsel.get('levels', 2))
+
     pallets_conf_int = {i: int((pallets_conf_map[i]) * PALLETS_SCALE) for i in pedidos}
-    MAX_POSITIONS = truck['max_positions']
+    pallets_cap_int = {i: int((pallets_cap_map[i]) * PALLETS_SCALE) for i in pedidos} # real si es Cencosud, sino Pall. Conf.
+
 
     # 2) Heurística FFD para estimar n_cam
-    n_cam_heur = heuristica_ffd(pedidos, peso_int, vol_int, {'cap_weight': cap_peso, 'cap_volume': cap_vol})
+    n_cam_heur = heuristica_ffd(pedidos, peso_int, vol_int, {'cap_weight': cap_weight, 'cap_volume': cap_volume})
     n_cam = min(len(pedidos), n_cam_heur + 5)
  
 
@@ -815,20 +915,35 @@ def optimizar_bin(df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg, v
     for j in range(n_cam):
         for i in pedidos:
             model.Add(x[(i, j)] <= y[j])
+
+        # Al menos un pedido para abrir el camión
+        model.Add(sum(x[(i, j)] for i in pedidos) >= y[j])
+        
         # Capacidad peso/vol
         suma_peso = sum(int(round(peso_int[i])) * x[(i, j)] for i in pedidos)
         suma_vol = sum(int(round(vol_int[i])) * x[(i, j)] for i in pedidos)
-        model.Add(suma_peso <= cap_peso * y[j])
-        model.Add(suma_vol <= cap_vol * y[j])
+        model.Add(suma_peso <= cap_weight * y[j])
+        model.Add(suma_vol <= cap_volume * y[j])
         # Posiciones y órdenes
-        model.Add(sum(x[(i, j)] for i in pedidos) <= client_config.MAX_ORDENES * y[j])
-        model.Add(sum( pallets_conf_int[i] * x[(i, j)] for i in pedidos ) <= MAX_PALLETS_CONF * PALLETS_SCALE * y[j] )
+
+        # ——— SOLO WALMART + multi_cd: máx. 10 por CD y 20 total ———
+        if (grupo_cfg['tipo'] == 'multi_cd') and (client_config.__name__ == 'WalmartConfig'):
+            cds_en_grupo = {cd_map[i] for i in pedidos}
+            for cd in cds_en_grupo:
+                pedidos_de_cd = [i for i in pedidos if cd_map[i] == cd]
+                if pedidos_de_cd:
+                    model.Add(sum(x[(i, j)] for i in pedidos_de_cd) <= 10 * y[j])
+            model.Add(sum(x[(i, j)] for i in pedidos) <= 20 * y[j])
+        elif (client_config.__name__ == 'WalmartConfig'):
+            model.Add(sum(x[(i, j)] for i in pedidos) <= client_config.MAX_ORDENES * y[j])
+
+        model.Add(sum( pallets_cap_int[i] * x[(i, j)] for i in pedidos ) <= MAX_PALLETS_CONF * PALLETS_SCALE * y[j] )
+        
         # Monotonía y[j] <= y[j-1]
         if j >= 1:
             model.Add(y[j] <= y[j - 1])
 
         lista_i = [i for i in pedidos]  # o filtra los i con (i,j) si prefieres
-
 
         # —– NUEVAS RESTRICCIONES DE APILABILIDAD —–
         # 1) totales de cada tipo
@@ -839,7 +954,7 @@ def optimizar_bin(df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg, v
         model.Add( sum(noap_int[i]     * x[(i,j)] for i in lista_i)
                    <= MAX_POSITIONS * PALLETS_SCALE * y[j] )
         model.Add( sum(flex_int[i]     * x[(i,j)] for i in lista_i)
-                   <= MAX_POSITIONS * truck['levels'] * PALLETS_SCALE * y[j] )
+                   <= MAX_POSITIONS * levels * PALLETS_SCALE * y[j] )
 
         # 2) combinaciones
         model.Add( sum((base_int[i] + noap_int[i]) * x[(i,j)] for i in lista_i)
@@ -909,7 +1024,7 @@ def optimizar_bin(df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg, v
         # SI_MISMO
         self_sum_expr = sum(self_int[i] * x[(i,j)] for i in pedidos)
 
-        self_sum = model.NewIntVar(0, MAX_POSITIONS * PALLETS_SCALE * truck['levels'] * 2, f"self_sum_{j}")
+        self_sum = model.NewIntVar(0, MAX_POSITIONS * PALLETS_SCALE * levels * 2, f"self_sum_{j}")
         model.Add(self_sum == self_sum_expr)
 
         pair_q = model.NewIntVar(0, MAX_POSITIONS, f"self_pairs_q_{j}")
@@ -974,20 +1089,20 @@ def optimizar_bin(df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg, v
         grp = [i for i in pedidos if solver.Value(x[(i, j)]) == 1]
         vol_real = sum(vol_int[i] for i in grp)
         peso_real = sum(peso_int[i] for i in grp)
-        vcu_vol_j = vol_real / float(cap_vol) if cap_vol else 0.0
-        vcu_peso_j = peso_real / float(cap_peso) if cap_peso else 0.0
+        vcu_vol_j = vol_real / float(cap_volume) if cap_volume else 0.0
+        vcu_peso_j = peso_real / float(cap_weight) if cap_weight else 0.0
         vcu_max_j = max(vcu_vol_j, vcu_peso_j)
  
         for i in grp:
-            vcu_vol_i  = (vol_raw[i] / float(cap_vol))  if cap_vol else 0.0
-            vcu_peso_i = (peso_raw[i] / float(cap_peso)) if cap_peso else 0.0
+            vcu_vol_i  = (vol_raw[i] / float(cap_volume))  if cap_volume else 0.0
+            vcu_peso_i = (peso_raw[i] / float(cap_weight)) if cap_weight else 0.0
        
             pedido_min = {
                 'PEDIDO':       i,
                 'CAMION':       idx_cam,
                 'GRUPO':        grupo_cfg['id'],
                 'TIPO_RUTA':    grupo_cfg['tipo'],
-                'TIPO_CAMION': 'normal',
+                'TIPO_CAMION': ('bh' if grupo_cfg['tipo'] == 'bh' else 'normal'),
                 'CE':           ce_map[i],
                 'CD':           cd_map[i],
                 'VCU_VOL':      vcu_vol_i,
@@ -1023,7 +1138,7 @@ def optimizar_bin(df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg, v
             'tipo_ruta': grupo_cfg['tipo'],
             'ce': grupo_cfg['ce'],
             'cd': grupo_cfg['cd'],
-            'tipo_camion': 'normal',
+            'tipo_camion': ('bh' if grupo_cfg['tipo'] == 'bh' else 'normal'),
             'vcu_vol': vcu_vol_j,
             'vcu_peso': vcu_peso_j,
             'vcu_max': vcu_max_j,
@@ -1050,8 +1165,8 @@ def optimizar_bin(df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg, v
             'CE': ce_map[i],
             'CD': cd_map[i],
             'OC': oc_map[i],
-            'VCU_VOL': (vol_raw[i] / float(cap_vol)) if cap_vol else 0.0,
-            'VCU_PESO': (peso_raw[i] / float(cap_peso)) if cap_peso else 0.0,
+            'VCU_VOL': (vol_raw[i] / float(cap_volume)) if cap_volume else 0.0,
+            'VCU_PESO': (peso_raw[i] / float(cap_weight)) if cap_weight else 0.0,
             'PO': po_map[i],
             'PALLETS': pallets_conf_map[i],
             'VALOR': valor_map[i],

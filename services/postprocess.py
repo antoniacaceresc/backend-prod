@@ -6,7 +6,8 @@ PALLETS_SCALE = 10
 
 def compute_stats(
     camiones: Optional[List[Dict[str, Any]]],
-    pedidos_no: Optional[List[Dict[str, Any]]]
+    pedidos_no: Optional[List[Dict[str, Any]]], 
+    cliente: Optional[str] = None
 ) -> Dict[str, Any]:
     
     camiones = camiones or []
@@ -54,15 +55,19 @@ def _compute_apilabilidad(pedidos_cam: List[Dict[str, Any]], cliente: Optional[s
       total_stack = m0 + m1 + half + m2 + noap_sum + self_pairs_scaled + self_rem
     y valida contra el umbral de posiciones del camión según cliente/tipo (normal vs bh).
     """
-    cfg = get_client_config(cliente) if cliente else get_client_config("Cencosud")  # fallback
-    truck = cfg.TRUCK_TYPES[0]
-    levels = int(truck.get("levels", 2))
-
-    if (tipo_camion or "").lower() == "bh":
-        max_positions = int(cfg.BH_MAX_POSICIONES)
+    if not (cliente and str(cliente).strip()):
+        return {"ok": False, "motivo": "Falta 'cliente' para validar apilabilidad"}
+    cfg = get_client_config(cliente)
+    if isinstance(cfg.TRUCK_TYPES, dict):
+        truck_types = cfg.TRUCK_TYPES
     else:
-        max_positions = int(truck.get("max_positions", 30))
+        truck_types = {t.get('type'): t for t in cfg.TRUCK_TYPES}
 
+    tipo = (tipo_camion or 'normal').lower()
+    tsel  = truck_types.get(tipo)    or truck_types.get('normal') or next(iter(truck_types.values()))
+
+    levels        = int(tsel.get("levels", 2))
+    max_positions = int(tsel.get("max_positions", 30))
     # Sumar por tipo (escalado)
     def s(col, default=0.0):
         return int(round(sum(float(p.get(col, default) or 0.0) for p in pedidos_cam) * PALLETS_SCALE))
@@ -116,6 +121,7 @@ def _compute_apilabilidad(pedidos_cam: List[Dict[str, Any]], cliente: Optional[s
         "pos_max": max_positions
     }
 
+
 def _check_vcu_cap(pedidos_cam):
     vvol = sum(p.get("VCU_VOL") or 0 for p in pedidos_cam)
     vpes = sum(p.get("VCU_PESO") or 0 for p in pedidos_cam)
@@ -140,8 +146,9 @@ def move_orders(
     state: Dict[str, Any],
     pedidos: Optional[List[Dict[str, Any]]],
     target_truck_id: Optional[str],
-    cliente: Optional[str] = None
+    cliente: str
 ) -> Dict[str, Any]:
+    
     camiones = [dict(c) for c in (state.get("camiones") or [])]  # shallow copy
     no_incl = list(state.get("pedidos_no_incluidos") or [])
     pedidos_sel = list(pedidos or [])
@@ -162,6 +169,53 @@ def move_orders(
             raise ValueError("Camión destino no encontrado")
 
         candidatos = (tgt.get("pedidos") or []) + pedidos_sel
+
+        # 0) Regla de Walmart: máximo 10 pedidos por camión en postproceso por CD
+        if (cliente).strip().lower() == "walmart":
+            from collections import Counter
+            cfg_wm = get_client_config("Walmart")  # para leer MAX_ORDENES si aplica
+
+            # Determinar si el camión resultante sería multi_cd
+            cds_candidatos = [p.get("CD") for p in candidatos if p.get("CD")]
+            cds_unicos = {cd for cd in cds_candidatos if cd not in (None, "")}
+
+            if len(cds_unicos) > 1:
+                # Multi-CD: máx. 10 pedidos por CD y 20 total
+                conteo_por_cd = Counter(cds_candidatos)
+                for cd, cnt in conteo_por_cd.items():
+                    if cnt > 10:
+                        raise ValueError(f"Walmart (multi_cd): máximo 10 pedidos por CD. CD '{cd}' tiene {cnt}.")
+                total = sum(conteo_por_cd.values())
+                if total > 20:
+                    raise ValueError("Walmart (multi_cd): máximo 20 pedidos por camión (10 por CD).")
+            else:
+                # No multi_cd: usa límite general del cliente (por defecto 10 si no está en config)
+                max_ordenes = getattr(cfg_wm, "MAX_ORDENES", 10)
+                if len(candidatos) > max_ordenes:
+                    raise ValueError(f"Walmart: máximo {max_ordenes} pedidos por camión.")
+
+        # 0) Chequeo capacidad de pallets (Cencosud usa PALLETS_REAL)
+        if (cliente).strip().lower() == "cencosud":
+            from config import get_client_config
+            cfg = get_client_config("Cencosud")
+            # Determinar tipo de camión del target
+            tipo_cam = (tgt.get("tipo_camion") or "normal").lower()
+            if isinstance(cfg.TRUCK_TYPES, dict):
+                tt = cfg.TRUCK_TYPES.get(tipo_cam) or cfg.TRUCK_TYPES.get("normal") or next(iter(cfg.TRUCK_TYPES.values()))
+            else:
+                tt = next((t for t in cfg.TRUCK_TYPES if (t.get("type") or "normal") == tipo_cam), cfg.TRUCK_TYPES[0])
+            max_pallets = int(tt.get("max_pallets", 60))
+
+            # Sumar PALLETS_REAL si existe, si no cae a PALLETS
+            total_real = 0
+            for p in candidatos:
+                if "PALLETS_REAL" in p and p.get("PALLETS_REAL") not in (None, ""):
+                    total_real += float(p.get("PALLETS_REAL") or 0)
+                else:
+                    total_real += float(p.get("PALLETS") or 0)
+
+            if total_real > max_pallets + 1e-9:
+                raise ValueError(f"Excede capacidad de pallets: {total_real:.2f} > {max_pallets}")
 
         # 1) Chequeo VCU
         vcu_chk = _check_vcu_cap(candidatos)
@@ -230,15 +284,16 @@ def move_orders(
         cam["numero"] = idx
 
     # Stats globales (reusa compute_stats existente)
-    stats = compute_stats(sim_camiones, sim_no_incl)
-    return {"camiones": sim_camiones, "pedidos_no_incluidos": sim_no_incl, "estadisticas": stats}
+    stats = compute_stats(sim_camiones, sim_no_incl, cliente)
+    return {"camiones": sim_camiones, "pedidos_no_incluidos": sim_no_incl, "estadisticas": stats, "cliente": cliente}
 
 
 def add_truck(
     state: Dict[str, Any],
     cd: Optional[List[str]],
     ce: Optional[List[str]],
-    ruta: Optional[str]
+    ruta: Optional[str],
+    cliente: str
 ) -> Dict[str, Any]:
     camiones = state.get("camiones") or []
     no_incl = state.get("pedidos_no_incluidos") or []
@@ -262,12 +317,13 @@ def add_truck(
         "valor_total": 0
     }
     camiones.append(new_cam)
-    return move_orders({"camiones": camiones, "pedidos_no_incluidos": no_incl}, [], None)
+    return move_orders({"camiones": camiones, "pedidos_no_incluidos": no_incl}, [], None, cliente)
 
 
 def delete_truck(
     state: Dict[str, Any],
-    truck_id: Optional[str]
+    truck_id: Optional[str],
+    cliente: str
 ) -> Dict[str, Any]:
     camiones = state.get("camiones") or []
     no_incl = state.get("pedidos_no_incluidos") or []
@@ -278,4 +334,4 @@ def delete_truck(
             camiones = [c for c in camiones if c.get("id") != truck_id]
             no_incl.extend(eliminado.get("pedidos") or [])
 
-    return move_orders({"camiones": camiones, "pedidos_no_incluidos": no_incl}, [], None)
+    return move_orders({"camiones": camiones, "pedidos_no_incluidos": no_incl}, [], None, cliente)

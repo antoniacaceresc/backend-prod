@@ -2,9 +2,10 @@ import os
 import asyncio
 import concurrent.futures
 from concurrent.futures.process import BrokenProcessPool
-from fastapi import FastAPI, UploadFile, File, Path, HTTPException, Body
+from fastapi import FastAPI, UploadFile, File, Path, HTTPException, Body, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
+from fastapi.middleware.gzip import GZipMiddleware
 import optimizer as optimizer
 import traceback  
 from typing import List, Dict, Any, Optional
@@ -21,10 +22,11 @@ origins = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET","POST","PUT","PATCH","DELETE","OPTIONS"],
+    allow_headers=["Content-Type","Authorization"],
+    max_age=600,
 )
+app.add_middleware(GZipMiddleware, minimum_size=int(os.getenv("GZIP_MIN_SIZE", "512")))
 
 # Configuración de concurrencia y tiempos
 REQUEST_TIMEOUT = 150                   # segundos máximos por petición completa
@@ -59,6 +61,8 @@ async def optimizar(
     cliente: str = Path(...),
     venta: str = Path(...),
     file: UploadFile = File(...),
+    vcuTarget: Optional[int] = Form(default=None),
+    vcuTargetBH: Optional[int] = Form(default=None)
 ):
     """
     1) Intentar adquirir el semáforo (hasta 3 segundos). Si no se libera un slot,
@@ -71,6 +75,12 @@ async def optimizar(
     6) Siempre liberamos el semáforo en el bloque finally.
     """
     global executor  # Para poder recrear el executor en caso de BrokenProcessPool
+
+    # VCU
+    if vcuTarget is not None:
+        vcuTarget = max(1, min(100, int(vcuTarget)))
+    if vcuTargetBH is not None:
+        vcuTargetBH = max(1, min(100, int(vcuTargetBH)))
 
     # Leer contenido del archivo y cerrarlo
     content = await file.read()
@@ -97,7 +107,9 @@ async def optimizar(
                 file.filename,
                 cliente,
                 venta,
-                REQUEST_TIMEOUT  # Pasamos REQUEST_TIMEOUT para que optimizer lo use
+                REQUEST_TIMEOUT,  # Pasamos REQUEST_TIMEOUT para que optimizer lo use
+                vcuTarget,
+                vcuTargetBH
             ),
             timeout=REQUEST_TIMEOUT
         )
@@ -155,7 +167,7 @@ class PostProcessRequest(BaseModel):
     cd: Optional[List[str]]                     = Field(default_factory=list)
     ce: Optional[List[str]]                     = Field(default_factory=list)
     ruta: Optional[str]                         = None
-    cliente: Optional[str]                      = None
+    cliente: str
 
 
 class PostProcessResponse(BaseModel):
@@ -167,28 +179,62 @@ class PostProcessResponse(BaseModel):
 async def api_move_orders(req: PostProcessRequest = Body(...)):
     state = {"camiones": req.camiones, "pedidos_no_incluidos": req.pedidos_no_incluidos}
     try:
-        result = move_orders(state, req.pedidos, req.target_truck_id, req.cliente)
+        await asyncio.wait_for(semaphore.acquire(), timeout=3.0)
+    except asyncio.TimeoutError:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=429, detail="Servicio ocupado: demasiadas operaciones en curso.")
+
+    try:
+        result = await asyncio.to_thread(
+            move_orders, state, req.pedidos, req.target_truck_id, req.cliente
+        )
         return result
     except Exception as e:
-        # importante: devuelve 400 para que el front avise
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        semaphore.release()
+
 
 @app.post("/postprocess/add_truck", response_model=PostProcessResponse)
 async def api_add_truck(req: PostProcessRequest = Body(...)):
     state = {"camiones": req.camiones, "pedidos_no_incluidos": req.pedidos_no_incluidos}
-    result = add_truck(state, req.cd, req.ce, req.ruta)
-    return result
+    try:
+        await asyncio.wait_for(semaphore.acquire(), timeout=3.0)
+    except asyncio.TimeoutError:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=429, detail="Servicio ocupado: demasiadas operaciones en curso.")
+    try:
+        return await asyncio.to_thread(add_truck, state, req.cd, req.ce, req.ruta, req.cliente)
+    finally:
+        semaphore.release()
+
 
 @app.post("/postprocess/delete_truck", response_model=PostProcessResponse)
 async def api_delete_truck(req: PostProcessRequest = Body(...)):
     state = {"camiones": req.camiones, "pedidos_no_incluidos": req.pedidos_no_incluidos}
-    result = delete_truck(state, req.target_truck_id)
-    return result
+    try:
+        await asyncio.wait_for(semaphore.acquire(), timeout=3.0)
+    except asyncio.TimeoutError:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=429, detail="Servicio ocupado: demasiadas operaciones en curso.")
+    try:
+        return await asyncio.to_thread(delete_truck, state, req.target_truck_id, req.cliente)
+    finally:
+        semaphore.release()
+
 
 @app.post("/postprocess/compute_stats", response_model=Dict[str, Any])
 async def api_compute_stats(req: PostProcessRequest = Body(...)):
-    nulls = [k for k,v in req.dict().items() if v is None]
+    nulls = [k for k, v in req.dict().items() if v is None]
     if nulls:
         print(f"[WARN] Campos nulos en compute_stats: {nulls}")
-    return compute_stats(req.camiones, req.pedidos_no_incluidos)
+    try:
+        await asyncio.wait_for(semaphore.acquire(), timeout=3.0)
+    except asyncio.TimeoutError:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=429, detail="Servicio ocupado: demasiadas operaciones en curso.")
+    try:
+        return await asyncio.to_thread(compute_stats, req.camiones, req.pedidos_no_incluidos, req.cliente)
+    finally:
+        semaphore.release()
