@@ -6,7 +6,6 @@ class DisvetConfig:
     USA_OC = False
     AGRUPAR_POR_PO = False
 
-
     # BH
     PERMITE_BH = True
     CD_CON_BH = ['Cerro Grande', 'Kameid']

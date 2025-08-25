@@ -128,6 +128,9 @@ def process_dataframe(df_full: pd.DataFrame, client_config, cliente:str, venta: 
     # Filtrar PEDIDO no vacío ni nulo ni duplicado
     df_proc = df_proc[(df_proc["PEDIDO"] != "") & (df_proc["PEDIDO"].notnull())]
     df_proc = df_proc.drop_duplicates(subset="PEDIDO", keep=False)
+ 
+    # Pallet Conf. = 0
+    df_proc = df_proc[pd.to_numeric(df_proc["PALLETS"], errors="coerce").fillna(0) != 0]
 
     # Pallet Conf. = 0
     df_proc = df_proc[pd.to_numeric(df_proc["PALLETS"], errors="coerce").fillna(0) != 0]
