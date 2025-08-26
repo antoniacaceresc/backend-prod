@@ -1,6 +1,7 @@
 from typing import List, Dict, Any, Optional
 import uuid
 from config import get_client_config
+from collections import Counter
 
 PALLETS_SCALE = 10
 
@@ -172,7 +173,6 @@ def move_orders(
 
         # 0) Regla de Walmart: máximo 10 pedidos por camión en postproceso por CD
         if (cliente).strip().lower() == "walmart":
-            from collections import Counter
             cfg_wm = get_client_config("Walmart")  # para leer MAX_ORDENES si aplica
 
             # Determinar si el camión resultante sería multi_cd
@@ -196,7 +196,6 @@ def move_orders(
 
         # 0) Chequeo capacidad de pallets (Cencosud usa PALLETS_REAL)
         if (cliente).strip().lower() == "cencosud":
-            from config import get_client_config
             cfg = get_client_config("Cencosud")
             # Determinar tipo de camión del target
             tipo_cam = (tgt.get("tipo_camion") or "normal").lower()
