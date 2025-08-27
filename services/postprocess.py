@@ -49,6 +49,7 @@ def compute_stats(
     }
 
 
+
 def _ceil_div2(x: int) -> int:
     return (x + 1) // 2
 
@@ -134,9 +135,8 @@ def move_orders(
     state: Dict[str, Any],
     pedidos: Optional[List[Dict[str, Any]]],
     target_truck_id: Optional[str],
-    cliente: str,
-) -> Dict[str, Any]:
-    """Mueve pedidos entre camiones y valída reglas del cliente (contrato preservado)."""
+    cliente: str ) -> Dict[str, Any]:
+    """Mueve pedidos entre camiones y valída reglas del cliente"""
     camiones = [dict(c) for c in (state.get("camiones") or [])]
     no_incl = list(state.get("pedidos_no_incluidos") or [])
     pedidos_sel = list(pedidos or [])
@@ -196,7 +196,12 @@ def move_orders(
             raise ValueError(ap_ok.get("motivo") or "Apilabilidad inválida")
 
         tgt["pedidos"] = candidatos
-
+    else:
+        sim_no_incl.extend(pedidos_sel)
+        # de-duplicar por PEDIDO (por si reingresan)
+        seen = set()
+        sim_no_incl = [p for p in sim_no_incl
+                    if not (p.get("PEDIDO") in seen or seen.add(p.get("PEDIDO")))]
     # Recalcular atributos por camión
     for cam in sim_camiones:
         pedidos_cam = cam.get("pedidos") or []
