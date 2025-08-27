@@ -1,345 +1,202 @@
-import pandas as pd
-import math
+# services/optimizer.py
 import uuid
-import time
-from datetime import datetime
-from ortools.sat.python import cp_model
-from typing import List, Dict, Any, Optional
-from services.file_processor import read_file, process_dataframe
-from config import get_client_config
-from services.math_utils import format_dates
+import math
 import os
-import concurrent.futures
+import time
+from typing import List, Dict, Any, Optional, Iterable, Tuple
 
- 
-# ---------------------------------------------------------
-# Constantes para capping
-# ---------------------------------------------------------
-MAX_CAMIONES_CP_SAT = 20   # nunca crear más de 15 camiones en CP-SAT
-MAX_TIEMPO_POR_GRUPO = 30  # segundos máximo que permitimos a un solo CP-SAT
-SCALE = 1000
-# [NUEVO] — paralelismo por grupos
-GROUP_MAX_WORKERS = max((os.cpu_count() or 4) - 1, 1)  # por defecto: cores-1
-GROUP_MAX_WORKERS = int(os.getenv("GROUP_MAX_WORKERS", GROUP_MAX_WORKERS))
+import pandas as pd
+from ortools.sat.python import cp_model
 
-# --- Helpers for timing ---
- 
-def calcular_tiempo_por_grupo(df, config, total_timeout: int, max_por_grupo: int):
+from services.file_processor import read_file, process_dataframe
+from services.math_utils import format_dates
+from config import get_client_config
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# ---------------------------------------------------------
+# Constantes (capping)
+# ---------------------------------------------------------
+MAX_CAMIONES_CP_SAT = int(os.getenv("MAX_CAMIONES_CP_SAT", "20"))
+MAX_TIEMPO_POR_GRUPO = int(os.getenv("MAX_TIEMPO_POR_GRUPO", "30"))
+SCALE = 1000  # para VCU
+GROUP_MAX_WORKERS = max((os.cpu_count() or 4) - 1, 1)
+GROUP_MAX_WORKERS = int(os.getenv("GROUP_MAX_WORKERS", str(GROUP_MAX_WORKERS)))
+THREAD_WORKERS_NORMAL = int(os.getenv("THREAD_WORKERS_NORMAL", str(min(8, (os.cpu_count() or 4)))))
+
+
+
+# ---------------------------------------------------------
+# Helpers de timing
+# ---------------------------------------------------------
+
+def calcular_tiempo_por_grupo(df: pd.DataFrame, config, total_timeout: int, max_por_grupo: int) -> int:
     num_grupos = _contar_grupos(df, config)
-    tiempo_total_disponible = total_timeout - 5
+    tiempo_total_disponible = max(total_timeout - 5, 1)
     if num_grupos > 0:
         tpg = tiempo_total_disponible // num_grupos
-        return min(tpg, max_por_grupo)
+        return min(max(tpg, 1), max_por_grupo)
     return min(1, max_por_grupo)
- 
-# --- Ejecución por modo ---
- 
-def run_optimizacion(df, raw_pedidos: List[Dict], config: Dict, modo: str, tpg: int, timeout: int) -> Dict[str, Any]:
+
+
+# ---------------------------------------------------------
+# Orquestación multi-modo
+# ---------------------------------------------------------
+
+def _build_normal_groups_disjoint(df: pd.DataFrame, rutas: list, mix_grupos: list, usa_oc: bool) -> list:
+    """Particiona *exclusivamente* los pedidos en grupos disjuntos para rutas 'normal'.
+    Mantiene el mismo orden de `generar_rutas` para compatibilidad de negocio.
+    """
+    grupos = []  # [(cfg, df_grp)]
+    asignado = pd.Series(False, index=df.index)
+    for cds, ces, oc in generar_rutas("normal", rutas, df, mix_grupos, usa_oc):
+        mask = df["CD"].isin(cds) & df["CE"].isin(ces)
+        if oc is not None:
+            if isinstance(oc, list):
+                mask &= df["OC"].isin(oc)
+            else:
+                mask &= df["OC"].eq(oc)
+        mask &= ~asignado
+        sub = df[mask]
+        if sub.empty:
+            continue
+        cfg = {"id": f"normal__{'-'.join(cds)}__{'-'.join(map(str, ces))}" + (f"__{oc}" if oc else ""),
+               "tipo": "normal", "ce": ces, "cd": cds, "oc": oc}
+        grupos.append((cfg, sub.copy()))
+        asignado.loc[sub.index] = True
+    return grupos
+
+def run_optimizacion(df: pd.DataFrame, raw_pedidos: List[Dict[str, Any]], config, modo: str, tpg: int, timeout: int) -> Dict[str, Any]:
+    """Ejecuta optimización por fases según `modo` y postprocesa camiones."""
     res = ejecutar_optimizacion(df.copy(), raw_pedidos, config, modo, tpg, timeout)
-    res['camiones'] = postprocesar_camiones(res.get('camiones', []), config)
+    res["camiones"] = postprocesar_camiones(res.get("camiones", []), config)
     return res
- 
-# --- Flujo principal ---
- 
-def optimizar_con_dos_fases(raw_df, client_config, cliente, venta, request_timeout, max_tpg):
+
+
+# ---------------------------------------------------------
+# Flujo principal expuesto
+# ---------------------------------------------------------
+
+def optimizar_con_dos_fases(raw_df: pd.DataFrame, client_config, cliente: str, venta: str, request_timeout: int, max_tpg: int) -> Dict[str, Any]:
     # 1) Preprocesamiento
     df_proc, pedidos = process_dataframe(raw_df, client_config, cliente, venta)
-    pedidos = [
-        {**p, 'Fecha preferente de entrega': format_dates(p['Fecha preferente de entrega'])}
-        for p in pedidos
-    ]
- 
-    # 2) Calcular tiempo por grupo
-    tpg = calcular_tiempo_por_grupo(df_proc, client_config, request_timeout, max_tpg)
-    # 3) Ejecutar VCU sobre TODOS los pedidos
-    resultado_vcu = run_optimizacion(df_proc, pedidos, client_config, 'vcu', tpg, request_timeout)
-    # 4) Ejecutar BinPacking sobre TODOS los pedidos (misma entrada)
-    resultado_bp = run_optimizacion(df_proc, pedidos, client_config, 'binpacking', tpg, request_timeout)
- 
-    # 5) Etiquetado BH en BinPacking (como antes)
-    if (client_config.PERMITE_BH):
-        for cam in resultado_bp['camiones']:
-            if (
-                cam['cd'][0] in client_config.CD_CON_BH
-                and cam['flujo_oc'] != 'MIX'
-                and cam['vcu_max'] <= client_config.BH_VCU_MAX
-                and cam['tipo_ruta'] == 'normal'
-            ):
-                cam['tipo_camion'] = 'bh'
- 
-    # 7) Estructura de salida
-    return {
-        'vcu': resultado_vcu,
-        'binpacking': resultado_bp
-    }
- 
- 
-# --- Endpoint de procesamiento ---
- 
-def procesar(content, filename, client, venta, REQUEST_TIMEOUT, vcuTarget, vcuTargetBH):
-    try:
-        config = get_client_config(client)        
-        df_full = read_file(content, filename, config, venta)
-        print("Excel leído correctamente")
+    pedidos = [{**p, "Fecha preferente de entrega": format_dates(p.get("Fecha preferente de entrega"))} for p in pedidos]
 
-        # Permitir override del VCU_MIN desde el front
+    # 2) Tiempo por grupo
+    tpg = calcular_tiempo_por_grupo(df_proc, client_config, request_timeout, max_tpg)
+
+    # 3) Modos
+    resultado_vcu = run_optimizacion(df_proc, pedidos, client_config, "vcu", tpg, request_timeout)
+    resultado_bp = run_optimizacion(df_proc, pedidos, client_config, "binpacking", tpg, request_timeout)
+
+    # 4) Etiquetado BH en BinPacking
+    if getattr(client_config, "PERMITE_BH", False):
+        for cam in resultado_bp.get("camiones", []):
+            if (
+                cam.get("cd", [None])[0] in getattr(client_config, "CD_CON_BH", [])
+                and cam.get("flujo_oc") != "MIX"
+                and cam.get("vcu_max", 0) <= getattr(client_config, "BH_VCU_MAX", 1)
+                and cam.get("tipo_ruta") == "normal"
+            ):
+                cam["tipo_camion"] = "bh"
+
+    return {"vcu": resultado_vcu, "binpacking": resultado_bp}
+
+
+def procesar(content, filename, client, venta, REQUEST_TIMEOUT, vcuTarget, vcuTargetBH) -> Dict[str, Any]:
+    """API interna (mantener firma): lee Excel, aplica overrides y ejecuta dos fases."""
+    try:
+        config = get_client_config(client)
+        df_full = read_file(content, filename, config, venta)
+
+        # Overrides de thresholds (si vienen del front)
         if vcuTarget is not None:
             try:
                 vcuTarget = int(vcuTarget)
                 vcuTarget = max(1, min(100, vcuTarget))
                 config.VCU_MIN = float(vcuTarget) / 100.0
-                print(f"[CONFIG] VCU_MIN override a {config.VCU_MIN:.2f} (target {vcuTarget}%)")
             except Exception:
                 pass
-        # Permitir override del BH_VCU_MIN desde el front
         if vcuTargetBH is not None:
             try:
                 vcuTargetBH = int(vcuTargetBH)
                 vcuTargetBH = max(1, min(100, vcuTargetBH))
                 config.BH_VCU_MIN = float(vcuTargetBH) / 100.0
-                print(f"[CONFIG] BH_VCU_MIN override a {config.BH_VCU_MIN:.2f} (target {vcuTargetBH}%)")
             except Exception:
                 pass
 
-        result = optimizar_con_dos_fases(df_full, config, client, venta, REQUEST_TIMEOUT, MAX_TIEMPO_POR_GRUPO)
- 
-        return result
+        return optimizar_con_dos_fases(df_full, config, client, venta, REQUEST_TIMEOUT, MAX_TIEMPO_POR_GRUPO)
+
     except Exception as e:
-        import traceback
-        tb_str = traceback.format_exc()
-        return {
-            "error": {
-                "message": str(e),
-                "traceback": tb_str[:5000]  # limitar largo
-            }
-        }
- 
- 
-def _contar_grupos(df, config):
-    """
-    Recorre rápidamente todas las rutas posibles y cuenta
-    cuántos grupos (sub-matrices) van a llegar al solver,
-    de modo de distribuir el tiempo total.
-    """
-    total = 0
-    tipos_ruta = ['multi_ce_prioridad', 'normal', 'multi_ce', 'multi_cd', 'bh']
+        import traceback as _tb
+        return {"error": {"message": str(e), "traceback": _tb.format_exc()[:5000]}}
+
+
+# ---------------------------------------------------------
+# Cálculo de grupos
+# ---------------------------------------------------------
+
+def _contar_grupos(df: pd.DataFrame, config) -> int:
+    tipos_ruta = ["multi_ce_prioridad", "normal", "multi_ce", "multi_cd", "bh"]
     fases = [(tipo, config.RUTAS_POSIBLES[tipo]) for tipo in tipos_ruta if tipo in config.RUTAS_POSIBLES]
- 
-    lo_ag = '6009 Lo Aguirre'
+
+    lo_ag = "6009 Lo Aguirre"
     total = 0
-    mix_grupos = config.MIX_GRUPOS
- 
+    mix_grupos = getattr(config, "MIX_GRUPOS", [])
+
     for tipo, rutas in fases:
-        if tipo == 'normal':
+        if tipo == "normal":
             for cds, ces in rutas:
                 if cds == [lo_ag]:
-                    # En Lo Aguirre: primero uno por flujo, luego mixtos
-                    df_cd = df[df['CD'] == lo_ag]
+                    df_cd = df[df["CD"] == lo_ag]
                     for ce in ces:
-                        df_sub = df_cd[df_cd['CE'] == ce]
-                        if (config.USA_OC):
-                            oc_unique = df_sub['OC'].unique().tolist()
+                        df_sub = df_cd[df_cd["CE"] == ce]
+                        if getattr(config, "USA_OC", False):
+                            oc_unique = df_sub["OC"].unique().tolist()
                             total += len(oc_unique)
- 
                             for ocg in mix_grupos:
                                 if all(o in oc_unique for o in ocg):
                                     total += 1
                         else:
                             total += 1
                 else:
-                    # Resto de CDs: un único grupo si hay pedidos
-                    mask = df['CD'].isin(cds) & df['CE'].isin(ces)
+                    mask = df["CD"].isin(cds) & df["CE"].isin(ces)
                     if not df[mask].empty:
                         total += 1
- 
-        elif tipo == 'bh':
-            # BH: sin mezcla, siempre un grupo por cada flujo
+
+        elif tipo == "bh":
             for cds, ces in rutas:
-                mask = df['CD'].isin(cds) & df['CE'].isin(ces)
+                mask = df["CD"].isin(cds) & df["CE"].isin(ces)
                 df_sub = df[mask]
-                total += len(df_sub['OC'].unique()) if config.USA_OC else 1
- 
- 
-        else:  # multi_ce y multi_cd y multi_ce_prioridad
+                total += len(df_sub["OC"].unique()) if getattr(config, "USA_OC", False) else 1
+
+        else:  # multi_ce y multi_cd
             for cds, ces in rutas:
-                mask = df['CD'].isin(cds) & df['CE'].isin(ces)
-                if cds == [lo_ag]:
-                    # desglosar Lo Aguirre también por flujo individual
-                    df_sub = df[mask]
-                    total += len(df_sub['OC'].unique()) if config.USA_OC else 1
- 
-                else:
-                    # igual que antes: un solo grupo si hay datos
-                    if not df[mask].empty:
-                        total += 1
- 
+                mask = df["CD"].isin(cds) & df["CE"].isin(ces)
+                df_sub = df[mask]
+                if cds == [lo_ag] and getattr(config, "USA_OC", False):
+                    total += len(df_sub["OC"].unique()) if not df_sub.empty else 0
+                elif not df_sub.empty:
+                    total += 1
+
     return total
- 
 
-def postprocesar_camiones(camiones, config):
-    """
-    Añade flujo OC, chocolates.
-    """
-    for cam in camiones:
-        if config.USA_OC:
-            ocs = {p.get('OC') for p in cam['pedidos'] if 'OC' in p and p.get('OC')}
-            cam['flujo_oc'] = ocs.pop() if len(ocs) == 1 else 'MIX'
-        else:
-            cam['flujo_oc'] = None
-        cam['chocolates'] = 'SI' if any(p.get('CHOCOLATES') == 'SI' for p in cam['pedidos']) else 'NO'
- 
-    return camiones
- 
- 
-def ejecutar_optimizacion(df, raw_pedidos, config, modo, tiempo_por_grupo, REQUEST_TIMEOUT):
-    """
-    Ejecuta optimización en fases según modo.
 
-    Notas:
-    - En modo 'binpacking', si el cliente define:
-        * config.BINPACKING_TIPOS_RUTA (p.ej. ['normal','bh'])
-        * config.RUTAS_BINPACKING      (dicc opcional por tipo)
-      se usan esas listas. Si no existen, se cae a RUTAS_POSIBLES.
-    - En otros modos, se usa el flujo estándar con RUTAS_POSIBLES.
-    """
-    # Precalculamos raw_map y métricas globales
-    raw_map = {r['PEDIDO']: r.copy() for r in raw_pedidos}
-    pedidos_all = df['PEDIDO'].tolist()
-    vol_raw_all = dict(zip(pedidos_all, df['VOL']))
-    peso_raw_all = dict(zip(pedidos_all, df['PESO']))
-    # Precalculamos fracciones VCU escaladas
-    vcu_vol_int_all = {}
-    vcu_peso_int_all = {}
-
-    if isinstance(config.TRUCK_TYPES, dict):
-        truck_types = config.TRUCK_TYPES
-    else:
-        truck_types = {t.get('type'): t for t in config.TRUCK_TYPES}
-
-    truck = truck_types.get('normal') or next(iter(truck_types.values()))
-    cap_volume = truck['cap_volume']
-    cap_weight = truck['cap_weight']
-    for i in pedidos_all:
-        frac_vol = vol_raw_all[i] / cap_volume if cap_volume else 0.0
-        frac_peso = peso_raw_all[i] / cap_weight if cap_weight else 0.0
-        vcu_vol_int_all[i] = max(0, min(SCALE, int(math.ceil(frac_vol * SCALE))))
-        vcu_peso_int_all[i] = max(0, min(SCALE, int(math.ceil(frac_peso * SCALE))))
- 
-    pedidos_rest = df.copy()
-    resultados = []
-    start_total = time.time()
- 
-    # Selección de fases según modo
-    if modo == 'binpacking':
-        # Permitir que el cliente acote los tipos/rutas de bin packing
-        tipos_ruta = getattr(config, 'BINPACKING_TIPOS_RUTA', ['normal'])
-        rutas_bp = getattr(config, 'RUTAS_BINPACKING', {})
-
-        def rutas_for(tipo: str):
-            # Usa rutas específicas si existen; si no, cae a RUTAS_POSIBLES
-            return rutas_bp.get(tipo, config.RUTAS_POSIBLES.get(tipo, []))
-    else:
-        tipos_ruta = ['multi_ce_prioridad', 'normal', 'multi_ce', 'multi_cd', 'bh']
-        def rutas_for(tipo: str):
-            return config.RUTAS_POSIBLES.get(tipo, [])
-
-    fases = [(t, rutas_for(t)) for t in tipos_ruta if rutas_for(t)]
-
-    total_orders = len(pedidos_all)
-    mix_grupos = config.MIX_GRUPOS
-    for tipo, rutas in fases:
-        rutas_iter = generar_rutas(tipo, rutas, pedidos_rest, mix_grupos, config.USA_OC)
-        for cds, ces, oc in rutas_iter:
-            df_g = pedidos_rest[ (pedidos_rest['CD'].isin(cds)) & (pedidos_rest['CE'].isin(ces)) ]
-            if oc:
-                if isinstance(oc, list):
-                    df_g = df_g[df_g['OC'].isin(oc)]
-                else:
-                    df_g = df_g[df_g['OC'] == oc]
-            if df_g.empty:
-                continue
-            # calcular tiempo dinámico por grupo
-            group_orders = len(df_g)
-            print(tiempo_por_grupo, group_orders, total_orders)
-            tiempo_group = max(1, (tiempo_por_grupo * group_orders / 10))
-            cfg = {'id': f"{tipo}__{'-'.join(cds)}__{'-'.join(map(str, ces))}" + (f"__{oc}" if oc else ''),
-                   'tipo': tipo, 'ce': ces, 'cd': cds, 'oc': oc}
-            elapsed = time.time() - start_total
-            if elapsed + tiempo_group > (REQUEST_TIMEOUT - 2):
-                break
-            if modo == 'vcu':
-                res = optimizar_vcu(
-                    df_g, raw_pedidos, cfg, config,
-                    tiempo_group, vol_raw_all, peso_raw_all,
-                    vcu_vol_int_all, vcu_peso_int_all
-                )
-            else:
-                res = optimizar_bin(
-                    df_g, raw_pedidos, cfg, config,
-                    tiempo_group, vol_raw_all, peso_raw_all
-                )
-            if res['status'] in ('OPTIMAL', 'FEASIBLE') and res.get('camiones'):
-                resultados.append(res)
-                pedidos_rest = pedidos_rest[~pedidos_rest['PEDIDO'].isin(res['pedidos_asignados_ids'])]
-        if time.time() - start_total > (REQUEST_TIMEOUT - 2):
-            break
- 
-    # Reconstruir camiones y no incluidos
-    all_cam = [c for r in resultados for c in r['camiones']]
-    pedidos_no_incl = []
-    for pid in pedidos_rest['PEDIDO'].tolist():
-        if pid not in raw_map:
-            continue
-        raw = raw_map[pid]
-        pedido = {'PEDIDO': pid, 'CE': raw.get('CE'), 'CD': raw.get('CD'), 'OC': raw.get('OC') if 'OC' in raw else None,
-                  'VCU_VOL': vol_raw_all[pid] / float(cap_volume), 'VCU_PESO': peso_raw_all[pid] / float(cap_weight),
-                 'PO': raw.get('PO'),
-                  'CHOCOLATES': raw.get('CHOCOLATES'), 'Fecha preferente de entrega': raw.get('Fecha preferente de entrega')}
-        pedidos_no_incl.append(completar_metadata_pedido(pedido, raw_map))
- 
-    return {'camiones': all_cam, 'pedidos_no_incluidos': pedidos_no_incl}
- 
- 
 # ---------------------------------------------------------
-# Heurística First-Fit Decreasing (FFD) para estimar n_cam
+# Rutas, reconstrucción y heurística
 # ---------------------------------------------------------
-def heuristica_ffd(pedidos, peso_raw, vol_raw, truck_caps):
-    """
-    Igual que antes, ordenamos por recurso más crítico.
-    """
-    cap_weight = truck_caps['cap_weight']
-    cap_volume = truck_caps['cap_volume']
-    pedidos_orden = sorted(
-        pedidos,
-        key=lambda i: max(peso_raw[i] / cap_weight, vol_raw[i] / cap_volume),
-        reverse=True
-    )
-    camiones = []  # cada elemento: (peso_ocupado, vol_ocupado)
-    for i in pedidos_orden:
-        asignado = False
-        for idx in range(len(camiones)):
-            if (camiones[idx][0] + peso_raw[i] <= cap_weight
-                and camiones[idx][1] + vol_raw[i] <= cap_volume):
-                camiones[idx] = (camiones[idx][0] + peso_raw[i], camiones[idx][1] + vol_raw[i])
-                asignado = True
-                break
-        if not asignado:
-            camiones.append((peso_raw[i], vol_raw[i]))
-    return len(camiones)
- 
- 
-def generar_rutas(tipo, rutas, df, mix_grupos, usa_oc):
-    lo_ag = '6009 Lo Aguirre'
+
+def generar_rutas(tipo: str, rutas: Iterable[Tuple[List[str], List[str]]], df: pd.DataFrame, mix_grupos: List[List[str]], usa_oc: bool):
+    lo_ag = "6009 Lo Aguirre"
     rutas_iter = []
- 
-    if tipo == 'normal':
+
+    if tipo == "normal":
         for cds, ces in rutas:
             if cds == [lo_ag]:
-                df_cd = df[df['CD'] == lo_ag]
+                df_cd = df[df["CD"] == lo_ag]
                 for ce in ces:
-                    df_sub = df_cd[df_cd['CE'] == ce]
+                    df_sub = df_cd[df_cd["CE"] == ce]
                     if usa_oc:
-                        oc_unique = df_sub['OC'].unique().tolist()
+                        oc_unique = df_sub["OC"].unique().tolist()
                         for oc in oc_unique:
                             rutas_iter.append(([lo_ag], [ce], oc))
                         for ocg in mix_grupos:
@@ -348,49 +205,43 @@ def generar_rutas(tipo, rutas, df, mix_grupos, usa_oc):
                     else:
                         rutas_iter.append(([lo_ag], [ce], None))
             else:
-                mask = df['CD'].isin(cds) & df['CE'].isin(ces)
+                mask = df["CD"].isin(cds) & df["CE"].isin(ces)
                 if not df[mask].empty:
                     rutas_iter.append((cds, ces, None))
- 
-    elif tipo == 'bh':
+
+    elif tipo == "bh":
         for cds, ces in rutas:
-            mask = df['CD'].isin(cds) & df['CE'].isin(ces)
+            mask = df["CD"].isin(cds) & df["CE"].isin(ces)
             df_sub = df[mask]
             if usa_oc:
-                for oc in df_sub['OC'].unique().tolist():
+                for oc in df_sub["OC"].unique().tolist():
                     rutas_iter.append((cds, ces, oc))
             else:
                 rutas_iter.append((cds, ces, None))
- 
+
     else:  # multi_ce y multi_cd
         for cds, ces in rutas:
-            df_sub = df[df['CD'].isin(cds) & df['CE'].isin(ces)]
+            df_sub = df[df["CD"].isin(cds) & df["CE"].isin(ces)]
             if df_sub.empty:
                 continue
- 
-            ce_presentes = set(df_sub['CE'].unique())
-            cd_presentes = set(df_sub['CD'].unique())
-
-            if tipo in ('multi_ce', 'multi_ce_prioridad') and not all(ce in ce_presentes for ce in ces):
+            ce_presentes = set(df_sub["CE"].unique())
+            cd_presentes = set(df_sub["CD"].unique())
+            if tipo in ("multi_ce", "multi_ce_prioridad") and not all(ce in ce_presentes for ce in ces):
                 continue
-            if tipo == 'multi_cd' and not all(cd in cd_presentes for cd in cds):
+            if tipo == "multi_cd" and not all(cd in cd_presentes for cd in cds):
                 continue
- 
             if lo_ag in cds and usa_oc:
-                for oc in df_sub['OC'].unique():
-                    if not df_sub[df_sub['OC'] == oc].empty:
+                for oc in df_sub["OC"].unique():
+                    if not df_sub[df_sub["OC"] == oc].empty:
                         rutas_iter.append((cds, ces, oc))
             else:
                 rutas_iter.append((cds, ces, None))
- 
+
     return rutas_iter
- 
- 
+
+
 def completar_metadata_pedido(pedido_minimal: dict, raw_map: dict) -> dict:
-    """
-    Sin cambios: combinamos el pedido minimal con raw_map.
-    """
-    p = pedido_minimal['PEDIDO']
+    p = pedido_minimal["PEDIDO"]
     completo = pedido_minimal.copy()
     if p not in raw_map:
         return completo
@@ -398,7 +249,195 @@ def completar_metadata_pedido(pedido_minimal: dict, raw_map: dict) -> dict:
         if clave not in completo:
             completo[clave] = valor
     return completo
- 
+
+
+def heuristica_ffd(pedidos: List[Any], peso_raw: Dict[Any, float], vol_raw: Dict[Any, float], truck_caps: Dict[str, float]) -> int:
+    cap_weight = truck_caps["cap_weight"]
+    cap_volume = truck_caps["cap_volume"]
+    pedidos_orden = sorted(
+        pedidos,
+        key=lambda i: max(peso_raw[i] / cap_weight, vol_raw[i] / cap_volume),
+        reverse=True,
+    )
+    camiones: List[Tuple[float, float]] = []
+    for i in pedidos_orden:
+        for idx in range(len(camiones)):
+            if camiones[idx][0] + peso_raw[i] <= cap_weight and camiones[idx][1] + vol_raw[i] <= cap_volume:
+                camiones[idx] = (camiones[idx][0] + peso_raw[i], camiones[idx][1] + vol_raw[i])
+                break
+        else:
+            camiones.append((peso_raw[i], vol_raw[i]))
+    return len(camiones)
+
+
+# ---------------------------------------------------------
+# Núcleo: CP-SAT VCU y BinPacking
+# ---------------------------------------------------------
+
+def ejecutar_optimizacion(df: pd.DataFrame, raw_pedidos: List[Dict[str, Any]], config, modo: str, tiempo_por_grupo: int, REQUEST_TIMEOUT: int) -> Dict[str, Any]:
+    raw_map = {r["PEDIDO"]: r.copy() for r in raw_pedidos}
+
+    pedidos_all = df["PEDIDO"].tolist()
+    vol_raw_all = dict(zip(pedidos_all, df["VOL"]))
+    peso_raw_all = dict(zip(pedidos_all, df["PESO"]))
+
+    # Selección de camión base (normal)
+    if isinstance(config.TRUCK_TYPES, dict):
+        truck_types = config.TRUCK_TYPES
+    else:
+        truck_types = {t.get("type"): t for t in config.TRUCK_TYPES}
+    truck = truck_types.get("normal") or next(iter(truck_types.values()))
+    cap_volume = float(truck["cap_volume"]) or 1.0
+    cap_weight = float(truck["cap_weight"]) or 1.0
+
+    # Precalcular fracciones escaladas VCU
+    vcu_vol_int_all = {}
+    vcu_peso_int_all = {}
+    for i in pedidos_all:
+        frac_vol = vol_raw_all[i] / cap_volume
+        frac_peso = peso_raw_all[i] / cap_weight
+        vcu_vol_int_all[i] = max(0, min(SCALE, int(math.ceil(frac_vol * SCALE))))
+        vcu_peso_int_all[i] = max(0, min(SCALE, int(math.ceil(frac_peso * SCALE))))
+
+    pedidos_rest = df.copy()
+    resultados = []
+    start_total = time.time()
+
+    # Tipos/rutas por modo
+    if modo == "binpacking":
+        tipos_ruta = getattr(config, "BINPACKING_TIPOS_RUTA", ["normal"]) or ["normal"]
+        rutas_bp = getattr(config, "RUTAS_BINPACKING", {})
+        rutas_for = lambda t: rutas_bp.get(t, config.RUTAS_POSIBLES.get(t, []))
+    else:
+        tipos_ruta = ["multi_ce_prioridad", "normal", "multi_ce", "multi_cd", "bh"]
+        rutas_for = lambda t: config.RUTAS_POSIBLES.get(t, [])
+
+    fases = [(t, rutas_for(t)) for t in tipos_ruta if rutas_for(t)]
+
+    total_orders = len(pedidos_all)
+    mix_grupos = getattr(config, "MIX_GRUPOS", [])
+
+    for tipo, rutas in fases:
+
+        if tipo == "normal":
+            # --- paralelización sólo para rutas normales ---
+            grupos = _build_normal_groups_disjoint(pedidos_rest, rutas, mix_grupos, getattr(config, "USA_OC", False))
+            if grupos:
+                futures = []
+                assigned_ids_all: List[str] = []
+                with ThreadPoolExecutor(max_workers=min(THREAD_WORKERS_NORMAL, len(grupos))) as pool:
+                    for cfg, df_g in grupos:
+                        if df_g.empty:
+                            continue
+                        group_orders = len(df_g)
+                        tiempo_group = max(1, int(tiempo_por_grupo * group_orders / 10))
+                        if time.time() - start_total + tiempo_group > (REQUEST_TIMEOUT - 2):
+                            continue
+                        if modo == "vcu":
+                            fut = pool.submit(
+                                optimizar_vcu,
+                                df_g, raw_pedidos, cfg, config, tiempo_group,
+                                vol_raw_all, peso_raw_all, vcu_vol_int_all, vcu_peso_int_all,
+                            )
+                        else:
+                            fut = pool.submit(
+                                optimizar_bin,
+                                df_g, raw_pedidos, cfg, config, tiempo_group,
+                                vol_raw_all, peso_raw_all,
+                            )
+                        futures.append(fut)
+                    # recoger resultados asegurando no duplicados
+                    for fut in as_completed(futures, timeout=max(1, REQUEST_TIMEOUT - int(time.time() - start_total))):
+                        try:
+                            res = fut.result()
+                        except Exception:
+                            continue
+                        if res.get("status") in ("OPTIMAL", "FEASIBLE") and res.get("camiones"):
+                            nuevos = [p for p in res.get("pedidos_asignados_ids", []) if p not in assigned_ids_all]
+                            if not nuevos:
+                                continue
+                            assigned_ids_all.extend(nuevos)
+                            resultados.append(res)
+                if assigned_ids_all:
+                    pedidos_rest = pedidos_rest[~pedidos_rest["PEDIDO"].isin(assigned_ids_all)]
+            if time.time() - start_total > (REQUEST_TIMEOUT - 2):
+                break
+        else:
+            for cds, ces, oc in generar_rutas(tipo, rutas, pedidos_rest, mix_grupos, getattr(config, "USA_OC", False)):
+                df_g = pedidos_rest[(pedidos_rest["CD"].isin(cds)) & (pedidos_rest["CE"].isin(ces))]
+                if oc:
+                    df_g = df_g[df_g["OC"].isin(oc if isinstance(oc, list) else [oc])]
+                if df_g.empty:
+                    continue
+
+                group_orders = len(df_g)
+                # asignación proporcional simple (evita exceder timeout total)
+                tiempo_group = max(1, int(tiempo_por_grupo * group_orders / 10))
+
+                cfg = {"id": f"{tipo}__{'-'.join(cds)}__{'-'.join(map(str, ces))}" + (f"__{oc}" if oc else ""),
+                    "tipo": tipo, "ce": ces, "cd": cds, "oc": oc}
+                if time.time() - start_total + tiempo_group > (REQUEST_TIMEOUT - 2):
+                    break
+
+                if modo == "vcu":
+                    res = optimizar_vcu(
+                        df_g, raw_pedidos, cfg, config,
+                        tiempo_group, vol_raw_all, peso_raw_all,
+                        vcu_vol_int_all, vcu_peso_int_all,
+                    )
+                else:
+                    res = optimizar_bin(
+                        df_g, raw_pedidos, cfg, config, tiempo_group, vol_raw_all, peso_raw_all
+                    )
+
+                if res.get("status") in ("OPTIMAL", "FEASIBLE") and res.get("camiones"):
+                    resultados.append(res)
+                    pedidos_rest = pedidos_rest[~pedidos_rest["PEDIDO"].isin(res["pedidos_asignados_ids"])]
+            if time.time() - start_total > (REQUEST_TIMEOUT - 2):
+                break
+
+    all_cam = [c for r in resultados for c in r.get("camiones", [])]
+
+    pedidos_no_incl: List[Dict[str, Any]] = []
+    for pid in pedidos_rest["PEDIDO"].tolist():
+        raw = raw_map.get(pid)
+        if not raw:
+            continue
+        pedido = {
+            "PEDIDO": pid,
+            "CE": raw.get("CE"),
+            "CD": raw.get("CD"),
+            "OC": raw.get("OC") if "OC" in raw else None,
+            "VCU_VOL": vol_raw_all[pid] / cap_volume,
+            "VCU_PESO": peso_raw_all[pid] / cap_weight,
+            "PO": raw.get("PO"),
+            "CHOCOLATES": raw.get("CHOCOLATES"),
+            "Fecha preferente de entrega": raw.get("Fecha preferente de entrega"),
+        }
+        pedidos_no_incl.append(completar_metadata_pedido(pedido, raw_map))
+
+    return {"camiones": all_cam, "pedidos_no_incluidos": pedidos_no_incl}
+
+
+# ---------------------------------------------------------
+# Post-procesado de camiones (flujo OC + chocolates)
+# ---------------------------------------------------------
+
+def postprocesar_camiones(camiones: List[Dict[str, Any]], config) -> List[Dict[str, Any]]:
+    for cam in camiones:
+        if getattr(config, "USA_OC", False):
+            ocs = {p.get("OC") for p in cam.get("pedidos", []) if p.get("OC")}
+            cam["flujo_oc"] = next(iter(ocs)) if len(ocs) == 1 else ("MIX" if ocs else None)
+        else:
+            cam["flujo_oc"] = None
+        cam["chocolates"] = "SI" if any(p.get("CHOCOLATES") == "SI" for p in cam.get("pedidos", [])) else "NO"
+    return camiones
+
+
+# ---------------------------------------------------------
+# Modelos CP-SAT (VCU y BinPacking)
+# ---------------------------------------------------------
+
 
 def optimizar_vcu( df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg,
     vol_raw, peso_raw, vcu_vol_int, vcu_peso_int, PESO_VCU=1000, PESO_CAMIONES=200, PESO_PEDIDOS=3000):
