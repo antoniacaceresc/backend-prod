@@ -5,6 +5,7 @@ from typing import List, Dict, Any, Optional
 import uuid
 
 from config import get_client_config
+from collections import Counter
 
 PALLETS_SCALE = 10
 
@@ -155,10 +156,9 @@ def move_orders(
 
         candidatos = (tgt.get("pedidos") or []) + pedidos_sel
 
-        # Reglas de Walmart postproceso
-        if (cliente or "").strip().lower() == "walmart":
-            from collections import Counter
-            cfg_wm = get_client_config("Walmart")
+        # 0) Regla de Walmart: máximo 10 pedidos por camión en postproceso por CD
+        if (cliente).strip().lower() == "walmart":
+            cfg_wm = get_client_config("Walmart")  # para leer MAX_ORDENES si aplica
 
             cds_candidatos = [p.get("CD") for p in candidatos if p.get("CD")]
             cds_unicos = {cd for cd in cds_candidatos if cd not in (None, "")}
@@ -176,8 +176,8 @@ def move_orders(
                 if len(candidatos) > max_ordenes:
                     raise ValueError(f"Walmart: máximo {max_ordenes} pedidos por camión.")
 
-        # Capacidad de pallets real en Cencosud
-        if (cliente or "").strip().lower() == "cencosud":
+        # 0) Chequeo capacidad de pallets (Cencosud usa PALLETS_REAL)
+        if (cliente).strip().lower() == "cencosud":
             cfg = get_client_config("Cencosud")
             tipo_cam = (tgt.get("tipo_camion") or "normal").lower()
             trucks = cfg.TRUCK_TYPES if isinstance(cfg.TRUCK_TYPES, dict) else {t.get("type"): t for t in cfg.TRUCK_TYPES}
