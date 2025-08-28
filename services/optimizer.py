@@ -88,8 +88,39 @@ def optimizar_con_dos_fases(raw_df: pd.DataFrame, client_config, cliente: str, v
     resultado_vcu = run_optimizacion(df_proc, pedidos, client_config, "vcu", tpg, request_timeout)
     resultado_bp = run_optimizacion(df_proc, pedidos, client_config, "binpacking", tpg, request_timeout)
 
+    # Objetivo suave de proporción BH por cliente
+    try:
+        from services.postprocess import enforce_bh_target
+        target_ratio = getattr(client_config, "BH_TRUCK_TARGET_RATIO", None)
+        if isinstance(target_ratio, (int, float)) and target_ratio > 0:
+            # VCU
+            cam, pni = enforce_bh_target(
+                resultado_vcu.get("camiones", []),
+                resultado_vcu.get("pedidos_no_incluidos", []),
+                cliente, 
+                float(target_ratio),
+            )
+            resultado_vcu["camiones"] = cam
+            resultado_vcu["pedidos_no_incluidos"] = pni
+
+            # BinPacking
+            cam_b, pni_b = enforce_bh_target(
+                resultado_bp.get("camiones", []),
+                resultado_bp.get("pedidos_no_incluidos", []),
+                cliente,
+                float(target_ratio),
+            )
+            resultado_bp["camiones"] = cam_b
+            resultado_bp["pedidos_no_incluidos"] = pni_b
+    except Exception:
+        # si algo falla, no rompemos el flujo principal
+        pass
+
     # 4) Etiquetado BH en BinPacking
-    if getattr(client_config, "PERMITE_BH", False):
+
+    if (getattr(client_config, "PERMITE_BH", False)
+            and type(client_config).__name__ != "CencosudConfig"
+            and str(cliente).strip().lower() != "cencosud"):
         for cam in resultado_bp.get("camiones", []):
             if (
                 cam.get("cd", [None])[0] in getattr(client_config, "CD_CON_BH", [])
@@ -98,6 +129,7 @@ def optimizar_con_dos_fases(raw_df: pd.DataFrame, client_config, cliente: str, v
                 and cam.get("tipo_ruta") == "normal"
             ):
                 cam["tipo_camion"] = "bh"
+
 
     return {"vcu": resultado_vcu, "binpacking": resultado_bp}
 
@@ -431,8 +463,72 @@ def postprocesar_camiones(camiones: List[Dict[str, Any]], config) -> List[Dict[s
         else:
             cam["flujo_oc"] = None
         cam["chocolates"] = "SI" if any(p.get("CHOCOLATES") == "SI" for p in cam.get("pedidos", [])) else "NO"
+
+        # Opciones de cambio de tipo (se calculan con los campos ya presentes del camión)
+        switch_info = _build_switch_options_for_truck(cam, config)
+        cam['can_switch_tipo_camion'] = switch_info['can_switch']
+        cam['opciones_tipo_camion'] = switch_info['opciones']
     return camiones
 
+
+# =========================================================
+# Helpers para opciones de cambio de tipo de camión
+# =========================================================
+def _ruta_coincide_con_bh(cds_cam: List[str], ces_cam: List[int], rutas_bh: List) -> bool:
+    """
+    Retorna True si el par (cds_cam, ces_cam) calza con alguna ruta BH declarada
+    en RUTAS_POSIBLES['bh'] (subset match).
+    """
+    set_cd = set(cds_cam or [])
+    set_ce = set(ces_cam or [])
+    for cds, ces in rutas_bh or []:
+        if set_cd.issubset(set(cds)) and set_ce.issubset(set(ces)):
+            return True
+    return False
+
+
+def _build_switch_options_for_truck(cam: Dict[str, Any], client_config) -> Dict[str, Any]:
+    """
+    Construye las opciones de 'tipo_camion' disponibles para un camión dado,
+    en base a la configuración del cliente y a los atributos del camión.
+    Devuelve: {'can_switch': bool, 'opciones': [actual, ...]}
+    """
+    actual = (cam.get('tipo_camion') or 'normal').lower()
+    opciones = ['normal']  # siempre permitir volver a 'normal'
+
+    # Reglas BH (si el cliente lo permite)
+    if getattr(client_config, 'PERMITE_BH', False):
+        rutas_bh = getattr(client_config, 'RUTAS_POSIBLES', {}).get('bh', [])
+        ruta_ok = _ruta_coincide_con_bh(cam.get('cd'), cam.get('ce'), rutas_bh)
+
+        # Si existe lista de CDs que admiten BH, respetarla (si no existe, lo damos por OK)
+        cd_ok = True
+        if hasattr(client_config, 'CD_CON_BH'):
+            cd_ok = all(cd in client_config.CD_CON_BH for cd in (cam.get('cd') or []))
+
+        # Mezcla de flujos: por defecto no, salvo flag explícito
+        permite_mix = getattr(client_config, 'BH_PERMITE_MIX', False)
+        flujo = cam.get('flujo_oc')
+        flujo_ok = True if permite_mix else (flujo not in ('MIX',))
+
+        # Ventanas de VCU para BH (si existen en config)
+        vcu = float(cam.get('vcu_max') or 0.0)
+        vcu_ok = True
+        if hasattr(client_config, 'BH_VCU_MAX'):
+            vcu_ok = vcu_ok and (vcu <= float(client_config.BH_VCU_MAX))
+        if hasattr(client_config, 'BH_VCU_MIN'):
+            vcu_ok = vcu_ok and (vcu >= float(client_config.BH_VCU_MIN))
+
+        if ruta_ok and cd_ok and flujo_ok and vcu_ok:
+            opciones.append('bh')
+
+    # Unificar y poner el actual primero
+    seen = set()
+    opciones = [o for o in ([actual] + [o for o in opciones if o != actual]) if not (o in seen or seen.add(o))]
+    return {
+        'can_switch': len(opciones) > 1,
+        'opciones': opciones
+    }
 
 # ---------------------------------------------------------
 # Modelos CP-SAT (VCU y BinPacking)

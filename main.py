@@ -15,7 +15,8 @@ from pydantic import BaseModel, Field
 
 # Mantener contratos públicos e imports
 from services import optimizer as optimizer
-from services.postprocess import move_orders, add_truck, delete_truck, compute_stats
+from services.postprocess import move_orders, add_truck, delete_truck, compute_stats, apply_truck_type_change
+
 
 # ----------------------------------------------------------------------------
 # App & Middlewares
@@ -170,6 +171,46 @@ async def api_move_orders(req: PostProcessRequest = Body(...)) -> Dict[str, Any]
         return await asyncio.to_thread(move_orders, state, req.pedidos, req.target_truck_id, req.cliente)
     except Exception as e:  # por validaciones de negocio
         raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        semaphore.release()
+
+@app.post("/postprocess/update_truck_type", response_model=PostProcessResponse)
+async def api_update_truck_type(
+    camiones = Body(...),
+    pedidos_no_incluidos = Body(...),
+    cliente: str = Body(...),
+    truck_id: str = Body(...),
+    tipo_camion: str = Body(...),
+) -> Dict[str, Any]:
+    """
+    Cambia el tipo de un camión delegando toda la validación y el recálculo
+    a `services.postprocess.apply_truck_type_change(...)`.
+    Devuelve: {camiones, pedidos_no_incluidos, estadisticas}.
+    """
+    try:
+        await asyncio.wait_for(semaphore.acquire(), timeout=3.0)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=429, detail="Servicio ocupado: demasiadas operaciones en curso.")
+
+    try:
+        state = {
+            "camiones": list(camiones or []),
+            "pedidos_no_incluidos": list(pedidos_no_incluidos or []),
+        }
+        updated = await asyncio.to_thread(
+            apply_truck_type_change,
+            state,
+            truck_id,
+            (tipo_camion or "").lower(),
+            cliente,
+        )
+        return updated
+
+    except ValueError as e:
+        # Errores de negocio (no cabe / no permitido / regla del cliente, etc.)
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error interno: {e}")
     finally:
         semaphore.release()
 

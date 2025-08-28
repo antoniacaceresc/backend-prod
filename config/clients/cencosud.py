@@ -12,9 +12,8 @@ class CencosudConfig:
     # BH
     PERMITE_BH = True
     CD_CON_BH = ['N725 Bodega Noviciado', 'N641 Bodega Noviciado PYP']
-    BH_MAX_POSICIONES = 26
     BH_VCU_MAX = 1
-
+    BH_TRUCK_TARGET_RATIO = 0.60
 
     # Mapeo de columnas
     COLUMN_MAPPING = {
@@ -63,7 +62,7 @@ class CencosudConfig:
     # Tipos de camiones
     TRUCK_TYPES = {
         'normal': {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.85, 'max_pallets': 60},
-        'bh':     {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.55, 'max_pallets': 56}
+        'bh':     {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 26, 'levels': 2, 'vcu_min': 0.55, 'max_pallets': 52}
     }
 
 
