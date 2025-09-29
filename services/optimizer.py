@@ -880,6 +880,7 @@ def optimizar_vcu( df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg,
                 'PO':           po_map[i],
                 'OC':           oc_map[i],
                 'PALLETS':      pallets_conf_map[i],
+                'PALLETS_REAL': pallets_real_map[i],
                 'VALOR': valor_map[i],
             }
  
