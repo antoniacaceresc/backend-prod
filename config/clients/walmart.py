@@ -156,9 +156,6 @@ class WalmartConfig:
             (["6010 Chillán"],["0103", "0079"]),
             (["6024 Temuco"],["0103", "0079"]),
 
-            # Ces: Maipú y Teno
-            (["6003 Antofagasta"],["0103", "8151"]),
-
             # Ces: San Fernando y Teno
             (["6003 Antofagasta"],["0079", "8151"]),
 
