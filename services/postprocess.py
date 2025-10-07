@@ -106,7 +106,6 @@ def compute_stats(
     }
 
 
-
 def _ceil_div2(x: int) -> int:
     return (x + 1) // 2
 
@@ -489,6 +488,7 @@ def delete_truck(state: Dict[str, Any], truck_id: Optional[str], cliente: str) -
             no_incl.extend(eliminado.get("pedidos") or [])
 
     return move_orders({"camiones": camiones, "pedidos_no_incluidos": no_incl}, [], None, cliente)
+
 
 def enforce_bh_target(
     camiones: List[Dict[str, Any]],

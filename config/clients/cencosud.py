@@ -95,8 +95,6 @@ class CencosudConfig:
 
         "multi_ce": [
 
-            (["N641 Bodega Noviciado PYP"],["0088", "0103"]),
-            (["N725 Bodega Noviciado"],["0088", "0103"]),
             (["N794 Bodega Chillan"],["0088", "0103"]),
 
         ],

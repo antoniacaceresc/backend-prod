@@ -118,15 +118,6 @@ class DisvetConfig:
         ],
 
         "multi_ce": [
-            
-            # Ces: Quilicura y Maipú
-            (["Bioñuble"],["0088", "0103"]),
-            (["Friex"],["0088", "0103"]),
-            (["HN"],["0088", "0103"]),
-            (["Maxima"],["0088", "0103"]),
-            (["Norkoshe"],["0088", "0103"]),
-            (["Relun"],["0088", "0103"]),
-            (["Vivancos SPA"],["0088", "0103"]),
 
         ],
         "multi_cd": [
