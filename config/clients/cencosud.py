@@ -24,7 +24,7 @@ class CencosudConfig:
             "CE": "Ce.",
             "PALLETS": "Pal. Conf.",
             "PALLETS_REAL": "Pal. Conf. Real",
-            "PESO": "Peso Conf.",
+            "PESO": "Peso neto Conf.",
             "VOL": "Vol. Conf.",
             "VALOR": "$$ Conf.",
             "CHOCOLATES": "Chocolates",
