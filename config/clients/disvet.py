@@ -36,7 +36,7 @@ class DisvetConfig:
             "PEDIDO": "N° Pedido",
             "CE": "Ce.",
             "PALLETS": "Pal. Conf.",
-            "PESO": "Peso Conf.",
+            "PESO": "Peso neto Conf.",
             "VOL": "Vol. Conf.",
             "VALOR": "$$ Conf.",
             "CHOCOLATES": "Chocolates",
