@@ -266,7 +266,7 @@ def move_orders(
         cam["vcu_vol"] = float(sum(p.get("VCU_VOL") or 0 for p in pedidos_cam))
         cam["vcu_peso"] = float(sum(p.get("VCU_PESO") or 0 for p in pedidos_cam))
         cam["vcu_max"] = max(cam["vcu_vol"], cam["vcu_peso"])
-        cam["chocolates"] = "SI" if any(p.get("CHOCOLATES") == "SI" for p in pedidos_cam) else "NO"
+        cam["chocolates"] = 1 if any(p.get("CHOCOLATES") == 1 for p in pedidos_cam) else 0
         cam["valioso"] = any(p.get("VALIOSO") for p in pedidos_cam)
         cam["pdq"] = any(p.get("PDQ") for p in pedidos_cam)
         cam["baja_vu"] = any(p.get("BAJA_VU") for p in pedidos_cam)
