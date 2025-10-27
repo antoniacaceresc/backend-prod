@@ -6,8 +6,12 @@ class WalmartConfig:
     USA_OC = True
     AGRUPAR_POR_PO = False
 
+    # Configuración pallets
+    PERMITE_CONSOLIDACION_PALLETS = True
+    MAX_SKUS_POR_PALLET = 5
+
     # Parámetros de Optimización
-    MAX_ORDENES = 10
+    MAX_ORDENES = 40
 
     # CRR
     MAX_PALLETS_REAL_CRR = 90
@@ -41,7 +45,8 @@ class WalmartConfig:
             "FLEXIBLE": "Flexible",
             "NO_APILABLE": "No Apilable",
             "SI_MISMO": "Apilable por si mismo",
-            "PDQ": "PDQ"
+            "PDQ": "PDQ",
+            "SALDO_INV": "Saldo INV WM"
 
         },
         "Purina": {
@@ -70,8 +75,8 @@ class WalmartConfig:
 
     # Tipos de camiones
     TRUCK_TYPES = {
-        'normal': {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.90, 'max_pallets': 60},
-        'bh':     {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.55, 'max_pallets': 56}
+        'normal': {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.90, 'max_pallets': 60, 'max_altura': 240},
+        'bh':     {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.55, 'max_pallets': 56, 'max_altura': 240}
     }
 
     # Configuración agrupamiento especial

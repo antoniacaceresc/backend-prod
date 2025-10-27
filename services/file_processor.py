@@ -141,7 +141,7 @@ def process_dataframe(df_full: pd.DataFrame, client_config, cliente: str, venta:
     if "PALLETS_REAL" in df_proc.columns:
         df_proc["PALLETS_REAL"] = pd.to_numeric(df_proc["PALLETS_REAL"], errors="coerce").fillna(0)
 
-    for flag in ["VALIOSO", "PDQ", "BAJA_VU", "LOTE_DIR"]:
+    for flag in ["VALIOSO", "PDQ", "BAJA_VU", "LOTE_DIR", "SALDO_INV"]:
         if flag in df_proc.columns:
             df_proc[flag] = pd.to_numeric(df_proc[flag], errors="coerce").fillna(0).astype(int).clip(0, 1)
         else:

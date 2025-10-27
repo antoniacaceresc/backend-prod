@@ -7,6 +7,8 @@ import math
 
 from config import get_client_config
 from collections import Counter
+from services.stacking_validator import validar_pedidos_en_camion, ResultadoValidacion
+import os
 
 PALLETS_SCALE = 10
 
@@ -110,9 +112,15 @@ def _ceil_div2(x: int) -> int:
     return (x + 1) // 2
 
 
-def _compute_apilabilidad(pedidos_cam: List[Dict[str, Any]], cliente: Optional[str], tipo_camion: str) -> Dict[str, Any]:
+def _compute_apilabilidad_legacy(pedidos_cam: List[Dict[str, Any]], cliente: Optional[str], tipo_camion: str) -> Dict[str, Any]:
     """Reproduce la métrica `total_stack` del solver y valida contra el umbral
     de posiciones del camión según cliente/tipo (normal vs bh).
+    """
+    """
+    LEGACY: Validación usando agregados (BASE, SUPERIOR, FLEXIBLE, etc.).
+    
+    Mantener como fallback si validación física falla.
+    Esta función usa el algoritmo original basado en sumas escaladas.
     """
     if not (cliente and str(cliente).strip()):
         return {"ok": False, "motivo": "Falta 'cliente' para validar apilabilidad"}
@@ -173,6 +181,115 @@ def _compute_apilabilidad(pedidos_cam: List[Dict[str, Any]], cliente: Optional[s
     return {"ok": ok, "motivo": (None if ok else f"Usa {usado:.2f} posiciones > {max_positions}"), "pos_usadas": usado, "pos_max": max_positions}
 
 
+# ====== NUEVA FUNCIÓN CON VALIDACIÓN FÍSICA ======
+def _compute_apilabilidad(pedidos_cam: List[Dict[str, Any]], cliente: Optional[str], tipo_camion: str) -> Dict[str, Any]:
+    """
+    Validación de apilabilidad usando algoritmo físico de colocación.
+    
+    Flujo:
+    1. Verifica feature flag (DISABLE_PHYSICAL_STACKING)
+    2. Intenta validación física con validar_pedidos_en_camion()
+    3. Si falla o está deshabilitado → fallback a _compute_apilabilidad_legacy()
+    
+    Args:
+        pedidos_cam: Lista de pedidos del camión
+        cliente: Nombre del cliente (para config)
+        tipo_camion: 'normal' o 'bh'
+    
+    Returns:
+        {
+            "ok": bool,
+            "motivo": str (si ok=False),
+            "pos_usadas": int (si ok=True),
+            "pos_max": int,
+            "altura_maxima": float,
+            "eficiencia_posiciones": float,
+            "eficiencia_altura": float,
+            "pallets_fisicos": int,
+            "layout": list (opcional, si RETURN_STACKING_LAYOUT=true)
+        }
+    """
+    # 0. Validaciones básicas
+    if not cliente:
+        return {"ok": False, "motivo": "Falta cliente para validar apilabilidad"}
+    
+    if not pedidos_cam:
+        # Camión vacío es válido
+        return {
+            "ok": True,
+            "pos_usadas": 0,
+            "pos_max": 0,
+            "altura_maxima": 0.0,
+            "eficiencia_posiciones": 0.0,
+            "eficiencia_altura": 0.0,
+            "pallets_fisicos": 0
+        }
+    
+    # 1. Feature flag: si está deshabilitado, usar legacy
+    if os.getenv('DISABLE_PHYSICAL_STACKING', 'false').lower() == 'true':
+        print(f"[INFO] Validación física deshabilitada por feature flag, usando legacy")
+        return _compute_apilabilidad_legacy(pedidos_cam, cliente, tipo_camion)
+    
+    # 2. Intentar validación física
+    try:
+        # Llamar al validador físico
+        resultado: ResultadoValidacion = validar_pedidos_en_camion(
+            pedidos_cam,
+            cliente,
+            tipo_camion
+        )
+        
+        # 3. Procesar resultado
+        pedidos_esperados = {str(p['PEDIDO']) for p in pedidos_cam}
+        pedidos_incluidos_set = set(resultado.pedidos_incluidos)
+        
+        # ✅ Solo es válido si TODOS los pedidos están incluidos
+        todos_caben = pedidos_esperados == pedidos_incluidos_set
+
+        if todos_caben:
+            # Todos los pedidos caben
+            response = {
+                "ok": True,
+                "motivo": None,
+                "pos_usadas": resultado.posiciones_usadas,
+                "pos_max": resultado.posiciones_usadas,  # se ajusta dinámicamente
+                "altura_maxima": resultado.altura_maxima,
+                "eficiencia_posiciones": resultado.eficiencia_posiciones,
+                "eficiencia_altura": resultado.eficiencia_altura,
+                "pallets_fisicos": resultado.pallets_fisicos_usados,
+            }
+            
+            # Opcional: incluir layout detallado para debugging
+            if os.getenv('RETURN_STACKING_LAYOUT', 'false').lower() == 'true':
+                response['layout'] = resultado.to_dict().get('layout', [])
+            
+            return response
+        
+        else:
+            # No caben todos los pedidos
+            pedidos_faltantes = pedidos_esperados - pedidos_incluidos_set
+            return {
+                "ok": False,
+                "motivo": (
+                    resultado.motivo_fallo or 
+                    f"No caben todos los pedidos. Faltan {len(pedidos_faltantes)} pedido(s): {list(pedidos_faltantes)[:5]}"
+                ),
+                "pedidos_rechazados": resultado.pedidos_rechazados,
+                "pedidos_incluidos": resultado.pedidos_incluidos,
+            }
+    
+    except Exception as e:
+        # 4. Fallback a legacy si hay error
+        import traceback
+        print(f"[WARN] Validación física falló, usando legacy: {e}")
+        
+        # Log completo solo si está en modo debug
+        if os.getenv('STACKING_LOG_LEVEL', 'INFO').upper() == 'DEBUG':
+            print(traceback.format_exc())
+        
+        return _compute_apilabilidad_legacy(pedidos_cam, cliente, tipo_camion)
+
+
 def _check_vcu_cap(pedidos_cam: List[Dict[str, Any]]) -> Dict[str, Any]:
     vvol = sum(p.get("VCU_VOL") or 0 for p in pedidos_cam)
     vpes = sum(p.get("VCU_PESO") or 0 for p in pedidos_cam)
@@ -212,7 +329,34 @@ def move_orders(
 
         candidatos = (tgt.get("pedidos") or []) + pedidos_sel
 
-        # 0) Regla de Walmart: máximo 10 pedidos por camión en postproceso por CD
+        # 0) Validación de apilabilidad física ⭐ NUEVO
+        tipo_camion_destino = tgt.get("tipo_camion") or "normal"
+        validacion_fisica = _compute_apilabilidad(candidatos, cliente, tipo_camion_destino)
+        
+        if not validacion_fisica.get("ok"):
+            # Mensaje de error descriptivo al usuario
+            motivo = validacion_fisica.get("motivo", "No se puede realizar el movimiento por restricciones de apilabilidad")
+            
+            # Opcional: agregar detalle de pedidos rechazados
+            pedidos_rechazados = validacion_fisica.get("pedidos_rechazados", [])
+            if pedidos_rechazados:
+                motivo += f" (Pedidos que no caben: {', '.join(pedidos_rechazados[:5])})"
+            
+            raise ValueError(motivo)
+
+
+        # 1) Chequeo capacidad de pallets (Cencosud usa PALLETS_REAL)
+        if (cliente).strip().lower() == "cencosud":
+            cfg = get_client_config("Cencosud")
+            tipo_cam = (tgt.get("tipo_camion") or "normal").lower()
+            trucks = cfg.TRUCK_TYPES if isinstance(cfg.TRUCK_TYPES, dict) else {t.get("type"): t for t in cfg.TRUCK_TYPES}
+            tsel = trucks.get(tipo_cam) or trucks.get("normal") or next(iter(trucks.values()))
+            max_pallets = int(tsel.get("max_pallets", 60))
+            pallets_tot = sum((p.get("PALLETS_REAL") if "PALLETS_REAL" in p else p.get("PALLETS") or 0) for p in candidatos)
+            if pallets_tot > max_pallets:
+                raise ValueError(f"Cencosud: pallets totales {pallets_tot} > máximo {max_pallets}.")
+            
+        # 2) Regla de Walmart: máximo 10 pedidos por camión en postproceso por CD
         if (cliente).strip().lower() == "walmart":
             cfg_wm = get_client_config("Walmart")  # para leer MAX_ORDENES si aplica
 
@@ -232,26 +376,22 @@ def move_orders(
                 if len(candidatos) > max_ordenes:
                     raise ValueError(f"Walmart: máximo {max_ordenes} pedidos por camión.")
 
-        # 0) Chequeo capacidad de pallets (Cencosud usa PALLETS_REAL)
-        if (cliente).strip().lower() == "cencosud":
-            cfg = get_client_config("Cencosud")
-            tipo_cam = (tgt.get("tipo_camion") or "normal").lower()
-            trucks = cfg.TRUCK_TYPES if isinstance(cfg.TRUCK_TYPES, dict) else {t.get("type"): t for t in cfg.TRUCK_TYPES}
-            tsel = trucks.get(tipo_cam) or trucks.get("normal") or next(iter(trucks.values()))
-            max_pallets = int(tsel.get("max_pallets", 60))
-            pallets_tot = sum((p.get("PALLETS_REAL") if "PALLETS_REAL" in p else p.get("PALLETS") or 0) for p in candidatos)
-            if pallets_tot > max_pallets:
-                raise ValueError(f"Cencosud: pallets totales {pallets_tot} > máximo {max_pallets}.")
-
+        # 3) Validación de capacidad VCU (peso/volumen)
         cap_ok = _check_vcu_cap(candidatos)
         if not cap_ok["ok"]:
             raise ValueError(cap_ok["motivo"])
-
-        ap_ok = _compute_apilabilidad(candidatos, cliente, tgt.get("tipo_camion") or "normal")
-        if not ap_ok.get("ok"):
-            raise ValueError(ap_ok.get("motivo") or "Apilabilidad inválida")
-
+        
+        
+        # ✅ Si llegamos aquí, el movimiento es válido
         tgt["pedidos"] = candidatos
+
+        # Métricas físicas de apilabilidad
+        tgt["pos_usadas_reales"] = validacion_fisica.get("pos_usadas", 0)
+        tgt["altura_maxima"] = validacion_fisica.get("altura_maxima", 0.0)
+        tgt["eficiencia_posiciones_fisica"] = validacion_fisica.get("eficiencia_posiciones", 0.0)
+        tgt["eficiencia_altura_fisica"] = validacion_fisica.get("eficiencia_altura", 0.0)
+        tgt["pallets_fisicos"] = validacion_fisica.get("pallets_fisicos", 0)
+
     else:
         sim_no_incl.extend(pedidos_sel)
         # de-duplicar por PEDIDO (por si reingresan)
@@ -266,11 +406,12 @@ def move_orders(
         cam["vcu_vol"] = float(sum(p.get("VCU_VOL") or 0 for p in pedidos_cam))
         cam["vcu_peso"] = float(sum(p.get("VCU_PESO") or 0 for p in pedidos_cam))
         cam["vcu_max"] = max(cam["vcu_vol"], cam["vcu_peso"])
-        cam["chocolates"] = "SI" if any(p.get("CHOCOLATES") == "SI" for p in pedidos_cam) else "NO"
+        cam["chocolates"] = 1 if any(p.get("CHOCOLATES") == 1 for p in pedidos_cam) else 0
         cam["valioso"] = any(p.get("VALIOSO") for p in pedidos_cam)
         cam["pdq"] = any(p.get("PDQ") for p in pedidos_cam)
         cam["baja_vu"] = any(p.get("BAJA_VU") for p in pedidos_cam)
         cam["lote_dir"] = any(p.get("LOTE_DIR") for p in pedidos_cam)
+        cam["saldo_inv"] = any(p.get("SALDO_INV") for p in pedidos_cam)
 
         ce_vals = {p.get("CE") for p in pedidos_cam if p.get("CE") not in (None, "")}
         cd_vals = {p.get("CD") for p in pedidos_cam if p.get("CD") not in (None, "")}
@@ -302,7 +443,8 @@ def apply_truck_type_change(state: Dict[str, Any], truck_id: str, new_type: str,
     Cambia el tipo de camión reusando compute_stats para estadísticas.
     Valida que el cambio sea permitido y que 'quepa' con el nuevo tipo
     (peso, volumen, pallets, posiciones y reglas del cliente).
-    *NO* valida VCU mínimo por tu requerimiento.
+    
+    FASE 2: Integra validación física de apilabilidad.
     """
     camiones = state.get("camiones") or []
     pni      = state.get("pedidos_no_incluidos") or []
@@ -344,7 +486,6 @@ def apply_truck_type_change(state: Dict[str, Any], truck_id: str, new_type: str,
     cap_volume    = float(tsel.get('cap_volume', tnorm['cap_volume']))
     max_positions = int(tsel.get('max_positions', 30))
     max_pallets   = int(tsel.get('max_pallets', getattr(client_config, 'MAX_PALLETS_CONF', 60)))
-    # vcu_min       = float(tsel.get('vcu_min', getattr(client_config, 'BH_VCU_MIN' if new_type=='bh' else 'VCU_MIN', 0.85)))  # <- ya no se usa
     vcu_max       = float(getattr(client_config, 'BH_VCU_MAX', 1.0)) if new_type == 'bh' else 1.0
 
     # 4) totalizadores (usar camión o re-sumar desde pedidos)
@@ -358,24 +499,45 @@ def apply_truck_type_change(state: Dict[str, Any], truck_id: str, new_type: str,
     pallets_conf = truck.get('pallets_conf')
     if pallets_conf is None:
         pallets_conf = sum((p.get('PALLETS') or 0) for p in truck.get('pedidos', []))
-    pos_total    = truck.get('pos_total', 0)
 
-    # 5) VALIDACIONES compactas (sin helpers extra)
-    # Capacidad dura por tipo
+    # ============================================================
+    # VALIDACIONES FÍSICAS (FASE 2)
+    # ============================================================
+    
+    pedidos_camion = truck.get('pedidos', [])
+    
+    # 1) Validación física con el NUEVO tipo
+    if pedidos_camion:
+        validacion_fisica = _compute_apilabilidad(pedidos_camion, cliente, new_type)
+        
+        if not validacion_fisica.get("ok"):
+            motivo = validacion_fisica.get("motivo", "Los pedidos no caben con el nuevo tipo de camión")
+            raise ValueError(f"No se puede cambiar a tipo '{new_type}': {motivo}")
+        
+        # Extraer métricas físicas
+        pos_usadas = validacion_fisica.get("pos_usadas", 0)
+        altura_max = validacion_fisica.get("altura_maxima", 0.0)
+        pallets_fisicos = validacion_fisica.get("pallets_fisicos", 0)
+    else:
+        # Camión vacío
+        pos_usadas = 0
+        altura_max = 0.0
+        pallets_fisicos = 0
+
+    # 5) VALIDACIONES de capacidad (mantener de Fase 1)
     if peso_total > cap_weight + 1e-6:
-        raise ValueError("El peso total del camión excede la capacidad del nuevo tipo.")
+        raise ValueError(f"El peso total ({peso_total:.1f} kg) excede la capacidad del tipo '{new_type}' ({cap_weight:.1f} kg).")
     if vol_total > cap_volume + 1e-6:
-        raise ValueError("El volumen total del camión excede la capacidad del nuevo tipo.")
+        raise ValueError(f"El volumen total ({vol_total:.1f} dm³) excede la capacidad del tipo '{new_type}' ({cap_volume:.1f} dm³).")
     if float(pallets_conf) > float(max_pallets) + 1e-6:
-        raise ValueError("El total de pallets del camión excede el máximo permitido para el nuevo tipo.")
-    if int(pos_total) > int(max_positions):
-        raise ValueError("Las posiciones ocupadas exceden el máximo permitido para el nuevo tipo.")
+        raise ValueError(f"El total de pallets ({pallets_conf:.1f}) excede el máximo del tipo '{new_type}' ({max_pallets}).")
+    if int(pos_usadas) > int(max_positions):
+        raise ValueError(f"Las posiciones ocupadas ({pos_usadas}) exceden el máximo del tipo '{new_type}' ({max_positions}).")
 
     # Reglas especiales Walmart
     if getattr(client_config, '__name__', '') == 'WalmartConfig':
         lista_p = truck.get('pedidos', [])
         if truck.get('tipo_ruta') == 'multi_cd':
-            # 10 por CD y 20 total
             por_cd = {}
             for p in lista_p:
                 cd = p.get('CD')
@@ -392,7 +554,7 @@ def apply_truck_type_change(state: Dict[str, Any], truck_id: str, new_type: str,
             if max_ordenes is not None and len(lista_p) > int(max_ordenes):
                 raise ValueError(f"Camión excede {int(max_ordenes)} órdenes (Walmart).")
 
-    # Reglas BH (sin VCU mínimo)
+    # Reglas BH
     if new_type == 'bh':
         rutas_bh = getattr(client_config, 'RUTAS_POSIBLES', {}).get('bh', [])
         if not _ruta_coincide_con_bh(truck.get('cd'), truck.get('ce'), rutas_bh):
@@ -405,21 +567,30 @@ def apply_truck_type_change(state: Dict[str, Any], truck_id: str, new_type: str,
         if (not permite_mix) and (truck.get('flujo_oc') == 'MIX'):
             raise ValueError("BH no permite mezcla de flujos OC para este cliente.")
 
-
-    # 6) Recalcular VCU del camión con capacidades del tipo nuevo (sin chequear mínimo)
+    # 6) Recalcular VCU del camión con capacidades del tipo nuevo
     vcu_vol  = vol_total  / cap_volume if cap_volume > 0 else 0.0
     vcu_peso = peso_total / cap_weight if cap_weight > 0 else 0.0
     vcu_maxv = max(vcu_vol, vcu_peso)
-    # if vcu_maxv < vcu_min:  # <- Eliminado por requerimiento
-    #     raise ValueError("VCU por debajo del mínimo del tipo destino.")
+    
     if new_type == 'bh' and vcu_maxv > vcu_max + 1e-9:
-        raise ValueError("El VCU del camión excede el máximo permitido para BH.")
+        raise ValueError(f"El VCU del camión ({vcu_maxv*100:.1f}%) excede el máximo permitido para BH ({vcu_max*100:.1f}%).")
 
     # 7) Aplicar el cambio y refrescar métricas
     truck['tipo_camion'] = new_type
     truck['vcu_vol']     = vcu_vol
     truck['vcu_peso']    = vcu_peso
     truck['vcu_max']     = vcu_maxv
+    
+    # ============================================================
+    # ACTUALIZAR MÉTRICAS FÍSICAS (FASE 2)
+    # ============================================================
+    truck['pos_usadas_reales'] = pos_usadas
+    truck['altura_maxima'] = altura_max
+    truck['pallets_fisicos'] = pallets_fisicos
+    
+    if pedidos_camion:
+        truck['eficiencia_posiciones_fisica'] = validacion_fisica.get("eficiencia_posiciones", 0.0)
+        truck['eficiencia_altura_fisica'] = validacion_fisica.get("eficiencia_altura", 0.0)
 
     # Rescatar opciones tras el cambio
     try:
@@ -429,15 +600,16 @@ def apply_truck_type_change(state: Dict[str, Any], truck_id: str, new_type: str,
     except Exception:
         pass
 
-    # 8) Recalcular estadísticas globales con la misma función de siempre
+    # 8) Recalcular estadísticas globales
     stats = compute_stats(camiones, pni, cliente)
     return {"camiones": camiones, "pedidos_no_incluidos": pni, "estadisticas": stats}
-
 
 def add_truck(state: Dict[str, Any], cd: List[str], ce: List[int], ruta: str, cliente: str) -> Dict[str, Any]:
     """
     Crea un camión vacío para la combinación CD/CE/ruta indicada.
-    Ahora incluye can_switch_tipo_camion y opciones_tipo_camion si la ruta lo permite.
+    Incluye métricas físicas inicializadas en cero.
+    
+    FASE 2: Agrega métricas físicas de apilabilidad.
     """
     camiones = state.get("camiones") or []
     pni      = state.get("pedidos_no_incluidos") or []
@@ -452,22 +624,35 @@ def add_truck(state: Dict[str, Any], cd: List[str], ce: List[int], ruta: str, cl
         "tipo_ruta": ruta or "normal",
         "tipo_camion": "normal",
         "pedidos": [],
+        
+        # Métricas VCU estándar
         "vcu_vol": 0.0,
         "vcu_peso": 0.0,
         "vcu_max": 0.0,
         "pallets_conf": 0.0,
-        "pos_total": 0,
         "valor_total": 0.0,
         "valor_cafe": 0.0,
-        # flujo_oc: None/‘MIX’/OC específico si lo determinas después
+        
+        # ============================================================
+        # MÉTRICAS FÍSICAS (FASE 2)
+        # ============================================================
+        "pos_usadas_reales": 0,
+        "altura_maxima": 0.0,
+        "pallets_fisicos": 0,
+        "eficiencia_posiciones_fisica": 0.0,
+        "eficiencia_altura_fisica": 0.0,
     }
 
     # Calcular opciones de cambio basadas en la configuración del cliente
-    sw = _compute_switch_options(nuevo, client_config)
-    nuevo['can_switch_tipo_camion'] = sw['can_switch']
-    nuevo['opciones_tipo_camion']   = sw['opciones']
+    try:
+        sw = _compute_switch_options(nuevo, client_config)
+        nuevo['can_switch_tipo_camion'] = sw['can_switch']
+        nuevo['opciones_tipo_camion']   = sw['opciones']
+    except Exception:
+        nuevo['can_switch_tipo_camion'] = False
+        nuevo['opciones_tipo_camion'] = ['normal']
 
-    # Insertar al final (o donde corresponda en tu UI)
+    # Insertar al final
     camiones.append(nuevo)
 
     # Recalcular estadísticas globales
@@ -475,7 +660,6 @@ def add_truck(state: Dict[str, Any], cd: List[str], ce: List[int], ruta: str, cl
     for idx, cam in enumerate(camiones, start=1):
         cam["numero"] = idx
     return {"camiones": camiones, "pedidos_no_incluidos": pni, "estadisticas": stats}
-
 
 def delete_truck(state: Dict[str, Any], truck_id: Optional[str], cliente: str) -> Dict[str, Any]:
     camiones = state.get("camiones") or []

@@ -462,7 +462,7 @@ def postprocesar_camiones(camiones: List[Dict[str, Any]], config) -> List[Dict[s
             cam["flujo_oc"] = next(iter(ocs)) if len(ocs) == 1 else ("MIX" if ocs else None)
         else:
             cam["flujo_oc"] = None
-        cam["chocolates"] = "SI" if any(p.get("CHOCOLATES") == "SI" for p in cam.get("pedidos", [])) else "NO"
+        cam["chocolates"] = 1 if any(p.get("CHOCOLATES") == 1 for p in cam.get("pedidos", [])) else 0
 
         # Opciones de cambio de tipo (se calculan con los campos ya presentes del camión)
         switch_info = _build_switch_options_for_truck(cam, config)
@@ -552,7 +552,7 @@ def optimizar_vcu( df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg,
     if 'CHOCOLATES' in df.columns:
         chocolates_map = dict(zip(pedidos, df['CHOCOLATES']))
     else:
-        chocolates_map = {i: "NO" for i in pedidos}
+        chocolates_map = {i: 0 for i in pedidos}
     if 'OC' in df.columns:
         oc_map = dict(zip(pedidos, df['OC']))
     else:
@@ -566,6 +566,7 @@ def optimizar_vcu( df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg,
 
     baja_vu_map = dict(zip(pedidos, df_g["BAJA_VU"]))
     lote_dir_map = dict(zip(pedidos, df_g["LOTE_DIR"]))
+    saldo_inv_map = dict(zip(pedidos, df_g["SALDO_INV"]))
 
     # MAPEOS DE APILABILIDAD
     base_map        = dict(zip(pedidos, df['BASE']))
@@ -877,6 +878,7 @@ def optimizar_vcu( df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg,
                 'PDQ':          pdq_map[i],
                 'BAJA_VU':      baja_vu_map[i],
                 'LOTE_DIR':     lote_dir_map[i],
+                'SALDO_INV':    saldo_inv_map[i], 
                 'PO':           po_map[i],
                 'OC':           oc_map[i],
                 'PALLETS':      pallets_conf_map[i],
@@ -888,12 +890,13 @@ def optimizar_vcu( df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg,
        
         valor_total = sum(valor_map.get(i, 0) or 0 for i in grp)
         valor_cafe = sum(cafe_map.get(i, 0) or 0 for i in grp)
-        tiene_chocolates = any(chocolates_map.get(i) == 'SI' for i in grp)
+        tiene_chocolates = any(chocolates_map.get(i) == 1 for i in grp)
         pallets_conf = sum(pallets_conf_map[i] for i in grp)
         valioso = any(valuable_map.get(i) == 1 for i in grp)
         pdq = any(pdq_map.get(i) == 1 for i in grp)
         baja_vu = any(baja_vu_map.get(i) == 1 for i in grp)
         lote_dir = any(lote_dir_map.get(i) == 1 for i in grp)
+        saldo_inv = any(saldo_inv_map.get(i) == 1 for i in grp)
         ts_val = solver.Value(total_stack_vars[j]) if j in total_stack_vars else 0
         pos_total = ts_val / PALLETS_SCALE
        
@@ -907,11 +910,12 @@ def optimizar_vcu( df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg,
             'vcu_vol':          vcu_vol_j,
             'vcu_peso':         vcu_peso_j,
             'vcu_max':          vcu_max_j,
-            'chocolates':       tiene_chocolates,
+            'chocolates':       1 if tiene_chocolates else 0,
             'skus_valiosos':    valioso,
             'pdq':              pdq,
-            'baja_vu': baja_vu,
-            'lote_dir': lote_dir,
+            'baja_vu':          baja_vu,
+            'lote_dir':         lote_dir,
+            'saldo_inv':        saldo_inv,
             'valor_total':      valor_total,
             'valor_cafe':       valor_cafe,
             'pallets_conf':     pallets_conf,
@@ -979,12 +983,13 @@ def optimizar_bin(df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg, v
     if 'CHOCOLATES' in df_g.columns:
         chocolates_map = dict(zip(pedidos, df_g['CHOCOLATES']))
     else:
-        chocolates_map = {i: "NO" for i in pedidos}
+        chocolates_map = {i: 0 for i in pedidos}
     
     valuable_map = dict(zip(pedidos, df_g['VALIOSO']))
     pdq_map = dict(zip(pedidos, df_g["PDQ"]))
     baja_vu_map = dict(zip(pedidos, df_g["BAJA_VU"]))
     lote_dir_map = dict(zip(pedidos, df_g["LOTE_DIR"]))
+    saldo_inv_map = dict(zip(pedidos, df_g["SALDO_INV"]))
  
     # MAPEOS DE APILABILIDAD
     base_map        = dict(zip(pedidos, df_g['BASE']))
@@ -1247,6 +1252,7 @@ def optimizar_bin(df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg, v
                 'PDQ':          pdq_map[i],
                 'BAJA_VU':      baja_vu_map[i],
                 'LOTE_DIR':     lote_dir_map[i],
+                'SALDO_INV':    saldo_inv_map[i], 
                 'PO':           po_map[i],
                 'OC':           oc_map[i],
                 'PALLETS':      pallets_conf_map[i],
@@ -1258,12 +1264,13 @@ def optimizar_bin(df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg, v
        
         valor_total = sum(valor_map.get(i, 0) or 0 for i in grp)
         valor_cafe = sum(cafe_map.get(i, 0) or 0 for i in grp)
-        tiene_chocolates = any(chocolates_map.get(i) == 'SI' for i in grp)
+        tiene_chocolates = any(chocolates_map.get(i) == 1 for i in grp)
         pallets_conf = sum(pallets_conf_map[i] for i in grp)
         valioso = any(valuable_map.get(i) == 1 for i in grp)
         pdq = any(pdq_map.get(i) == 1 for i in grp)
         baja_vu = any(baja_vu_map.get(i) == 1 for i in grp)
         lote_dir = any(lote_dir_map.get(i) == 1 for i in grp)
+        saldo_inv = any(saldo_inv_map.get(i) == 1 for i in grp)
         ts_val = solver.Value(total_stack_vars[j]) if j in total_stack_vars else 0
         pos_total = ts_val / PALLETS_SCALE
 
@@ -1277,11 +1284,12 @@ def optimizar_bin(df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg, v
             'vcu_vol': vcu_vol_j,
             'vcu_peso': vcu_peso_j,
             'vcu_max': vcu_max_j,
-            'chocolates': tiene_chocolates,
+            'chocolates': 1 if tiene_chocolates else 0,
             'skus_valiosos': valioso,
             'pdq': pdq,
             'baja_vu': baja_vu,
             'lote_dir': lote_dir,
+            'saldo_inv': saldo_inv,
             'valor_total': valor_total,
             'valor_cafe': valor_cafe,
             'pallets_conf': pallets_conf,

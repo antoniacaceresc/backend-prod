@@ -7,6 +7,10 @@ class CencosudConfig:
     AGRUPAR_POR_PO = True
     MIX_GRUPOS = []
 
+    # Configuración pallets
+    PERMITE_CONSOLIDACION_PALLETS = False
+    MAX_SKUS_POR_PALLET = 1
+
     # Parámetros de Optimización
 
     # BH
@@ -61,8 +65,8 @@ class CencosudConfig:
 
     # Tipos de camiones
     TRUCK_TYPES = {
-        'normal': {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.85, 'max_pallets': 60},
-        'bh':     {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 26, 'levels': 2, 'vcu_min': 0.55, 'max_pallets': 52}
+        'normal': {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.85, 'max_pallets': 60, 'max_altura': 240},
+        'bh':     {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 26, 'levels': 2, 'vcu_min': 0.55, 'max_pallets': 52, 'max_altura': 240}
     }
 
 
