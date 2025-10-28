@@ -198,7 +198,7 @@ class Posicion:
         REGLAS DE APILAMIENTO:
         ----------------------
         1. Altura disponible suficiente
-        2. Posición vacía: solo BASE, NO_APILABLE, FLEXIBLE, SI_MISMO
+        2. Posición vacía: cualquiera puede ir a piso
         3. NO_APILABLE: NUNCA recibe nada encima
         4. BASE: acepta SUPERIOR o FLEXIBLE encima (1 nivel)
         5. SI_MISMO: acepta más pallets del MISMO SKU verticalmente
@@ -214,7 +214,8 @@ class Posicion:
                 TipoApilabilidad.BASE,
                 TipoApilabilidad.NO_APILABLE,
                 TipoApilabilidad.FLEXIBLE,
-                TipoApilabilidad.SI_MISMO
+                TipoApilabilidad.SI_MISMO,
+                TipoApilabilidad.SUPERIOR
             }
         
         tope = self.stack[-1]
@@ -409,6 +410,19 @@ class StackingValidator:
             else:
                 pallets_rechazados.append(pallet)
         
+        # 5b. Segunda pasada: intentar colocar SUPERIOR en el piso si quedaron rechazados
+        pallets_aun_rechazados = []
+        for pallet in pallets_rechazados:
+            if pallet.tipo == TipoApilabilidad.SUPERIOR:
+                if self._colocar_pallet_segunda_pasada(pallet, posiciones):
+                    pallets_colocados.append(pallet)
+                else:
+                    pallets_aun_rechazados.append(pallet)
+            else:
+                pallets_aun_rechazados.append(pallet)
+        
+        pallets_rechazados = pallets_aun_rechazados
+        
         # 6. Determinar pedidos incluidos/rechazados
         pedidos_incluidos, pedidos_rechazados = self._determinar_pedidos_validos(
             pallets_colocados,
@@ -462,6 +476,20 @@ class StackingValidator:
             layout=posiciones
         )
     
+    def _separar_fragmentos_completos(
+        self, 
+        fragmentos: List[FragmentoSKU]
+    ) -> Tuple[List[FragmentoSKU], List[FragmentoSKU]]:
+        """
+        Separa fragmentos completos (>=0.95) de incompletos (<0.95).
+        
+        Returns:
+            (completos, incompletos)
+        """
+        completos = [f for f in fragmentos if f.cantidad >= 0.95]
+        incompletos = [f for f in fragmentos if f.cantidad < 0.95]
+        return completos, incompletos
+    
     def _consolidar_fragmentos(
         self,
         fragmentos_por_pedido: Dict[str, List[FragmentoSKU]]
@@ -507,41 +535,57 @@ class StackingValidator:
                     fragmentos_por_sku[frag.sku].append(frag)
                 
                 for sku, frags_sku in fragmentos_por_sku.items():
-                    # Ordenar por cantidad descendente
-                    frags_ord = sorted(frags_sku, key=lambda f: f.cantidad, reverse=True)
+                    # Separar completos de incompletos
+                    completos, incompletos = self._separar_fragmentos_completos(frags_sku)
                     
-                    pallet_actual = []
-                    cantidad_acum = 0.0
-                    altura_max = max(f.altura for f in frags_ord)
+                    altura_max = max(f.altura for f in frags_sku)
                     
-                    for frag in frags_ord:
-                        if cantidad_acum + frag.cantidad <= 1.0:
-                            pallet_actual.append(frag)
-                            cantidad_acum += frag.cantidad
-                        else:
-                            # Crear pallet y empezar uno nuevo
-                            if pallet_actual:
-                                pallets.append(PalletFisico(
-                                    id_pallet=f"P{pallet_counter}",
-                                    fragmentos=tuple(pallet_actual),
-                                    tipo=tipo,
-                                    altura=altura_max
-                                ))
-                                pallet_counter += 1
-                            
-                            pallet_actual = [frag]
-                            cantidad_acum = frag.cantidad
-                    
-                    # Último pallet
-                    if pallet_actual:
+                    # Crear un pallet por cada fragmento completo
+                    for frag in completos:
                         pallets.append(PalletFisico(
                             id_pallet=f"P{pallet_counter}",
-                            fragmentos=tuple(pallet_actual),
+                            fragmentos=(frag,),
                             tipo=tipo,
                             altura=altura_max
                         ))
                         pallet_counter += 1
-            
+                    
+                    # Consolidar solo los incompletos
+                    if incompletos:
+                        # Ordenar por cantidad descendente
+                        frags_ord = sorted(incompletos, key=lambda f: f.cantidad, reverse=True)
+                        
+                        pallet_actual = []
+                        cantidad_acum = 0.0
+                        
+                        for frag in frags_ord:
+                            if cantidad_acum + frag.cantidad <= 1.0:
+                                pallet_actual.append(frag)
+                                cantidad_acum += frag.cantidad
+                            else:
+                                # Crear pallet y empezar uno nuevo
+                                if pallet_actual:
+                                    pallets.append(PalletFisico(
+                                        id_pallet=f"P{pallet_counter}",
+                                        fragmentos=tuple(pallet_actual),
+                                        tipo=tipo,
+                                        altura=altura_max
+                                    ))
+                                    pallet_counter += 1
+                                
+                                pallet_actual = [frag]
+                                cantidad_acum = frag.cantidad
+                        
+                        # Último pallet de incompletos
+                        if pallet_actual:
+                            pallets.append(PalletFisico(
+                                id_pallet=f"P{pallet_counter}",
+                                fragmentos=tuple(pallet_actual),
+                                tipo=tipo,
+                                altura=altura_max
+                            ))
+                            pallet_counter += 1
+                            
             else:
                 # BASE, SUPERIOR, FLEXIBLE: consolidar respetando MAX_SKUS
                 pallets.extend(
@@ -559,42 +603,61 @@ class StackingValidator:
     ) -> List[PalletFisico]:
         """
         Consolida fragmentos de tipo general (BASE, SUPERIOR, FLEXIBLE).
-        Usa algoritmo greedy: llenar pallets hasta 1.0 respetando MAX_SKUS.
+        Optimización: fragmentos completos se convierten directamente en pallets.
+        Solo consolida fragmentos incompletos.
         """
-        # Ordenar por cantidad descendente (First Fit Decreasing)
-        fragmentos_ord = sorted(fragmentos, key=lambda f: f.cantidad, reverse=True)
+        # Separar completos de incompletos
+        completos, incompletos = self._separar_fragmentos_completos(fragmentos)
         
-        pallets_abiertos: List[List[FragmentoSKU]] = []
-        
-        for frag in fragmentos_ord:
-            colocado = False
-            
-            # Intentar agregar a pallet existente
-            for pallet_frags in pallets_abiertos:
-                cantidad_actual = sum(f.cantidad for f in pallet_frags)
-                skus_actuales = {f.sku for f in pallet_frags}
-                
-                # Verificar espacio y límite de SKUs
-                if cantidad_actual + frag.cantidad <= 1.0:
-                    if frag.sku in skus_actuales or len(skus_actuales) < self.max_skus_por_pallet:
-                        pallet_frags.append(frag)
-                        colocado = True
-                        break
-            
-            # Si no cupo en ninguno, crear nuevo pallet
-            if not colocado:
-                pallets_abiertos.append([frag])
-        
-        # Convertir a PalletFisico
         pallets = []
-        for i, frags in enumerate(pallets_abiertos):
-            altura_max = max(f.altura for f in frags)
+        counter = start_counter
+        
+        # 1. Crear pallets directamente para fragmentos completos
+        for frag in completos:
             pallets.append(PalletFisico(
-                id_pallet=f"P{start_counter + i}",
-                fragmentos=tuple(frags),
+                id_pallet=f"P{counter}",
+                fragmentos=(frag,),
                 tipo=tipo,
-                altura=altura_max
+                altura=frag.altura
             ))
+            counter += 1
+        
+        # 2. Consolidar solo fragmentos incompletos usando algoritmo greedy
+        if incompletos:
+            # Ordenar por cantidad descendente (First Fit Decreasing)
+            fragmentos_ord = sorted(incompletos, key=lambda f: f.cantidad, reverse=True)
+            
+            pallets_abiertos: List[List[FragmentoSKU]] = []
+            
+            for frag in fragmentos_ord:
+                colocado = False
+                
+                # Intentar agregar a pallet existente
+                for pallet_frags in pallets_abiertos:
+                    cantidad_actual = sum(f.cantidad for f in pallet_frags)
+                    skus_actuales = {f.sku for f in pallet_frags}
+                    
+                    # Verificar espacio y límite de SKUs
+                    if cantidad_actual + frag.cantidad <= 1.0:
+                        if frag.sku in skus_actuales or len(skus_actuales) < self.max_skus_por_pallet:
+                            pallet_frags.append(frag)
+                            colocado = True
+                            break
+                
+                # Si no cupo en ninguno, crear nuevo pallet
+                if not colocado:
+                    pallets_abiertos.append([frag])
+            
+            # Convertir pallets abiertos a PalletFisico
+            for frags in pallets_abiertos:
+                altura_max = max(f.altura for f in frags)
+                pallets.append(PalletFisico(
+                    id_pallet=f"P{counter}",
+                    fragmentos=tuple(frags),
+                    tipo=tipo,
+                    altura=altura_max
+                ))
+                counter += 1
         
         return pallets
     
@@ -667,6 +730,7 @@ class StackingValidator:
         Estrategia:
         1. Intentar apilar en posición existente
         2. Si no, usar nueva posición vacía
+        3. Para SUPERIOR: solo ir al piso si no hay BASE/FLEXIBLE disponibles
         """
         # Estrategia 1: Apilar
         for pos in posiciones:
@@ -677,7 +741,14 @@ class StackingValidator:
         # Estrategia 2: Nueva posición
         pos_vacia = next((p for p in posiciones if p.esta_vacia()), None)
         if pos_vacia:
-            # Solo ciertos tipos pueden ir al suelo
+            # Si es SUPERIOR, verificar si hay BASE o FLEXIBLE esperando para ir al piso
+            if pallet.tipo == TipoApilabilidad.SUPERIOR:
+                # Buscar si hay pallets BASE o FLEXIBLE que aún no están colocados
+                # que podrían servir como base para este SUPERIOR
+                # Solo permitir SUPERIOR en el piso como última opción
+                return False  # No colocar SUPERIOR en piso todavía
+            
+            # Para otros tipos que pueden ir al suelo
             if pallet.tipo in {
                 TipoApilabilidad.BASE,
                 TipoApilabilidad.NO_APILABLE,
@@ -689,6 +760,17 @@ class StackingValidator:
         
         return False
     
+    def _colocar_pallet_segunda_pasada(self, pallet: PalletFisico, posiciones: List[Posicion]) -> bool:
+        """
+        Segunda pasada: permite colocar SUPERIOR en el piso como última opción.
+        """
+        pos_vacia = next((p for p in posiciones if p.esta_vacia()), None)
+        if pos_vacia and pallet.tipo == TipoApilabilidad.SUPERIOR:
+            if pos_vacia.puede_apilar(pallet, self.max_altura):
+                pos_vacia.agregar(pallet)
+                return True
+        return False
+
     def _determinar_pedidos_validos(
         self,
         pallets_colocados: List[PalletFisico],

@@ -32,6 +32,7 @@ class WalmartConfig:
             "CD": "CD",
             "PO": "Número PO",
             "PEDIDO": "N° Pedido",
+            "SKU": "SKU",
             "OC": "Flujo OC", 
             "CE": "Ce.",
             "PALLETS": "Pal. Conf.",
@@ -40,11 +41,8 @@ class WalmartConfig:
             "VALOR": "$$ Conf.",
             "VALOR_CAFE": "Valor Cafe",
             "CHOCOLATES": "Chocolates",
-            "BASE": "Base",
-            "SUPERIOR": "Superior",
-            "FLEXIBLE": "Flexible",
-            "NO_APILABLE": "No Apilable",
-            "SI_MISMO": "Apilable por si mismo",
+            "TIPO_PALLET": "Tipo Apilabilidad",
+            "ALTURA_PALLET": "ALtura",
             "PDQ": "PDQ",
             "SALDO_INV": "Saldo INV WM"
 

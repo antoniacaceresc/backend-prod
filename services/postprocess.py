@@ -312,7 +312,10 @@ def move_orders(
     """Mueve pedidos entre camiones y valída reglas del cliente"""
     camiones = [dict(c) for c in (state.get("camiones") or [])]
     no_incl = list(state.get("pedidos_no_incluidos") or [])
-    pedidos_sel = list(pedidos or [])
+    pedidos_sel = [
+        {**p, 'SKUS': p.get('SKUS', [])}  # Preservar SKUS
+        for p in pedidos or []
+    ]
 
     seleccion_ids = {p.get("PEDIDO") for p in pedidos_sel}
     sim_camiones = []

@@ -38,6 +38,7 @@ class DisvetConfig:
             "CD": "CD",
             "PO": "Número PO",
             "PEDIDO": "N° Pedido",
+            "SKU": "SKU",
             "CE": "Ce.",
             "PALLETS": "Pal. Conf.",
             "PESO": "Peso neto Conf.",
@@ -45,13 +46,10 @@ class DisvetConfig:
             "VALOR": "$$ Conf.",
             "CHOCOLATES": "Chocolates",
             "VALOR_CAFE": "Valor Cafe",
+            "TIPO_PALLET": "Tipo Apilabilidad",
+            "ALTURA_PALLET": "ALtura",
             "BAJA_VU": "Baja VU Disvet",
             "LOTE_DIR": "Lote Dirigido Disvet",
-            "BASE": "Base",
-            "SUPERIOR": "Superior",
-            "FLEXIBLE": "Flexible",
-            "NO_APILABLE": "No Apilable",
-            "SI_MISMO": "Apilable por si mismo",
         },
     }
 

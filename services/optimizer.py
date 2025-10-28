@@ -8,7 +8,7 @@ from typing import List, Dict, Any, Optional, Iterable, Tuple
 import pandas as pd
 from ortools.sat.python import cp_model
 
-from services.file_processor import read_file, process_dataframe
+from services.file_processor import read_file, process_dataframe, expandir_pedidos_con_skus
 from services.math_utils import format_dates
 from config import get_client_config
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -65,9 +65,9 @@ def _build_normal_groups_disjoint(df: pd.DataFrame, rutas: list, mix_grupos: lis
         asignado.loc[sub.index] = True
     return grupos
 
-def run_optimizacion(df: pd.DataFrame, raw_pedidos: List[Dict[str, Any]], config, modo: str, tpg: int, timeout: int) -> Dict[str, Any]:
-    """Ejecuta optimización por fases según `modo` y postprocesa camiones."""
-    res = ejecutar_optimizacion(df.copy(), raw_pedidos, config, modo, tpg, timeout)
+def run_optimizacion(df: pd.DataFrame, raw_pedidos: List[Dict[str, Any]], config, modo: str, tpg: int, timeout: int,cliente: str,skus_detalle: Dict[str, List[Dict]]) -> Dict[str, Any]:
+    """Ejecuta optimización por fases según modo y postprocesa camiones."""
+    res = ejecutar_optimizacion(df.copy(), raw_pedidos, config, modo, tpg, timeout, cliente, skus_detalle)
     res["camiones"] = postprocesar_camiones(res.get("camiones", []), config)
     return res
 
@@ -77,16 +77,19 @@ def run_optimizacion(df: pd.DataFrame, raw_pedidos: List[Dict[str, Any]], config
 # ---------------------------------------------------------
 
 def optimizar_con_dos_fases(raw_df: pd.DataFrame, client_config, cliente: str, venta: str, request_timeout: int, max_tpg: int) -> Dict[str, Any]:
-    # 1) Preprocesamiento
-    df_proc, pedidos = process_dataframe(raw_df, client_config, cliente, venta)
-    pedidos = [{**p, "Fecha preferente de entrega": format_dates(p.get("Fecha preferente de entrega"))} for p in pedidos]
+    # 1) Preprocesamiento -: recibe skus_detalle
+    df_proc, pedidos, skus_detalle = process_dataframe(raw_df, client_config, cliente, venta)
+    pedidos = [{
+        **p, 
+        "Fecha preferente de entrega": format_dates(p.get("Fecha preferente de entrega"))
+    } for p in pedidos]
 
     # 2) Tiempo por grupo
     tpg = calcular_tiempo_por_grupo(df_proc, client_config, request_timeout, max_tpg)
 
     # 3) Modos
-    resultado_vcu = run_optimizacion(df_proc, pedidos, client_config, "vcu", tpg, request_timeout)
-    resultado_bp = run_optimizacion(df_proc, pedidos, client_config, "binpacking", tpg, request_timeout)
+    resultado_vcu = run_optimizacion(df_proc, pedidos, client_config, "vcu", tpg, request_timeout, cliente, skus_detalle)
+    resultado_bp = run_optimizacion(df_proc, pedidos, client_config, "binpacking", tpg, request_timeout, cliente, skus_detalle)
 
     # Objetivo suave de proporción BH por cliente
     try:
@@ -306,7 +309,8 @@ def heuristica_ffd(pedidos: List[Any], peso_raw: Dict[Any, float], vol_raw: Dict
 # Núcleo: CP-SAT VCU y BinPacking
 # ---------------------------------------------------------
 
-def ejecutar_optimizacion(df: pd.DataFrame, raw_pedidos: List[Dict[str, Any]], config, modo: str, tiempo_por_grupo: int, REQUEST_TIMEOUT: int) -> Dict[str, Any]:
+def ejecutar_optimizacion(df: pd.DataFrame, raw_pedidos: List[Dict[str, Any]], config, modo: str, tiempo_por_grupo: int, 
+                          REQUEST_TIMEOUT: int, cliente: str, skus_detalle: Dict[str, List[Dict]]) -> Dict[str, Any]:
     raw_map = {r["PEDIDO"]: r.copy() for r in raw_pedidos}
 
     pedidos_all = df["PEDIDO"].tolist()
@@ -448,7 +452,38 @@ def ejecutar_optimizacion(df: pd.DataFrame, raw_pedidos: List[Dict[str, Any]], c
         }
         pedidos_no_incl.append(completar_metadata_pedido(pedido, raw_map))
 
-    return {"camiones": all_cam, "pedidos_no_incluidos": pedidos_no_incl}
+    
+    print(f"[FASE 3] Expandiendo pedidos con SKUs detallados...")
+    # Expandir pedidos con detalle de SKUs
+    for cam in all_cam:
+        cam['pedidos'] = expandir_pedidos_con_skus(
+            cam.get('pedidos', []), 
+            skus_detalle
+        )
+    
+    # Expandir pedidos no incluidos
+    pedidos_no_incl = expandir_pedidos_con_skus(
+        pedidos_no_incl,
+        skus_detalle
+    )
+    
+    print(f"[FASE 3] Validando {len(all_cam)} camiones físicamente...")
+    # Validación física de camiones
+    camiones_validados, pedidos_rechazados_fisica = validar_camiones_fisicamente(
+        all_cam, 
+        cliente
+    )
+    
+    # Agregar pedidos rechazados por física a los no incluidos
+    if pedidos_rechazados_fisica:
+        print(f"[FASE 3] {len(pedidos_rechazados_fisica)} pedidos rechazados por validación física")
+        pedidos_no_incl.extend(pedidos_rechazados_fisica)
+    
+    print(f"[FASE 3] Validación completa. {len(camiones_validados)} camiones válidos")
+
+    
+    return {"camiones": camiones_validados, "pedidos_no_incluidos": pedidos_no_incl}
+
 
 
 # ---------------------------------------------------------
@@ -468,7 +503,170 @@ def postprocesar_camiones(camiones: List[Dict[str, Any]], config) -> List[Dict[s
         switch_info = _build_switch_options_for_truck(cam, config)
         cam['can_switch_tipo_camion'] = switch_info['can_switch']
         cam['opciones_tipo_camion'] = switch_info['opciones']
+
+        if 'pos_usadas_reales' not in cam:
+            cam['pos_usadas_reales'] = 0
+            cam['altura_maxima'] = 0.0
+            cam['pallets_fisicos'] = 0
+            cam['eficiencia_posiciones_fisica'] = 0.0
+            cam['eficiencia_altura_fisica'] = 0.0
+            cam['eficiencia_consolidacion'] = 0.0
+            cam['validacion_fisica'] = 'NO_VALIDADO'
     return camiones
+
+# ---------------------------------------------------------
+# ⭐ FASE 3: VALIDACIÓN FÍSICA DE CAMIONES
+# ---------------------------------------------------------
+
+def validar_camiones_fisicamente(
+    camiones: List[Dict[str, Any]], 
+    cliente: str
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Valida físicamente cada camión usando el stacking validator.
+    
+    Args:
+        camiones: Lista de camiones generados por el optimizador
+        cliente: Nombre del cliente (para obtener config)
+    
+    Returns:
+        (camiones_validos, pedidos_rechazados_totales)
+        - camiones_validos: camiones con solo pedidos que caben físicamente
+        - pedidos_rechazados_totales: todos los pedidos que no cupieron
+    """
+    from services.stacking_validator import validar_pedidos_en_camion
+    
+    camiones_validos = []
+    pedidos_rechazados_totales = []
+    
+    for cam in camiones:
+        pedidos_camion = cam.get('pedidos', [])
+        if not pedidos_camion:
+            # Camión vacío, agregar sin validar
+            camiones_validos.append(cam)
+            continue
+        
+        tipo_camion = cam.get('tipo_camion', 'normal')
+        
+        try:
+            # Validar física
+            resultado = validar_pedidos_en_camion(
+                pedidos_data=pedidos_camion,
+                cliente=cliente,
+                tipo_camion=tipo_camion
+            )
+            
+            if resultado.cabe and len(resultado.pedidos_rechazados) == 0:
+                # ✅ Todos los pedidos caben perfectamente
+                cam['pos_usadas_reales'] = resultado.posiciones_usadas
+                cam['altura_maxima'] = resultado.altura_maxima
+                cam['pallets_fisicos'] = resultado.pallets_fisicos_usados
+                cam['eficiencia_posiciones_fisica'] = resultado.eficiencia_posiciones
+                cam['eficiencia_altura_fisica'] = resultado.eficiencia_altura
+                cam['eficiencia_consolidacion'] = resultado.eficiencia_consolidacion
+                cam['validacion_fisica'] = 'OK'
+                
+                camiones_validos.append(cam)
+                
+            elif resultado.cabe and len(resultado.pedidos_rechazados) > 0:
+                # ⚠️ Algunos pedidos no caben - FILTRAR
+                pedidos_ids_incluidos = set(resultado.pedidos_incluidos)
+                
+                pedidos_validos = [
+                    p for p in pedidos_camion 
+                    if p.get('PEDIDO') in pedidos_ids_incluidos
+                ]
+                pedidos_rechazados = [
+                    p for p in pedidos_camion 
+                    if p.get('PEDIDO') not in pedidos_ids_incluidos
+                ]
+                
+                # Agregar información de rechazo
+                for p in pedidos_rechazados:
+                    p['motivo_rechazo'] = 'No cabe físicamente en el camión'
+                    p['detalle_rechazo'] = resultado.motivo_fallo or 'Restricciones de apilabilidad'
+                
+                # Actualizar camión con solo pedidos válidos
+                cam['pedidos'] = pedidos_validos
+                
+                # Recalcular métricas del camión
+                cam = _recalcular_metricas_camion(cam, pedidos_validos)
+                
+                # Agregar métricas físicas
+                cam['pos_usadas_reales'] = resultado.posiciones_usadas
+                cam['altura_maxima'] = resultado.altura_maxima
+                cam['pallets_fisicos'] = resultado.pallets_fisicos_usados
+                cam['eficiencia_posiciones_fisica'] = resultado.eficiencia_posiciones
+                cam['eficiencia_altura_fisica'] = resultado.eficiencia_altura
+                cam['eficiencia_consolidacion'] = resultado.eficiencia_consolidacion
+                
+                # Marcar que fue ajustado
+                cam['fue_ajustado_fisica'] = True
+                cam['pedidos_rechazados_count'] = len(pedidos_rechazados)
+                cam['validacion_fisica'] = 'AJUSTADO'
+                
+                camiones_validos.append(cam)
+                pedidos_rechazados_totales.extend(pedidos_rechazados)
+                
+            else:
+                # ❌ Ningún pedido cabe (caso raro)
+                for p in pedidos_camion:
+                    p['motivo_rechazo'] = 'Camión inválido - configuración imposible'
+                    p['detalle_rechazo'] = resultado.motivo_fallo or 'No se pudo validar físicamente'
+                
+                pedidos_rechazados_totales.extend(pedidos_camion)
+                print(f"[WARN] Camión {cam.get('id')} completamente inválido: {resultado.motivo_fallo}")
+        
+        except Exception as e:
+            # Error en validación - mantener camión pero marcarlo
+            print(f"[ERROR] Validación física falló para camión {cam.get('id')}: {e}")
+            cam['validacion_fisica'] = 'ERROR'
+            cam['error_validacion'] = str(e)
+            camiones_validos.append(cam)
+    
+    return camiones_validos, pedidos_rechazados_totales
+
+
+def _recalcular_metricas_camion(
+    cam: Dict[str, Any], 
+    pedidos_validos: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """
+    Recalcula las métricas del camión después de filtrar pedidos.
+    """
+    if not pedidos_validos:
+        cam['vcu_vol'] = 0.0
+        cam['vcu_peso'] = 0.0
+        cam['vcu_max'] = 0.0
+        cam['pallets_conf'] = 0
+        cam['valor_total'] = 0
+        return cam
+    
+    # Calcular proporción de pedidos que quedaron
+    pedidos_originales = cam.get('pedidos', pedidos_validos)
+    if len(pedidos_originales) > 0:
+        factor = len(pedidos_validos) / len(pedidos_originales)
+    else:
+        factor = 1.0
+    
+    # Recalcular VCUs proporcionalmente
+    cam['vcu_vol'] = cam.get('vcu_vol', 0) * factor
+    cam['vcu_peso'] = cam.get('vcu_peso', 0) * factor
+    cam['vcu_max'] = max(cam['vcu_vol'], cam['vcu_peso'])
+    
+    # Sumar métricas de pedidos válidos
+    cam['pallets_conf'] = sum(p.get('PALLETS', 0) for p in pedidos_validos)
+    cam['valor_total'] = sum(p.get('VALOR', 0) for p in pedidos_validos)
+    
+    # Actualizar flags booleanos
+    cam['chocolates'] = 1 if any(p.get('CHOCOLATES') == 1 for p in pedidos_validos) else 0
+    cam['skus_valiosos'] = any(p.get('VALIOSO') == 1 for p in pedidos_validos)
+    cam['pdq'] = any(p.get('PDQ') == 1 for p in pedidos_validos)
+    cam['baja_vu'] = any(p.get('BAJA_VU') == 1 for p in pedidos_validos)
+    cam['lote_dir'] = any(p.get('LOTE_DIR') == 1 for p in pedidos_validos)
+    cam['saldo_inv'] = any(p.get('SALDO_INV') == 1 for p in pedidos_validos)
+    
+    return cam
 
 
 # =========================================================
