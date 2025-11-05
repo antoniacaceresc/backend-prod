@@ -1,22 +1,23 @@
-# services/optimizer_binpacking.py
+# optimization/solvers/binpacking.py
 """
-Solver CP-SAT para optimizaciÃ³n en modo BinPacking.
-Minimiza el nÃºmero de camiones necesarios.
+Solver CP-SAT para optimización en modo BinPacking.
+Minimiza el número de camiones necesarios.
 """
 
 import time
 from typing import List, Dict, Any
 from ortools.sat.python import cp_model
 
-from services.models import Pedido, ConfiguracionGrupo, TruckCapacity, TipoRuta
-from services.constants import SCALE_VCU, MAX_CAMIONES_CP_SAT
-from services.optimizer_constraints import (
-    agregar_restriccion_po_agrupado,
+from models.domain import Pedido, Camion, TruckCapacity, ConfiguracionGrupo
+from models.enums import TipoRuta, TipoCamion
+
+from core.constants import SCALE_VCU, MAX_CAMIONES_CP_SAT
+from optimization.solvers.constraints import (
+    agregar_restriccion_po_agrupado,                            
     agregar_restricciones_apilabilidad,
-    agregar_restricciones_walmart_multicd
-)
-from services.solver_helpers import heuristica_ffd, preparar_datos_solver
-from services.optimizer_output import construir_camiones_desde_solver
+    agregar_restricciones_walmart_multicd)
+from optimization.utils.helpers import preparar_datos_solver, heuristica_ffd
+from optimization.solvers.output import construir_camiones_desde_solver
 
 
 def optimizar_grupo_binpacking(
@@ -56,7 +57,7 @@ def optimizar_grupo_binpacking(
     datos = preparar_datos_solver(pedidos, capacidad)
     pedidos_ids = [p.pedido for p in pedidos]
     
-    # Estimar nÃºmero de camiones con FFD + margen
+    # Estimar nÃºmero de camiones con FFD 
     n_cam_heur = heuristica_ffd(
         pedidos,
         {p.pedido: p.peso for p in pedidos},

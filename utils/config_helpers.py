@@ -2,7 +2,8 @@
 """Helpers para extraer información de configuraciones de cliente"""
 
 from typing import Dict, Any
-from services.models import TruckCapacity, TipoCamion
+from models.domain import TruckCapacity
+from models.enums import TipoCamion
 
 
 def extract_truck_capacities(client_config) -> Dict[TipoCamion, TruckCapacity]:

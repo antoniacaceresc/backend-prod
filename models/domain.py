@@ -1,37 +1,7 @@
-# services/models.py
-"""
-Modelos de datos del optimizador.
-Representación única de entidades - sin conversiones intermedias.
-"""
-
 from __future__ import annotations
-
 from dataclasses import dataclass, field
+from .enums import TipoRuta, TipoCamion
 from typing import List, Dict, Any, Optional
-from enum import Enum
-import uuid
-
-
-class TipoRuta(str, Enum):
-    """Tipos de rutas soportados"""
-    NORMAL = "normal"
-    MULTI_CE = "multi_ce"
-    MULTI_CE_PRIORIDAD = "multi_ce_prioridad"
-    MULTI_CD = "multi_cd"
-    BH = "bh"
-
-
-class TipoCamion(str, Enum):
-    """Tipos de camiones disponibles"""
-    NORMAL = "normal"
-    BH = "bh"
-
-
-class StatusOptimizacion(str, Enum):
-    """Estados del solver CP-SAT"""
-    OPTIMAL = "OPTIMAL"
-    FEASIBLE = "FEASIBLE"
-    NO_SOLUTION = "NO_SOLUTION"
 
 
 @dataclass
@@ -535,8 +505,7 @@ class Camion:
             )
         
         # Validar posiciones de apilabilidad
-        from services.solver_helpers import calcular_posiciones_apilabilidad
-        
+        from optimization.utils.helpers import calcular_posiciones_apilabilidad
         pedidos_simulados = self.pedidos + pedidos
         pos_necesarias = calcular_posiciones_apilabilidad(
             pedidos_simulados,
@@ -636,9 +605,8 @@ class Camion:
             return False
         
         # Validar posiciones de apilabilidad
-        from services.solver_helpers import calcular_posiciones_apilabilidad
-        
         try:
+            from optimization.utils.helpers import calcular_posiciones_apilabilidad
             pos_necesarias = calcular_posiciones_apilabilidad(
                 self.pedidos,
                 nueva_capacidad.max_positions

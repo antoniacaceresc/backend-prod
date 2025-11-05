@@ -5,8 +5,9 @@ Funciones que preparan datos y reconstruyen resultados.
 """
 
 from typing import List, Dict, Any, Tuple
-from services.models import Pedido, Camion, TruckCapacity, TipoRuta, TipoCamion, ConfiguracionGrupo
-from services.constants import SCALE_VCU, SCALE_PALLETS
+from models.domain import Pedido, Camion, TruckCapacity, ConfiguracionGrupo
+from models.enums import TipoCamion, TipoRuta
+from core.constants import SCALE_VCU, MAX_CAMIONES_CP_SAT, SCALE_PALLETS
 import uuid
 import math
 
@@ -191,7 +192,6 @@ def preparar_datos_solver(
         }
         
         # VCU escalado (para modo VCU)
-        from services.constants import SCALE_VCU
         frac_vol = pedido.volumen / capacidad.cap_volume
         frac_peso = pedido.peso / capacidad.cap_weight
         
@@ -232,7 +232,7 @@ def heuristica_ffd(
     cap_weight = capacidad.cap_weight
     cap_volume = capacidad.cap_volume
     
-    # Ordenar por "densidad" (el que mÃ¡s consume proporcionalmente)
+    # Ordenar por "densidad" (el que más consume proporcionalmente)
     pedidos_orden = sorted(
         pedidos,
         key=lambda p: max(

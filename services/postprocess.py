@@ -15,10 +15,10 @@ from typing import List, Dict, Any, Optional, Tuple
 import uuid
 from collections import Counter
 
-from services.models import Pedido, Camion, TruckCapacity, TipoCamion, TipoRuta
-from services.config_helpers import extract_truck_capacities
-from services.solver_helpers import calcular_posiciones_apilabilidad
-from config import get_client_config
+from models.domain import Pedido, Camion, TruckCapacity, TipoCamion, TipoRuta
+from utils.config_helpers import extract_truck_capacities
+from optimization.utils.helpers import calcular_posiciones_apilabilidad
+from core.config import get_client_config
 
 
 # ============================================================================

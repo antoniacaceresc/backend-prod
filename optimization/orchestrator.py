@@ -1,4 +1,3 @@
-# services/optimizer.py
 """
 API pública del optimizador.
 Orquesta el flujo completo de optimización en dos fases (VCU y BinPacking).
@@ -14,14 +13,16 @@ import os
 import pandas as pd
 
 from services.file_processor import read_file, process_dataframe
-from services.math_utils import format_dates
-from services.models import Pedido, Camion, TruckCapacity, TipoCamion
-from services.config_helpers import extract_truck_capacities
-from services.optimizer_groups import generar_grupos_optimizacion, calcular_tiempo_por_grupo
-from services.optimizer_vcu import optimizar_grupo_vcu
-from services.optimizer_binpacking import optimizar_grupo_binpacking
-from config import get_client_config
 
+from models.domain import Pedido, TruckCapacity, ConfiguracionGrupo
+from models.enums import TipoCamion
+from optimization.solvers.vcu import optimizar_grupo_vcu
+from optimization.solvers.binpacking import optimizar_grupo_binpacking
+from core.config import get_client_config
+from core.constants import MAX_TIEMPO_POR_GRUPO
+from utils.math_utils import format_dates
+from optimization.groups import ( generar_grupos_optimizacion, calcular_tiempo_por_grupo, _generar_grupos_para_tipo, ajustar_tiempo_grupo )
+from utils.config_helpers import extract_truck_capacities
 
 # ============================================================================
 # CONSTANTES
@@ -213,7 +214,7 @@ def _dataframe_a_pedidos(df: pd.DataFrame, pedidos_dicts: List[Dict]) -> List[Pe
 
 
 def _ejecutar_optimizacion_completa(
-    pedidos: List[Pedido],
+    pedidos_objetos: List[Pedido],
     pedidos_dicts: List[Dict[str, Any]],
     client_config,
     cliente: str,
@@ -223,62 +224,72 @@ def _ejecutar_optimizacion_completa(
 ) -> Dict[str, Any]:
     """
     Ejecuta optimización completa para un modo (VCU o BinPacking).
-    
-    Args:
-        pedidos: Lista de pedidos objetos
-        pedidos_dicts: Lista de pedidos dicts (para metadata)
-        client_config: Configuración del cliente
-        cliente: Nombre del cliente
-        modo: "vcu" o "binpacking"
-        tpg: Tiempo por grupo
-        request_timeout: Timeout total
-    
-    Returns:
-        Dict con camiones y pedidos_no_incluidos
     """
     start_total = time.time()
-    
-    # Generar grupos
-    grupos = generar_grupos_optimizacion(pedidos, client_config, modo)
     
     # Extraer capacidades
     capacidades = extract_truck_capacities(client_config)
     
-    # Optimizar grupos
     if modo == "vcu":
-        resultados = _optimizar_grupos_vcu(
-            grupos, client_config, capacidades,
-            tpg, request_timeout, start_total
+        # ✅ Para VCU: Solo generar grupos NORMALES inicialmente
+        grupos_iniciales = generar_grupos_optimizacion(
+            pedidos_objetos, client_config, "normal"  # ✅ Solo normales
         )
-    else:  # binpacking
+        
+        print(f"[VCU] Grupos normales generados: {len(grupos_iniciales)}")
+        
+        # ✅ VCU maneja cascada internamente
+        resultados = _optimizar_grupos_vcu(
+            grupos_iniciales, 
+            client_config, 
+            capacidades,
+            tpg, 
+            request_timeout, 
+            start_total,
+            pedidos_objetos  # ✅ Pasar todos los pedidos
+        )
+    else:
+        # BinPacking: generar todos los grupos
+        grupos = generar_grupos_optimizacion(pedidos_objetos, client_config, modo)
+        
         resultados = _optimizar_grupos_binpacking(
             grupos, client_config, capacidades,
             tpg, request_timeout, start_total
         )
     
-    # Consolidar resultados
-    return _consolidar_resultados(resultados, pedidos, pedidos_dicts, capacidades[TipoCamion.NORMAL])
+    # Consolidar
+    return _consolidar_resultados(
+        resultados, pedidos_objetos, pedidos_dicts, 
+        capacidades[TipoCamion.NORMAL], client_config
+    )
 
 
 def _optimizar_grupos_vcu(
-    grupos: List[Tuple],
+    grupos_iniciales: List[Tuple],  # Solo grupos normales
     client_config,
     capacidades: Dict[TipoCamion, TruckCapacity],
     tpg: int,
     request_timeout: int,
-    start_total: float
+    start_total: float,
+    todos_los_pedidos: List[Pedido]
 ) -> List[Dict[str, Any]]:
     """
-    Optimiza grupos en modo VCU con paralelización para rutas normales.
+    Optimiza grupos en modo VCU con cascada serial:
+    1. Optimiza grupos NORMALES en paralelo
+    2. Regenera grupos ESPECIALES con pedidos no asignados y optimiza en serie
     """
+
+
     resultados = []
-    pedidos_restantes_ids = set()
+    pedidos_asignados_global = set()
     
-    # Separar grupos normales del resto
-    grupos_normal = [(cfg, peds) for cfg, peds in grupos if cfg.tipo.value == "normal"]
-    grupos_otros = [(cfg, peds) for cfg, peds in grupos if cfg.tipo.value != "normal"]
+    # ========================================
+    # FASE 1: Optimizar NORMALES en PARALELO
+    # ========================================
+    grupos_normal = [(cfg, peds) for cfg, peds in grupos_iniciales if cfg.tipo.value == "normal"]
     
-    # Paralelizar grupos normales
+    print(f"[VCU] Fase 1: Optimizando {len(grupos_normal)} grupos NORMALES en paralelo")
+    
     if grupos_normal:
         with ThreadPoolExecutor(max_workers=min(THREAD_WORKERS_NORMAL, len(grupos_normal))) as pool:
             futures = []
@@ -287,64 +298,116 @@ def _optimizar_grupos_vcu(
                 if not pedidos_grupo:
                     continue
                 
-                # Calcular tiempo proporcional
-                tiempo_grupo = max(1, int(tpg * len(pedidos_grupo) / 10))
+                n_pedidos = len(pedidos_grupo)
+                tiempo_grupo = ajustar_tiempo_grupo(tpg, n_pedidos, "normal")
                 
                 if time.time() - start_total + tiempo_grupo > (request_timeout - 2):
                     continue
                 
-                # Determinar capacidad
-                cap = capacidades.get(
-                    TipoCamion.BH if cfg.tipo.value == 'bh' else TipoCamion.NORMAL,
-                    capacidades[TipoCamion.NORMAL]
-                )
+                cap = capacidades[TipoCamion.NORMAL]
                 
                 fut = pool.submit(
                     optimizar_grupo_vcu,
                     pedidos_grupo, cfg, client_config, cap, tiempo_grupo
                 )
-                futures.append(fut)
+                futures.append((fut, cfg.id, len(pedidos_grupo)))
             
             # Recoger resultados
-            for fut in as_completed(futures, timeout=max(1, request_timeout - int(time.time() - start_total))):
+            for fut, grupo_id, n_pedidos in futures:
                 try:
-                    res = fut.result()
+                    res = fut.result(timeout=max(1, request_timeout - int(time.time() - start_total)))
+                    
                     if res.get("status") in ("OPTIMAL", "FEASIBLE") and res.get("camiones"):
-                        # Evitar duplicados
-                        nuevos = [
-                            pid for pid in res.get("pedidos_asignados_ids", [])
-                            if pid not in pedidos_restantes_ids
-                        ]
-                        if nuevos:
-                            pedidos_restantes_ids.update(nuevos)
-                            resultados.append(res)
-                except Exception:
-                    continue
+                        nuevos = res.get("pedidos_asignados_ids", [])
+                        pedidos_asignados_global.update(nuevos)
+                        resultados.append(res)
+                        print(f"[VCU] ✓ Normal {grupo_id}: {len(nuevos)}/{n_pedidos} pedidos asignados")
+                    else:
+                        print(f"[VCU] ✗ Normal {grupo_id}: NO_SOLUTION")
+                except Exception as e:
+                    print(f"[VCU] ✗ Normal {grupo_id}: ERROR - {e}")
     
-    # Procesar otros grupos secuencialmente
-    for cfg, pedidos_grupo in grupos_otros:
-        if not pedidos_grupo:
-            continue
+    print(f"[VCU] Fase 1 completa: {len(pedidos_asignados_global)} pedidos asignados totales")
+    
+    # ========================================
+    # FASE 2: CASCADA DINÁMICA DE RUTAS ESPECIALES
+    # ========================================
+    tipos_especiales = ["multi_ce_prioridad", "multi_ce", "multi_cd", "bh"]
+    
+    for tipo in tipos_especiales:
+        # ✅ CALCULAR pedidos NO asignados hasta ahora
+        pedidos_disponibles = [
+            p for p in todos_los_pedidos 
+            if p.pedido not in pedidos_asignados_global
+        ]
         
-        tiempo_grupo = max(1, int(tpg * len(pedidos_grupo) / 10))
-        
-        if time.time() - start_total + tiempo_grupo > (request_timeout - 2):
+        if not pedidos_disponibles:
+            print(f"[VCU] Fase 2 ({tipo}): No quedan pedidos disponibles, deteniendo cascada")
             break
         
-        cap = capacidades.get(
-            TipoCamion.BH if cfg.tipo.value == 'bh' else TipoCamion.NORMAL,
-            capacidades[TipoCamion.NORMAL]
+        print(f"\n[VCU] Fase 2 ({tipo}): {len(pedidos_disponibles)} pedidos disponibles")
+        
+        # ✅ GENERAR grupos de este tipo CON pedidos disponibles
+        grupos_tipo = _generar_grupos_para_tipo(
+            pedidos_disponibles, 
+            client_config, 
+            tipo
         )
         
-        res = optimizar_grupo_vcu(pedidos_grupo, cfg, client_config, cap, tiempo_grupo)
+        if not grupos_tipo:
+            print(f"[VCU] Fase 2 ({tipo}): No se generaron grupos, skip")
+            continue
         
-        if res.get("status") in ("OPTIMAL", "FEASIBLE") and res.get("camiones"):
-            resultados.append(res)
+        print(f"[VCU] Fase 2 ({tipo}): {len(grupos_tipo)} grupos generados")
         
+        # ✅ OPTIMIZAR cada grupo de este tipo EN SERIE
+        for cfg, pedidos_grupo in grupos_tipo:
+            if not pedidos_grupo:
+                continue
+            
+            n_ped = len(pedidos_grupo)
+            tiempo_grupo = ajustar_tiempo_grupo(tpg, n_ped, tipo)
+            
+            if time.time() - start_total + tiempo_grupo > (request_timeout - 2):
+                print(f"[VCU] Timeout cercano, deteniendo cascada")
+                break
+            
+            # Determinar capacidad
+            if tipo == "bh":
+                cap = capacidades.get(TipoCamion.BH, capacidades[TipoCamion.NORMAL])
+            else:
+                cap = capacidades[TipoCamion.NORMAL]
+            
+            print(f"[VCU]   Optimizando {cfg.id}: {n_ped} pedidos, {tiempo_grupo}s")
+            
+            res = optimizar_grupo_vcu(
+                pedidos_grupo, cfg, client_config, cap, tiempo_grupo
+            )
+            
+            if res.get("status") in ("OPTIMAL", "FEASIBLE"):
+                nuevos = res.get("pedidos_asignados_ids", [])
+                n_camiones = len(res.get("camiones", []))
+                
+                if nuevos and n_camiones > 0:
+                    pedidos_asignados_global.update(nuevos)
+                    resultados.append(res)
+                    print(f"[VCU] ✓ Normal {grupo_id}: {len(nuevos)}/{n_pedidos} pedidos asignados en {n_camiones} camiones")
+                else:
+                    print(f"[VCU] ⚠️ Normal {grupo_id}: {res.get('status')} pero 0 pedidos/camiones asignados")
+            else:
+                print(f"[VCU] ✗ Normal {grupo_id}: {res.get('status', 'NO_SOLUTION')}")
+            
+            if time.time() - start_total > (request_timeout - 2):
+                break
+        
+        # Si timeout, detener cascada
         if time.time() - start_total > (request_timeout - 2):
             break
     
+    print(f"\n[VCU] Optimización completa: {len(resultados)} grupos, {len(pedidos_asignados_global)} pedidos asignados")
+    
     return resultados
+
 
 
 def _optimizar_grupos_binpacking(
@@ -364,7 +427,8 @@ def _optimizar_grupos_binpacking(
         if not pedidos_grupo:
             continue
         
-        tiempo_grupo = max(1, int(tpg * len(pedidos_grupo) / 10))
+        n_pedidos = len(pedidos_grupo)
+        tiempo_grupo = ajustar_tiempo_grupo(tpg, n_pedidos, cfg.tipo.value)
         
         if time.time() - start_total + tiempo_grupo > (request_timeout - 2):
             break
@@ -385,21 +449,25 @@ def _optimizar_grupos_binpacking(
     return resultados
 
 
-# optimizer.py - Función _consolidar_resultados corregida
-
 def _consolidar_resultados(
     resultados: List[Dict[str, Any]],
     pedidos_originales: List[Pedido],
     pedidos_dicts: List[Dict[str, Any]],
-    capacidad_default: TruckCapacity
+    capacidad_default: TruckCapacity,
+    client_config  # ✅ NUEVO: necesitamos el config
 ) -> Dict[str, Any]:
     """
     Consolida resultados de todos los grupos en una respuesta única.
     """
+    from services.postprocess import _actualizar_opciones_tipo_camion 
+    
     # Consolidar camiones
     all_camiones = []
     for res in resultados:
         all_camiones.extend(res.get("camiones", []))
+    
+    for camion in all_camiones:
+        _actualizar_opciones_tipo_camion(camion, client_config)
     
     # Identificar pedidos asignados
     pedidos_asignados_ids = set()
@@ -414,7 +482,6 @@ def _consolidar_resultados(
         if pedido_obj.pedido not in pedidos_asignados_ids:
             vcu_peso, vcu_vol, _ = pedido_obj.calcular_vcu(capacidad_default)
             
-            # ✅ AGREGAR TODAS LAS COLUMNAS NECESARIAS
             pedido_dict = {
                 "PEDIDO": pedido_obj.pedido,
                 "CE": pedido_obj.ce,
@@ -422,21 +489,16 @@ def _consolidar_resultados(
                 "OC": pedido_obj.oc,
                 "PO": pedido_obj.po,
                 "CHOCOLATES": pedido_obj.chocolates,
-                # ✅ AGREGAR DIMENSIONES FÍSICAS (esto faltaba)
                 "PESO": pedido_obj.peso,
                 "VOL": pedido_obj.volumen,
                 "PALLETS": pedido_obj.pallets,
                 "VALOR": pedido_obj.valor,
-                # VCU calculados
                 "VCU_VOL": vcu_vol,
                 "VCU_PESO": vcu_peso,
-                # Metadata
                 "Fecha preferente de entrega": pedidos_map.get(pedido_obj.pedido, {}).get("Fecha preferente de entrega"),
             }
             
-            # Agregar metadata adicional
             pedido_dict.update(pedidos_map.get(pedido_obj.pedido, {}))
-            
             pedidos_no_incluidos.append(pedido_dict)
     
     # Convertir camiones a dicts para API
@@ -510,21 +572,34 @@ def _etiquetar_bh_binpacking(
     if not getattr(client_config, "PERMITE_BH", False):
         return resultado
     
-    if type(client_config).__name__ == "CencosudConfig" or str(cliente).strip().lower() == "cencosud":
-        return resultado
-    
     cd_con_bh = getattr(client_config, "CD_CON_BH", [])
     bh_vcu_max = getattr(client_config, "BH_VCU_MAX", 1)
     
+    # Obtener vcu_min desde TRUCK_TYPES['bh']
+    truck_types = getattr(client_config, "TRUCK_TYPES", {})
+    normal_truck = truck_types.get('normal', {})
+    normal_target = float(normal_truck.get('vcu_min', 1))
+    
+    conversiones = 0
+
     for cam in resultado.get("camiones", []):
         cds = cam.get("cd", [])
         if not cds:
             continue
         
+        vcu = cam.get("vcu_max", 0)
+        
         if (cds[0] in cd_con_bh
             and cam.get("flujo_oc") != "MIX"
-            and cam.get("vcu_max", 0) <= bh_vcu_max
+            and vcu <= bh_vcu_max
+            and vcu < normal_target
             and cam.get("tipo_ruta") == "normal"):
+            
             cam["tipo_camion"] = "bh"
+            conversiones += 1
+
+    if conversiones > 0:
+        print(f"[BINPACKING] Auto-etiquetados {conversiones} camiones como BH (VCU en, {bh_vcu_max:.2f}])")
+
     
     return resultado

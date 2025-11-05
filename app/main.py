@@ -11,12 +11,14 @@ from fastapi import FastAPI, UploadFile, File, Path, HTTPException, Body, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, Field
 
-# Mantener contratos públicos e imports
-from services import optimizer as optimizer
-from services.postprocess import move_orders, add_truck, delete_truck, compute_stats, apply_truck_type_change
+# ==========================================
+# IMPORTS REFACTORIZADOS
+# ==========================================
 
+from models.api import (PostProcessRequest, PostProcessResponse)
+from optimization.orchestrator import procesar
+from services.postprocess import (move_orders, add_truck, delete_truck, compute_stats, apply_truck_type_change)
 
 # ----------------------------------------------------------------------------
 # App & Middlewares
@@ -36,7 +38,7 @@ app.add_middleware(GZipMiddleware, minimum_size=int(os.getenv("GZIP_MIN_SIZE", "
 # ----------------------------------------------------------------------------
 # Concurrencia
 # ----------------------------------------------------------------------------
-REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "150"))
+REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "200"))
 CPU_COUNT = os.cpu_count() or 4
 MAX_WORKERS = max(CPU_COUNT - 1, 1)
 MAX_CONCURRENT = max(1, MAX_WORKERS)
@@ -64,25 +66,6 @@ def on_shutdown() -> None:
 def root() -> str:
     return "<h2>Backend de FastAPI funcionando</h2>"
 
-
-# ----------------------------------------------------------------------------
-# Modelos de Postproceso (se preservan nombres y campos)
-# ----------------------------------------------------------------------------
-class PostProcessRequest(BaseModel):
-    camiones: List[Dict[str, Any]] = Field(default_factory=list)
-    pedidos_no_incluidos: List[Dict[str, Any]] = Field(default_factory=list)
-    pedidos: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
-    target_truck_id: Optional[str] = None
-    cd: Optional[List[str]] = Field(default_factory=list)
-    ce: Optional[List[str]] = Field(default_factory=list)
-    ruta: Optional[str] = None
-    cliente: str
-
-
-class PostProcessResponse(BaseModel):
-    camiones: List[Dict[str, Any]]
-    pedidos_no_incluidos: List[Dict[str, Any]]
-    estadisticas: Dict[str, Any]
 
 
 # ----------------------------------------------------------------------------
@@ -122,7 +105,7 @@ async def optimizar(
         result = await asyncio.wait_for(
             loop.run_in_executor(
                 executor,
-                optimizer.procesar,
+                procesar,
                 content,
                 file.filename,
                 cliente,

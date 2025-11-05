@@ -4,8 +4,8 @@
 import os
 
 # ============ Límites del solver ============
-MAX_CAMIONES_CP_SAT = int(os.getenv("MAX_CAMIONES_CP_SAT", "20"))
-MAX_TIEMPO_POR_GRUPO = int(os.getenv("MAX_TIEMPO_POR_GRUPO", "30"))
+MAX_CAMIONES_CP_SAT = int(os.getenv("MAX_CAMIONES_CP_SAT", "30"))
+MAX_TIEMPO_POR_GRUPO = int(os.getenv("MAX_TIEMPO_POR_GRUPO", "60"))
 
 # ============ Escalamiento para CP-SAT ============
 SCALE_VCU = 1000      # Escala para VCU (convertir float 0-1 a int 0-1000)

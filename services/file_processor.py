@@ -10,7 +10,7 @@ from typing import Tuple, List, Dict, Any
 import pandas as pd
 
 # ===== IMPORTAR NUESTROS MODELOS =====
-from services.models import Pedido
+from models.domain import Pedido
 
 
 # === Helpers de cachÃ© (sin cambios) ===

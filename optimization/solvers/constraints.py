@@ -1,4 +1,4 @@
-# services/optimizer_constraints.py
+# optimization/solvers/constraints.py
 """
 Restricciones compartidas para modelos CP-SAT.
 Funciones reutilizables para agregar restricciones comunes.
@@ -6,7 +6,7 @@ Funciones reutilizables para agregar restricciones comunes.
 
 from ortools.sat.python import cp_model
 from typing import Dict, List, Any
-from services.constants import SCALE_PALLETS
+from core.constants import SCALE_PALLETS
 
 
 def agregar_restriccion_po_agrupado(

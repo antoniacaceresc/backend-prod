@@ -1,4 +1,4 @@
-# services/optimizer_output.py
+# optimization/solvers/output.py
 """
 Construcción de salida desde soluciones del solver.
 Convierte variables del CP-SAT a objetos Camion/Pedido.
@@ -8,8 +8,9 @@ import uuid
 from typing import List, Dict, Any
 from ortools.sat.python import cp_model
 
-from services.models import Pedido, Camion, ConfiguracionGrupo, TruckCapacity, TipoCamion
-
+from models.domain import Pedido, Camion, TruckCapacity, ConfiguracionGrupo
+from models.enums import TipoCamion
+from optimization.utils.helpers import calcular_posiciones_apilabilidad
 
 def construir_camiones_desde_solver(
     solver: cp_model.CpSolver,
@@ -81,7 +82,6 @@ def construir_camiones_desde_solver(
         )
         
         # Calcular posiciones de apilabilidad
-        from services.solver_helpers import calcular_posiciones_apilabilidad
         camion.pos_total = calcular_posiciones_apilabilidad(
             pedidos_camion,
             capacidad.max_positions
