@@ -71,7 +71,7 @@ def calcular_posiciones_apilabilidad(
 ) -> float:
     """
     Calcula las posiciones totales usadas segÃºn reglas de apilabilidad.
-    Replica la lÃ³gica del solver CP-SAT.
+    Replica la logica del solver CP-SAT.
     
     Returns:
         Posiciones totales usadas (float)
@@ -85,7 +85,7 @@ def calcular_posiciones_apilabilidad(
     noap_sum = suma_escalada('no_apilable')
     self_sum = suma_escalada('si_mismo')
     
-    # CÃ¡lculo segÃºn lÃ³gica del solver
+    # CÃ¡lculo segun logica del solver
     diff = base_sum - sup_sum
     abs_diff = abs(diff)
     

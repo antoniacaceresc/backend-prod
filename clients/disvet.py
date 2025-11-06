@@ -14,9 +14,13 @@ class DisvetConfig:
     # MIX Flujo
     MIX_GRUPOS = []
 
-    # Qué tipos de ruta usa BIN PACKING para este cliente
+    # Configuración de validación altura
+    VALIDAR_ALTURA = True
+    PERMITE_CONSOLIDACION = True
+    MAX_SKUS_POR_PALLET = 5
+
+    # Qué tipos de ruta usa BIN PACKING para este cliente, Si no se define un tipo aquí, se usa RUTAS_POSIBLES[tipo] por defecto.
     BINPACKING_TIPOS_RUTA = ['normal', 'bh']
-    # Si no se define un tipo aquí, se usa RUTAS_POSIBLES[tipo] por defecto.
     RUTAS_BINPACKING = {
         'bh': [
             (["Cerro Grande"],["0088"]),
@@ -47,7 +51,7 @@ class DisvetConfig:
             "SUPERIOR": "Superior",
             "FLEXIBLE": "Flexible",
             "NO_APILABLE": "No Apilable",
-            "SI_MISMO": "Apilable por si mismo",
+            "SI_MISMO": "Apilable si mismo",
         },
     }
 
@@ -63,8 +67,8 @@ class DisvetConfig:
 
     # Tipos de camiones
     TRUCK_TYPES = {
-        'normal': {'cap_weight':23000,'cap_volume':70000, 'max_positions':30,'levels':2,'vcu_min':0.90,'max_pallets':59},
-        'bh':     {'cap_weight':23000,'cap_volume':70000, 'max_positions':28,'levels':2,'vcu_min':0.55,'max_pallets':55}
+        'normal': {'cap_weight':23000,'cap_volume':70000, 'max_positions':30,'levels':2,'vcu_min':0.90,'max_pallets':59, 'altura_cm': 270},
+        'bh':     {'cap_weight':23000,'cap_volume':70000, 'max_positions':28,'levels':2,'vcu_min':0.55,'max_pallets':55, 'altura_cm': 270}
     }
 
     # Configuración agrupamiento especial

@@ -113,8 +113,7 @@ def _build_normal_groups(
     pedidos: List[Pedido],
     rutas: List[Tuple[List[str], List[str]]],
     mix_grupos: List[List[str]],
-    usa_oc: bool
-) -> Tuple[List[Tuple[ConfiguracionGrupo, List[Pedido]]], List[Pedido]]:
+    usa_oc: bool) -> Tuple[List[Tuple[ConfiguracionGrupo, List[Pedido]]], List[Pedido]]:
     """
     Construye grupos para rutas normales sin solapamiento.
     """

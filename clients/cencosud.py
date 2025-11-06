@@ -15,6 +15,11 @@ class CencosudConfig:
     BH_VCU_MAX = 1
     BH_TRUCK_TARGET_RATIO = 0.60
 
+    # Configuración de validación altura
+    VALIDAR_ALTURA = True
+    PERMITE_CONSOLIDACION = True
+    MAX_SKUS_POR_PALLET = 5 # Verificar
+
     # Mapeo de columnas
     COLUMN_MAPPING = {
         "Secos": {   
@@ -33,7 +38,7 @@ class CencosudConfig:
             "SUPERIOR": "Superior",
             "FLEXIBLE": "Flexible",
             "NO_APILABLE": "No Apilable",
-            "SI_MISMO": "Apilable por si mismo",
+            "SI_MISMO": "Apilable si mismo",
             "VALIOSO": "Valioso Cencosud",
             "PDQ": "PDQ"
         },
@@ -61,8 +66,8 @@ class CencosudConfig:
 
     # Tipos de camiones
     TRUCK_TYPES = {
-        'normal': {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.85, 'max_pallets': 60},
-        'bh':     {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 26, 'levels': 2, 'vcu_min': 0.55, 'max_pallets': 52}
+        'normal': {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.85, 'max_pallets': 60, 'altura_cm': 270},
+        'bh':     {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 26, 'levels': 2, 'vcu_min': 0.55, 'max_pallets': 52, 'altura_cm': 270}
     }
 
 

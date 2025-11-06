@@ -9,11 +9,593 @@ from typing import Tuple, List, Dict, Any
 
 import pandas as pd
 
-# ===== IMPORTAR NUESTROS MODELOS =====
-from models.domain import Pedido
+from models.domain import Pedido, SKU
 
 
-# === Helpers de cachÃ© (sin cambios) ===
+# ============================================================================
+# DETECCIÓN DE MODO (SKU vs LEGACY)
+# ============================================================================
+
+def detectar_modo_excel(df: pd.DataFrame) -> str:
+    """
+    Detecta si el Excel tiene datos de SKU o es formato legacy.
+    
+    Args:
+        df: DataFrame leído del Excel
+    
+    Returns:
+        "SKU_DETALLADO" si tiene columnas de SKU
+        "PEDIDO_LEGACY" si es formato antiguo
+    """
+    columnas_sku_requeridas = {"SKU", "ALTURA_FULL_PALLET"}
+    columnas_disponibles = set(df.columns)
+    
+    if columnas_sku_requeridas.issubset(columnas_disponibles):
+        return "SKU_DETALLADO"
+    
+    return "PEDIDO_LEGACY"
+
+
+# ============================================================================
+# LECTURA DE EXCEL (ACTUALIZADA)
+# ============================================================================
+
+def read_file(
+    content: bytes, 
+    filename: str, 
+    client_config, 
+    venta: str
+) -> pd.DataFrame:
+    """
+    Lee archivo Excel y devuelve DataFrame crudo.
+    
+    CAMBIO: Ahora puede leer tanto formato SKU como legacy.
+    El DataFrame retornado tiene las columnas originales del Excel.
+    
+    Args:
+        content: Contenido binario del Excel
+        filename: Nombre del archivo
+        client_config: Configuración del cliente
+        venta: Tipo de venta ("Secos", "Purina")
+    
+    Returns:
+        DataFrame con columnas originales del Excel
+    """
+    sheet_name = venta.upper()
+    header_row = client_config.HEADER_ROW
+
+    mapping = build_column_mapping(client_config, venta)
+    wanted_cols = list(mapping.values())
+    
+
+    try:
+        print(f"[FILE] Leyendo Excel: {filename}, hoja: {sheet_name}")
+        
+        if not filename.endswith((".xlsx", ".xlsm")):
+            raise ValueError("Formato de archivo no soportado")
+
+        xls = pd.ExcelFile(BytesIO(content), engine="openpyxl")
+        header_only = xls.parse(sheet_name=sheet_name, header=header_row, nrows=0)
+
+
+        available_cols = [c for c in wanted_cols if c in header_only.columns]
+        missing_cols = [c for c in wanted_cols if c not in header_only.columns]
+        
+        if missing_cols:
+            print(f"[WARN] Columnas ausentes (se omiten): {missing_cols}")
+
+        # Cache parquet (sin cambios)
+        sig = _make_cache_sig(content, sheet_name, available_cols)
+        cpath = _cache_path(sig)
+        
+        if os.path.exists(cpath) and os.getenv("EXCEL_CACHE_DISABLE", "false").lower() != "true":
+            try:
+                df = pd.read_parquet(cpath)
+                print(f"[FILE] ✓ Leído desde cache: {len(df)} filas")
+                return df
+            except Exception as e:
+                print(f"[WARN] Falló leer cache parquet ({e}); releyendo Excel...")
+
+        # Tipos para evitar inferencia costosa
+        text_internals = {"PEDIDO", "CD", "CE", "OC", "SKU"}  # Agregado SKU
+        dtype_hint: Dict[str, str] = {}
+        for internal in text_internals:
+            excel_name = mapping.get(internal)
+            if excel_name and excel_name in available_cols:
+                dtype_hint[excel_name] = "string"
+
+        df = xls.parse(
+            sheet_name=sheet_name,
+            header=header_row,
+            usecols=available_cols,
+            dtype=dtype_hint,
+        )
+
+        if os.getenv("EXCEL_CACHE_DISABLE", "false").lower() != "true":
+            try:
+                df.to_parquet(cpath, index=False)
+            except Exception as e:
+                print(f"[WARN] No se pudo escribir cache parquet ({e}).")
+        
+        print(f"[FILE] ✓ Leído: {len(df)} filas")
+        return df
+
+    except Exception as e:
+        print(f"[ERROR] Al leer el Excel: {e}")
+        raise
+
+
+# ============================================================================
+# MAPEO DE COLUMNAS (ACTUALIZADO con columnas de SKU)
+# ============================================================================
+
+def build_column_mapping(client_config, venta: str) -> Dict[str, str]:
+    """
+    Construye mapeo completo: internal_name -> excel_column.
+    
+    NUEVO: Incluye columnas de SKU si existen en COLUMN_MAPPING.
+    """
+    print("[FILE] Construyendo mapeo de columnas")
+    
+    col_map = client_config.COLUMN_MAPPING.get(venta, {})
+    extra_map = getattr(client_config, 'EXTRA_MAPPING', {})
+    
+    # Mapeo base (existente)
+    mapping = {**extra_map, **col_map}
+    
+    # NUEVO: Agregar columnas de SKU si están definidas
+    columnas_sku = {
+        "SKU": "SKU",
+        "ALTURA_FULL_PALLET": "Altura full Pallet",
+        "ALTURA_PICKING": "Altura Picking",
+    }
+    
+    # Agregar solo si no están en el mapping (para permitir override por cliente)
+    for internal, excel_col in columnas_sku.items():
+        if internal not in mapping:
+            mapping[internal] = excel_col
+    
+    return mapping
+
+
+# ============================================================================
+# PROCESAMIENTO (ACTUALIZADO para soportar SKUs)
+# ============================================================================
+
+def process_dataframe(
+    df_full: pd.DataFrame, 
+    client_config, 
+    cliente: str, 
+    venta: str
+) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
+    """
+    Procesa DataFrame del Excel.
+    
+    CAMBIO PRINCIPAL:
+    - Si tiene datos de SKU: agrupa SKUs por pedido
+    - Si es legacy: mantiene comportamiento original
+    
+    Returns:
+        (df_pedidos_agregados, lista_pedidos_dicts)
+    """
+    mapping = build_column_mapping(client_config, venta)
+    rename_map = {
+        excel: internal 
+        for internal, excel in mapping.items() 
+        if excel in df_full.columns
+    }
+    
+    warn_missing_columns(df_full, mapping)
+    df_raw = df_full[list(rename_map.keys())].rename(columns=rename_map).copy()
+    
+    # Detectar modo
+    modo = detectar_modo_excel(df_raw)
+    print(f"[FILE] Modo detectado: {modo}")
+    
+    if modo == "SKU_DETALLADO":
+        return _process_dataframe_con_skus(df_raw, client_config, cliente, venta)
+    else:
+        return _process_dataframe_legacy(df_raw, client_config, cliente, venta)
+
+
+# ============================================================================
+# PROCESAMIENTO CON SKUs (NUEVO)
+# ============================================================================
+
+def _process_dataframe_con_skus(
+    df_raw: pd.DataFrame,
+    client_config,
+    cliente: str,
+    venta: str
+) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
+    """
+    Procesa Excel con datos de SKU.
+    
+    Flujo:
+    1. Limpiar y normalizar datos a nivel SKU
+    2. Agregar SKUs por pedido (suma/max según reglas)
+    3. Generar df_pedidos y lista de dicts
+    
+    Returns:
+        (df_pedidos_agregados, lista_pedidos_dicts)
+    """
+    print("[FILE] Procesando datos con SKUs...")
+    
+    # 1. Limpieza y normalización a nivel SKU
+    df_skus = _limpiar_datos_skus(df_raw)
+    
+    # 2. Validar datos de SKU
+    df_skus = _validar_datos_skus(df_skus)
+    
+    # 3. Agregar SKUs por pedido
+    df_pedidos, df_skus_con_pedido = _agregar_skus_a_pedidos(df_skus, client_config)
+    
+    # 4. Crear lista de dicts de pedidos (para metadata)
+    pedidos_dicts = _crear_pedidos_dicts_con_skus(df_pedidos, df_skus_con_pedido)
+    
+    print(f"[FILE] ✓ Procesados: {len(df_pedidos)} pedidos, {len(df_skus)} SKUs")
+    
+    return df_pedidos, pedidos_dicts
+
+
+def _limpiar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Limpia y normaliza datos a nivel SKU.
+    Similar a limpieza existente pero a nivel SKU.
+    """
+    df = df.copy()
+    
+    print("[FILE] Limpiando datos de SKUs")
+    
+    # CE padding
+    if "CE" in df.columns:
+        df["CE"] = df["CE"].astype(str).str.zfill(4)
+    
+    # SKU como string
+    if "SKU" in df.columns:
+        df["SKU"] = df["SKU"].astype(str).str.strip()
+    
+    # PEDIDO como string
+    if "PEDIDO" in df.columns:
+        df["PEDIDO"] = df["PEDIDO"].astype(str).str.strip()
+    
+    # Numéricos (a nivel SKU)
+    numeric_cols = [
+        "PESO", "VOL", "PALLETS", "VALOR", "VALOR_CAFE",
+        "ALTURA_FULL_PALLET", "ALTURA_PICKING"
+    ]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+    
+    # Apilabilidad (a nivel SKU)
+    apilabilidad_cols = ["BASE", "SUPERIOR", "FLEXIBLE", "NO_APILABLE", "SI_MISMO"]
+    for col in apilabilidad_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+        else:
+            df[col] = 0.0
+
+    # Flags (a nivel SKU, se agregarán con MAX)
+    flag_cols = ["VALIOSO", "PDQ", "BAJA_VU", "LOTE_DIR"]
+    for col in flag_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int).clip(0, 1)
+        else:
+            df[col] = 0
+    
+    # Chocolates (especial: SI/NO -> 1/0 para MAX, luego volver a SI/NO)
+    if "CHOCOLATES" in df.columns:
+        df["CHOCOLATES_FLAG"] = (df["CHOCOLATES"].astype(str).str.upper() == "SI").astype(int)
+    else:
+        df["CHOCOLATES_FLAG"] = 0
+    
+    # Filtros
+    df = df[
+        (df["PEDIDO"] != "") & 
+        (df["PEDIDO"].notnull()) &
+        (df["SKU"] != "") &
+        (df["SKU"].notnull())
+    ].copy()
+    
+    # Filtrar filas con pallets = 0
+    df = df[df["PALLETS"] > 0].copy()
+    
+    return df
+
+
+def _validar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Valida que los datos de SKU sean coherentes.
+    
+    ACTUALIZADO: Permite altura = 0 y categorías decimales < 1
+    """
+    print("[FILE] Validando datos de SKUs")
+    
+    errores = []
+    
+    # ✅ CAMBIO: Validar altura - puede ser 0 si es picking vacío
+    # Solo validamos que NO sea negativa
+    skus_altura_negativa = df[df["ALTURA_FULL_PALLET"] < 0]
+    if len(skus_altura_negativa) > 0:
+        errores.append(
+            f"{len(skus_altura_negativa)} SKUs con altura negativa. "
+            f"Ejemplos: {skus_altura_negativa['SKU'].head(3).tolist()}"
+        )
+    
+    # ✅ CAMBIO: Advertir (no error) si altura = 0
+    skus_altura_cero = df[df["ALTURA_FULL_PALLET"] == 0]
+    if len(skus_altura_cero) > 0:
+        print(f"[WARN] {len(skus_altura_cero)} SKUs con altura = 0 (picking vacío?). "
+              f"Ejemplos: {skus_altura_cero['SKU'].head(3).tolist()}")
+    
+    # Validar que cada SKU tenga al menos una categoría de apilabilidad
+    df["SUMA_APILABILIDAD"] = (
+        df["BASE"] + df["SUPERIOR"] + df["FLEXIBLE"] + 
+        df["NO_APILABLE"] + df["SI_MISMO"]
+    )
+    
+    skus_sin_categoria = df[df["SUMA_APILABILIDAD"] <= 0]
+    if len(skus_sin_categoria) > 0:
+        errores.append(
+            f"{len(skus_sin_categoria)} SKUs sin categoría de apilabilidad. "
+            f"Ejemplos: {skus_sin_categoria['SKU'].head(3).tolist()}"
+        )
+    
+    # Validar que suma de categorías no exceda pallets con tolerancia para decimales
+    df["EXCEDE_PALLETS"] = df["SUMA_APILABILIDAD"] > df["PALLETS"] + 0.1  # Tolerancia de 0.1
+    skus_exceden = df[df["EXCEDE_PALLETS"]]
+    
+    if len(skus_exceden) > 0:
+        print(f"[WARN] {len(skus_exceden)} SKUs donde suma de categorías excede pallets:")
+        for _, row in skus_exceden.head(5).iterrows():
+            print(f"  - SKU {row['SKU']}: suma={row['SUMA_APILABILIDAD']:.2f}, pallets={row['PALLETS']:.2f}")
+        
+        # ✅ NUEVO: Ajustar automáticamente proporcionalmente
+        for idx in skus_exceden.index:
+            pallets = df.at[idx, 'PALLETS']
+            suma = df.at[idx, 'SUMA_APILABILIDAD']
+            factor = pallets / suma
+            
+            # Escalar todas las categorías proporcionalmente
+            df.at[idx, 'BASE'] *= factor
+            df.at[idx, 'SUPERIOR'] *= factor
+            df.at[idx, 'FLEXIBLE'] *= factor
+            df.at[idx, 'NO_APILABLE'] *= factor
+            df.at[idx, 'SI_MISMO'] *= factor
+            
+            print(f"  → Ajustado SKU {df.at[idx, 'SKU']} con factor {factor:.3f}")
+    
+    df = df.drop(columns=["SUMA_APILABILIDAD", "EXCEDE_PALLETS"])
+    
+    if errores:
+        raise ValueError(f"Errores de validación:\n" + "\n".join(errores))
+    
+    return df
+
+def _agregar_skus_a_pedidos(
+    df_skus: pd.DataFrame,
+    client_config
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Agrupa SKUs por pedido según reglas de agregación.
+    
+    Reglas:
+    - SUMA: dimensiones físicas y apilabilidad
+    - MAX: flags booleanas
+    - FIRST: campos de identidad (deben ser iguales)
+    
+    Returns:
+        (df_pedidos_agregados, df_skus_con_info_pedido)
+    """
+    print("[FILE] Agregando SKUs por pedido")
+    print(f"[DEBUG] Agregando SKUs: {len(df_skus)} filas")
+    print(f"[DEBUG] Pedidos únicos en SKUs: {df_skus['PEDIDO'].nunique()}")
+
+    # Campos que se suman
+    campos_suma = [
+        "PALLETS", "PESO", "VOL", "VALOR", "VALOR_CAFE",
+        "BASE", "SUPERIOR", "FLEXIBLE", "NO_APILABLE", "SI_MISMO"
+    ]
+    
+    # Campos que se toman con MAX (flags)
+    campos_max = [
+        "VALIOSO", "PDQ", "BAJA_VU", "LOTE_DIR", "CHOCOLATES_FLAG"
+    ]
+    
+    # Campos de identidad (deben ser iguales, tomar el primero)
+    campos_identidad = ["CD", "CE", "PO"]
+    
+    # Agregar OC si existe
+    if "OC" in df_skus.columns:
+        campos_identidad.append("OC")
+    
+    # Construir diccionario de agregación
+    agg_rules = {}
+    
+    for col in campos_suma:
+        if col in df_skus.columns:
+            agg_rules[col] = "sum"
+    
+    for col in campos_max:
+        if col in df_skus.columns:
+            agg_rules[col] = "max"
+    
+    for col in campos_identidad:
+        if col in df_skus.columns:
+            agg_rules[col] = "first"
+    
+    # Agrupar por PEDIDO
+    df_pedidos = df_skus.groupby("PEDIDO", as_index=False).agg(agg_rules)
+
+    # ✅ CRÍTICO: Verificar que no se perdieron pedidos
+    pedidos_originales = set(df_skus["PEDIDO"].unique())
+    pedidos_resultantes = set(df_pedidos["PEDIDO"].unique())
+    pedidos_perdidos = pedidos_originales - pedidos_resultantes
+    
+    if pedidos_perdidos:
+        print(f"[ERROR] ❌ Se perdieron {len(pedidos_perdidos)} pedidos en agregación:")
+        print(f"        Ejemplos: {list(pedidos_perdidos)[:5]}")
+    else:
+        print(f"[DEBUG] ✅ Todos los pedidos se preservaron")
+    
+    # Convertir CHOCOLATES_FLAG de vuelta a SI/NO
+    if "CHOCOLATES_FLAG" in df_pedidos.columns:
+        df_pedidos["CHOCOLATES"] = df_pedidos["CHOCOLATES_FLAG"].apply(
+            lambda x: "SI" if x == 1 else "NO"
+        )
+        df_pedidos = df_pedidos.drop(columns=["CHOCOLATES_FLAG"])
+    
+    # Validar coherencia de campos de identidad
+    _validar_coherencia_identidad(df_skus, campos_identidad)
+    
+    # Guardar df_skus con info del pedido agregado para referencia
+    df_skus_enriquecido = df_skus.copy()
+    
+    return df_pedidos, df_skus_enriquecido
+
+
+def _validar_coherencia_identidad(df: pd.DataFrame, campos: List[str]):
+    """
+    Valida que los campos de identidad sean consistentes dentro de cada pedido.
+    """
+    print("[FILE] Validando coherencia de campos de identidad")
+    
+    for campo in campos:
+        if campo not in df.columns:
+            continue
+        
+        # Contar valores únicos por pedido
+        inconsistencias = df.groupby("PEDIDO")[campo].nunique()
+        pedidos_inconsistentes = inconsistencias[inconsistencias > 1]
+        
+        if len(pedidos_inconsistentes) > 0:
+            ejemplos = pedidos_inconsistentes.head(3)
+            raise ValueError(
+                f"Campo '{campo}' tiene valores inconsistentes dentro de pedidos. "
+                f"Ejemplos de pedidos afectados: {ejemplos.index.tolist()}"
+            )
+
+
+def _crear_pedidos_dicts_con_skus(
+    df_pedidos: pd.DataFrame,
+    df_skus: pd.DataFrame
+) -> List[Dict[str, Any]]:
+    """
+    Crea lista de diccionarios de pedidos con metadata completa.
+    Incluye referencia a los SKUs que componen cada pedido.
+    """
+    print("[FILE] Creando diccionarios de pedidos")
+    
+    pedidos_dicts = []
+    
+    for _, row_pedido in df_pedidos.iterrows():
+        pedido_id = row_pedido["PEDIDO"]
+        
+        # Obtener SKUs de este pedido
+        skus_pedido = df_skus[df_skus["PEDIDO"] == pedido_id]
+        
+        # Construir dict del pedido
+        pedido_dict = {
+            "PEDIDO": pedido_id,
+            **row_pedido.to_dict(),
+            "_skus": skus_pedido.to_dict("records")  # Guardar SKUs como metadata
+        }
+        
+        pedidos_dicts.append(pedido_dict)
+    
+    return pedidos_dicts
+
+
+# ============================================================================
+# PROCESAMIENTO LEGACY (EXISTENTE, sin cambios mayores)
+# ============================================================================
+
+def _process_dataframe_legacy(
+    df_raw: pd.DataFrame,
+    client_config,
+    cliente: str,
+    venta: str
+) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
+    """
+    Procesa Excel en formato legacy (sin SKUs).
+    Mantiene comportamiento original.
+    """
+    print("[FILE] Procesando datos en formato legacy (sin SKUs)")
+    
+    # Limpieza existente (mantener código actual)
+    df = df_raw.copy()
+    
+    # CE padding
+    if "CE" in df.columns:
+        df["CE"] = df["CE"].astype(str).str.zfill(4)
+    
+    # Numéricos
+    numeric_cols = ["PESO", "VOL", "PALLETS", "VALOR", "VALOR_CAFE"]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+    
+    if "PALLETS_REAL" in df.columns:
+        df["PALLETS_REAL"] = pd.to_numeric(df["PALLETS_REAL"], errors="coerce")
+    
+    # Apilabilidad
+    apilabilidad_cols = ["BASE", "SUPERIOR", "FLEXIBLE", "NO_APILABLE", "SI_MISMO"]
+    for col in apilabilidad_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+        else:
+            df[col] = 0.0
+    
+    # Flags
+    flag_cols = ["VALIOSO", "PDQ", "BAJA_VU", "LOTE_DIR"]
+    for col in flag_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int).clip(0, 1)
+        else:
+            df[col] = 0
+    
+    # Filtros
+    df = df[
+        (df["PEDIDO"] != "") & 
+        (df["PEDIDO"].notnull())
+    ].copy()
+    
+    df = df.drop_duplicates(subset="PEDIDO", keep=False)
+    df = df[df["PALLETS"] != 0].copy()
+    
+    # OC y PALLETS_REAL
+    if "OC" in df.columns:
+        df["OC"] = df["OC"].replace({"": None, "nan": None, "NaN": None, "none": None})
+    
+    if "PALLETS_REAL" in df.columns:
+        df.loc[df["PALLETS_REAL"].isna(), "PALLETS_REAL"] = None
+    
+    # Crear pedidos dicts (metadata)
+    standard_cols = {
+        "PEDIDO", "CD", "CE", "PO", "PESO", "VOL", "PALLETS", "PALLETS_REAL",
+        "VALOR", "VALOR_CAFE", "OC", "CHOCOLATES", "VALIOSO", "PDQ",
+        "BAJA_VU", "LOTE_DIR", "BASE", "SUPERIOR", "FLEXIBLE", 
+        "NO_APILABLE", "SI_MISMO"
+    }
+    metadata_cols = [c for c in df.columns if c not in standard_cols]
+    
+    pedidos_dicts = []
+    for _, row in df.iterrows():
+        pedido_dict = {"PEDIDO": str(row["PEDIDO"])}
+        for col in metadata_cols:
+            if col in row:
+                pedido_dict[col] = row[col]
+        pedidos_dicts.append(pedido_dict)
+    
+    print(f"[FILE] ✓ Procesados {len(df)} pedidos (legacy)")
+    
+    return df, pedidos_dicts
+
+
+# ============================================================================
+# HELPERS DE CACHE (sin cambios)
+# ============================================================================
 
 def _make_cache_sig(content: bytes, sheet_name: str, cols: List[str]) -> str:
     h = hashlib.md5()
@@ -30,174 +612,9 @@ def _cache_path(sig: str) -> str:
     return os.path.join(base, f"excel_cache_{sig}.parquet")
 
 
-# === Lectura de Excel (sin cambios) ===
-
-def read_file(content: bytes, filename: str, client_config, venta: str) -> pd.DataFrame:
-    """Lee archivo Excel y devuelve DataFrame con columnas mapeadas"""
-    sheet_name = venta.upper()
-    header_row = client_config.HEADER_ROW
-
-    mapping = build_column_mapping(client_config, venta)
-    wanted_cols = list(mapping.values())
-
-    try:
-        print("Reading file")
-        if not filename.endswith((".xlsx", ".xlsm")):
-            raise ValueError("Formato de archivo no soportado")
-
-        xls = pd.ExcelFile(BytesIO(content), engine="openpyxl")
-        header_only = xls.parse(sheet_name=sheet_name, header=header_row, nrows=0)
-
-        available_cols = [c for c in wanted_cols if c in header_only.columns]
-        missing_cols = [c for c in wanted_cols if c not in header_only.columns]
-        if missing_cols:
-            print(f"[WARN] Columnas ausentes (se omiten): {missing_cols}")
-
-        # Cache parquet
-        sig = _make_cache_sig(content, sheet_name, available_cols)
-        cpath = _cache_path(sig)
-        if os.path.exists(cpath) and os.getenv("EXCEL_CACHE_DISABLE", "false").lower() != "true":
-            try:
-                return pd.read_parquet(cpath)
-            except Exception as e:
-                print(f"[WARN] FallÃ³ leer cache parquet ({e}); releyendo Excelâ€¦")
-
-        # Tipos para evitar inferencia costosa
-        text_internals = {"PEDIDO", "CD", "CE", "OC"}
-        dtype_hint: Dict[str, str] = {}
-        for internal in text_internals:
-            excel_name = mapping.get(internal)
-            if excel_name in available_cols:
-                dtype_hint[excel_name] = "string"
-
-        df = xls.parse(
-            sheet_name=sheet_name,
-            header=header_row,
-            usecols=available_cols,
-            dtype=dtype_hint,
-        )
-
-        if os.getenv("EXCEL_CACHE_DISABLE", "false").lower() != "true":
-            try:
-                df.to_parquet(cpath, index=False)
-            except Exception as e:
-                print(f"[WARN] No se pudo escribir cache parquet ({e}).")
-        print("Leido")
-        return df
-
-    except Exception as e:
-        print(f"[ERROR] Al leer el Excel: {e}")
-        raise
-
-
-# === Transformaciones ===
-
-def build_column_mapping(client_config, venta: str) -> Dict[str, str]:
-    """Construye mapeo completo: internal_name -> excel_column"""
-    print("Transformado nombres columnas")
-    col_map = client_config.COLUMN_MAPPING[venta]
-    extra_map = client_config.EXTRA_MAPPING
-    return {**extra_map, **col_map}
-
-
 def warn_missing_columns(df: pd.DataFrame, mapping: Dict[str, str]) -> List[str]:
     """Advierte sobre columnas faltantes"""
     missing = [excel_name for excel_name in mapping.values() if excel_name not in df.columns]
     if missing:
         print(f"[WARN] Columnas en Excel no encontradas (se omiten): {missing}")
     return missing
-
-
-def process_dataframe(
-    df_full: pd.DataFrame, 
-    client_config, 
-    cliente: str, 
-    venta: str
-) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
-    """
-    VERSIÃ“N OPTIMIZADA: Usa operaciones vectorizadas de pandas.
-    """
-    mapping = build_column_mapping(client_config, venta)
-    rename_map = {excel: internal for internal, excel in mapping.items() if excel in df_full.columns}
-    warn_missing_columns(df_full, mapping)
-    print("Renombrando columnas")
-    # Renombrar columnas
-    df_raw = df_full[list(rename_map.keys())].rename(columns=rename_map).copy()
-    
-    needed_cols = list(rename_map.values())
-    missing_internal = [c for c in needed_cols if c not in df_raw.columns]
-    if missing_internal:
-        raise ValueError(f"[ERROR] Columnas requeridas faltantes: {missing_internal}")
-
-    # ===== LIMPIEZA Y NORMALIZACIÃ“N (VECTORIZADO) =====
-    print("Limpieza y normalizacion")
-    # CE padding
-    if "CE" in df_raw.columns:
-        df_raw["CE"] = df_raw["CE"].astype(str).str.zfill(4)
-    
-    # NumÃ©ricos
-    numeric_cols = ["PESO", "VOL", "PALLETS", "VALOR", "VALOR_CAFE"]
-    for col in numeric_cols:
-        if col in df_raw.columns:
-            df_raw[col] = pd.to_numeric(df_raw[col], errors="coerce").fillna(0)
-    
-    if "PALLETS_REAL" in df_raw.columns:
-        df_raw["PALLETS_REAL"] = pd.to_numeric(df_raw["PALLETS_REAL"], errors="coerce")
-    
-    # Apilabilidad
-    apilabilidad_cols = ["BASE", "SUPERIOR", "FLEXIBLE", "NO_APILABLE", "SI_MISMO"]
-    for col in apilabilidad_cols:
-        if col in df_raw.columns:
-            df_raw[col] = pd.to_numeric(df_raw[col], errors="coerce").fillna(0)
-        else:
-            df_raw[col] = 0.0
-    
-    # Flags
-    flag_cols = ["VALIOSO", "PDQ", "BAJA_VU", "LOTE_DIR"]
-    for col in flag_cols:
-        if col in df_raw.columns:
-            df_raw[col] = pd.to_numeric(df_raw[col], errors="coerce").fillna(0).astype(int).clip(0, 1)
-        else:
-            df_raw[col] = 0
-    
-    # Filtros
-    df_raw = df_raw[
-        (df_raw["PEDIDO"] != "") & 
-        (df_raw["PEDIDO"].notnull())
-    ].copy()
-    
-    df_raw = df_raw.drop_duplicates(subset="PEDIDO", keep=False)
-    df_raw = df_raw[df_raw["PALLETS"] != 0].copy()
-    
-    # ===== CONVERSIÃ“N BATCH (NO LOOP) =====
-    print("Conversion batch")
-    # Convertir OC y PALLETS_REAL a None donde sea necesario
-    if "OC" in df_raw.columns:
-        df_raw["OC"] = df_raw["OC"].replace({"": None, "nan": None, "NaN": None, "none": None})
-    
-    if "PALLETS_REAL" in df_raw.columns:
-        df_raw.loc[df_raw["PALLETS_REAL"].isna(), "PALLETS_REAL"] = None
-    
-    # Extraer columnas metadata (todo lo que no es estándar)
-    standard_cols = {
-        "PEDIDO", "CD", "CE", "PO", "PESO", "VOL", "PALLETS", "PALLETS_REAL",
-        "VALOR", "VALOR_CAFE", "OC", "CHOCOLATES", "VALIOSO", "PDQ",
-        "BAJA_VU", "LOTE_DIR", "BASE", "SUPERIOR", "FLEXIBLE", 
-        "NO_APILABLE", "SI_MISMO"
-    }
-    metadata_cols = [c for c in df_raw.columns if c not in standard_cols]
-    print("Crear pedidos con list comprehension")
-    
-    # Crear lista de diccionarios para metadata (una sola pasada)
-    pedidos_dicts = []
-    for _, row in df_raw.iterrows():
-        pedido_dict = {"PEDIDO": str(row["PEDIDO"])}
-        # Agregar toda la metadata
-        for col in metadata_cols:
-            if col in row:
-                pedido_dict[col] = row[col]
-        pedidos_dicts.append(pedido_dict)
-    
-    print(f"[INFO] Procesados {len(df_raw)} pedidos válidos de {len(df_full)} filas originales")
-    print("Fin procesamiento datos")
-    return df_raw, pedidos_dicts

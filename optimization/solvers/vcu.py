@@ -181,7 +181,7 @@ def optimizar_grupo_vcu(
     if estado in ('OPTIMAL', 'FEASIBLE'):
         resultado = construir_camiones_desde_solver(
             solver, x, y_truck, pedidos, pedidos_ids, grupo_cfg,
-            capacidad, datos, n_cam, 'vcu'
+            capacidad, datos, n_cam, 'vcu', client_config=client_config
         )
         # Agregar inviables a excluidos
         if pedidos_inviables:

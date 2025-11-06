@@ -14,7 +14,7 @@ import pandas as pd
 
 from services.file_processor import read_file, process_dataframe
 
-from models.domain import Pedido, TruckCapacity, ConfiguracionGrupo
+from models.domain import Pedido, TruckCapacity, ConfiguracionGrupo, SKU
 from models.enums import TipoCamion
 from optimization.solvers.vcu import optimizar_grupo_vcu
 from optimization.solvers.binpacking import optimizar_grupo_binpacking
@@ -172,9 +172,13 @@ def _preprocesar_datos(
     return pedidos_objetos, pedidos_dicts
 
 
+# En orchestrator.py, reemplazar la función _dataframe_a_pedidos
+
 def _dataframe_a_pedidos(df: pd.DataFrame, pedidos_dicts: List[Dict]) -> List[Pedido]:
     """
     Convierte DataFrame procesado a lista de objetos Pedido.
+    
+    NUEVO: Incluye construcción de objetos SKU si existen en metadata.
     """
     pedidos_map = {p["PEDIDO"]: p for p in pedidos_dicts}
     pedidos = []
@@ -183,6 +187,7 @@ def _dataframe_a_pedidos(df: pd.DataFrame, pedidos_dicts: List[Dict]) -> List[Pe
         pedido_id = row["PEDIDO"]
         metadata = pedidos_map.get(pedido_id, {})
         
+        # Construir pedido base
         pedido = Pedido(
             pedido=str(pedido_id),
             cd=str(row["CD"]),
@@ -205,13 +210,47 @@ def _dataframe_a_pedidos(df: pd.DataFrame, pedidos_dicts: List[Dict]) -> List[Pe
             flexible=float(row.get("FLEXIBLE", 0)),
             no_apilable=float(row.get("NO_APILABLE", 0)),
             si_mismo=float(row.get("SI_MISMO", 0)),
+            skus=[],
             metadata=metadata
         )
         
+        # NUEVO: Construir SKUs si existen en metadata
+        skus_data = metadata.get("_skus", [])
+
+        if skus_data:
+            for sku_row in skus_data:
+                try:
+                    sku = SKU(
+                        sku_id=str(sku_row["SKU"]),
+                        pedido_id=pedido_id,
+                        cantidad_pallets=float(sku_row["PALLETS"]),
+                        altura_full_pallet_cm=float(sku_row["ALTURA_FULL_PALLET"]),
+                        altura_picking_cm=float(sku_row.get("ALTURA_PICKING", 0)) if sku_row.get("ALTURA_PICKING", 0) > 0 else None,
+                        peso_kg=float(sku_row.get("PESO", 0)),
+                        volumen_m3=float(sku_row.get("VOL", 0)),
+                        valor=float(sku_row.get("VALOR", 0)),
+                        base=float(sku_row.get("BASE", 0)),
+                        superior=float(sku_row.get("SUPERIOR", 0)),
+                        flexible=float(sku_row.get("FLEXIBLE", 0)),
+                        no_apilable=float(sku_row.get("NO_APILABLE", 0)),
+                        si_mismo=float(sku_row.get("SI_MISMO", 0)),
+                        descripcion=sku_row.get("descripcion")
+                    )
+                    
+                    pedido.skus.append(sku)
+                except Exception as e:
+                    print(f"[ERROR] ❌ Error construyendo SKU para pedido {pedido_id}: {e}")
+                    print(f"        Datos SKU: {sku_row}")
         pedidos.append(pedido)
+
+    for p in pedidos:
+        if p.tiene_skus:
+            pallets_skus = sum(sku.cantidad_pallets for sku in p.skus)
+            if abs(pallets_skus - p.pallets) > 0.1:
+                print(f"[WARN] ⚠️ Pedido {p.pedido}: pallets agregado ({p.pallets:.2f}) != suma SKUs ({pallets_skus:.2f})")
+
     
     return pedidos
-
 
 def _ejecutar_optimizacion_completa(
     pedidos_objetos: List[Pedido],
@@ -409,7 +448,6 @@ def _optimizar_grupos_vcu(
     return resultados
 
 
-
 def _optimizar_grupos_binpacking(
     grupos: List[Tuple],
     client_config,
@@ -509,6 +547,7 @@ def _consolidar_resultados(
         "pedidos_no_incluidos": pedidos_no_incluidos
     }
 
+
 def _aplicar_overrides_vcu(config, vcuTarget: Any, vcuTargetBH: Any):
     """
     Aplica overrides de VCU mínimo desde el frontend.
@@ -599,7 +638,7 @@ def _etiquetar_bh_binpacking(
             conversiones += 1
 
     if conversiones > 0:
-        print(f"[BINPACKING] Auto-etiquetados {conversiones} camiones como BH (VCU en, {bh_vcu_max:.2f}])")
+        print(f"[BINPACKING] Auto-etiquetados {conversiones} camiones como BH")
 
     
     return resultado

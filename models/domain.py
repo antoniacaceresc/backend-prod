@@ -1,8 +1,10 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from .enums import TipoRuta, TipoCamion
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, TYPE_CHECKING
 
+if TYPE_CHECKING:
+    from models.stacking import FragmentoSKU
 
 @dataclass
 class TruckCapacity:
@@ -16,6 +18,7 @@ class TruckCapacity:
     max_pallets: int
     levels: int = 2
     vcu_min: float = 0.85
+    altura_cm: float = 270
     
     @classmethod
     def from_config(cls, config_dict: Dict[str, Any]) -> TruckCapacity:
@@ -26,7 +29,8 @@ class TruckCapacity:
             max_positions=int(config_dict.get('max_positions', 30)),
             max_pallets=int(config_dict.get('max_pallets', 60)),
             levels=int(config_dict.get('levels', 2)),
-            vcu_min=float(config_dict.get('vcu_min', 0.85))
+            vcu_min=float(config_dict.get('vcu_min', 0.85)),
+            altura_cm=float(config_dict.get('altura_cm', 270))
         )
     
     def calcular_vcu(self, peso: float, volumen: float) -> tuple[float, float, float]:
@@ -35,6 +39,154 @@ class TruckCapacity:
         vcu_vol = volumen / self.cap_volume if self.cap_volume > 0 else 0.0
         vcu_max = max(vcu_peso, vcu_vol)
         return vcu_peso, vcu_vol, vcu_max
+
+
+@dataclass
+class SKU:
+    """
+    Representa un SKU individual dentro de un pedido.
+    Mapea a una fila del Excel con datos de SKU.
+    """
+    # Identificadores
+    sku_id: str
+    pedido_id: str  # Referencia al pedido padre
+    
+    # Dimensiones físicas
+    cantidad_pallets: float  # Columna: "Pal. Conf." (a nivel SKU)
+    altura_full_pallet_cm: float  # Columna: "Altura full pallet"
+    altura_picking_cm: Optional[float] = None  # Columna: "Altura picking"
+    peso_kg: float = 0.0  # Columna: "Peso neto Conf." (a nivel SKU)
+    volumen_m3: float = 0.0  # Columna: "Vol. Conf." (a nivel SKU)
+    valor: float = 0.0  # Columna: "$$ Conf." (a nivel SKU)
+    
+    # Apilabilidad (en pallets, no booleano)
+    # Estas columnas indican CUÁNTOS pallets de este SKU tienen esta característica
+    base: float = 0.0              # Columna: "Base"
+    superior: float = 0.0          # Columna: "Superior"
+    flexible: float = 0.0          # Columna: "Flexible"
+    no_apilable: float = 0.0       # Columna: "No Apilable"
+    si_mismo: float = 0.0          # Columna: "Apilable por si mismo"
+    
+    # Límites de apilamiento (si aplica)
+    max_altura_apilable_cm: Optional[float] = None  # Calculado o configurado
+    
+    # Metadata
+    descripcion: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    
+    @property
+    def altura_efectiva_cm(self) -> float:
+        """
+        Altura efectiva a usar: picking si existe, sino full pallet.
+        """
+        if self.altura_picking_cm is not None and self.altura_picking_cm > 0:
+            return self.altura_picking_cm
+        return self.altura_full_pallet_cm
+    
+    @property
+    def es_picking(self) -> bool:
+        """Indica si este SKU usa altura de picking"""
+        return (
+            self.altura_picking_cm is not None and 
+            self.altura_picking_cm > 0 and
+            self.altura_picking_cm < self.altura_full_pallet_cm
+        )
+    
+    @property
+    def categoria_apilamiento_dominante(self) -> str:
+        """
+        Determina la categoría de apilamiento dominante del SKU.
+        Prioridad: NO_APILABLE > BASE > SUPERIOR > SI_MISMO > FLEXIBLE
+        
+        Returns:
+            Nombre de la categoría ("no_apilable", "base", etc.)
+        """
+        if self.no_apilable > 0:
+            return "no_apilable"
+        if self.base > 0:
+            return "base"
+        if self.superior > 0:
+            return "superior"
+        if self.si_mismo > 0:
+            return "si_mismo"
+        if self.flexible > 0:
+            return "flexible"
+        
+        # Default: flexible
+        return "flexible"
+    
+    def to_fragmento(self, fraccion: float = 1.0) -> FragmentoSKU:
+        """
+        Convierte el SKU a un FragmentoSKU para validación.
+        
+        Args:
+            fraccion: Porción del SKU que representa (default 1.0 = completo)
+        
+        Returns:
+            FragmentoSKU con los datos del SKU
+        """
+        from models.stacking import FragmentoSKU, CategoriaApilamiento
+        
+        categoria = CategoriaApilamiento(self.categoria_apilamiento_dominante)
+        
+        return FragmentoSKU(
+            sku_id=self.sku_id,
+            pedido_id=self.pedido_id,
+            fraccion=fraccion,
+            altura_cm=self.altura_efectiva_cm * fraccion,
+            peso_kg=self.peso_kg * fraccion,
+            volumen_m3=self.volumen_m3 * fraccion,
+            categoria=categoria,
+            max_altura_apilable_cm=self.max_altura_apilable_cm,
+            descripcion=self.descripcion,
+            es_picking=self.es_picking
+        )
+    
+    def validar_integridad(self) -> tuple[bool, Optional[str]]:
+        """
+        Valida que el SKU sea coherente.
+        
+        REGLA: Al menos UNA altura debe ser > 0 (full pallet O picking)
+        """
+        if self.cantidad_pallets <= 0:
+            return False, f"SKU {self.sku_id}: cantidad_pallets debe ser > 0"
+        
+        # ✅ VALIDAR: Al menos una altura debe existir
+        tiene_full = self.altura_full_pallet_cm > 0
+        tiene_picking = self.altura_picking_cm is not None and self.altura_picking_cm > 0
+        
+        if not tiene_full and not tiene_picking:
+            return False, (
+                f"SKU {self.sku_id}: debe tener al menos una altura válida "
+                f"(full pallet o picking)"
+            )
+        
+        # Validar que alturas no sean negativas
+        if self.altura_full_pallet_cm < 0:
+            return False, f"SKU {self.sku_id}: altura_full_pallet no puede ser negativa"
+        
+        if self.altura_picking_cm is not None and self.altura_picking_cm < 0:
+            return False, f"SKU {self.sku_id}: altura_picking no puede ser negativa"
+        
+        # Validar categorías de apilabilidad
+        suma_categorias = (
+            self.base + self.superior + self.flexible + 
+            self.no_apilable + self.si_mismo
+        )
+        
+        if suma_categorias <= 0:
+            return False, (
+                f"SKU {self.sku_id}: debe tener al menos una categoría de apilabilidad > 0"
+            )
+        
+        # Tolerancia para decimales
+        if suma_categorias > self.cantidad_pallets + 0.1:
+            return False, (
+                f"SKU {self.sku_id}: suma de categorías ({suma_categorias:.2f}) "
+                f"excede cantidad de pallets ({self.cantidad_pallets:.2f})"
+            )
+        
+        return True, None
 
 
 @dataclass
@@ -84,16 +236,36 @@ class Pedido:
     tipo_camion: Optional[str] = None
     
     # ========== Metadata extra ==========
+    skus: List[SKU] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    
+    @property
+    def tiene_skus(self) -> bool:
+        """Indica si el pedido tiene datos de SKU detallados"""
+        return len(self.skus) > 0
+    
+    @property
+    def pallets_calculado_desde_skus(self) -> float:
+        """
+        Pallets calculados desde SKUs.
+        Solo usar si tiene_skus == True.
+        """
+        return sum(sku.cantidad_pallets for sku in self.skus)
     
     @property
     def pallets_capacidad(self) -> float:
         """
         Pallets que cuentan para capacidad del camión.
         - Cencosud usa PALLETS_REAL
-        - Otros clientes usan PALLETS
+        - Otros clientes usan PALLETS (o calculado desde SKUs)
         """
-        return self.pallets_real if self.pallets_real is not None else self.pallets
+        if self.pallets_real is not None:
+            return self.pallets_real
+        
+        if self.tiene_skus:
+            return self.pallets_calculado_desde_skus
+        
+        return self.pallets
     
     @property
     def esta_asignado(self) -> bool:
@@ -120,7 +292,57 @@ class Pedido:
         self.grupo = None
         self.tipo_ruta = None
         self.tipo_camion = None
-    
+
+    def validar_coherencia_skus(self) -> tuple[bool, List[str]]:
+        """
+        Valida que los datos agregados del pedido sean coherentes
+        con la suma de los SKUs.
+        
+        Returns:
+            (es_valido, lista_errores)
+        """
+        if not self.tiene_skus:
+            return True, []
+        
+        errores = []
+        tolerancia = 0.1  # Tolerancia para redondeo
+        
+        # Validar pallets
+        pallets_skus = self.pallets_calculado_desde_skus
+        if abs(pallets_skus - self.pallets) > tolerancia:
+            errores.append(
+                f"Pedido {self.pedido}: pallets agregado ({self.pallets:.2f}) != "
+                f"suma SKUs ({pallets_skus:.2f})"
+            )
+        
+        # Validar peso
+        peso_skus = sum(sku.peso_kg for sku in self.skus)
+        if abs(peso_skus - self.peso) > tolerancia:
+            errores.append(
+                f"Pedido {self.pedido}: peso agregado ({self.peso:.2f}) != "
+                f"suma SKUs ({peso_skus:.2f})"
+            )
+        
+        # Validar volumen
+        vol_skus = sum(sku.volumen_m3 for sku in self.skus)
+        if abs(vol_skus - self.volumen) > tolerancia:
+            errores.append(
+                f"Pedido {self.pedido}: volumen agregado ({self.volumen:.2f}) != "
+                f"suma SKUs ({vol_skus:.2f})"
+            )
+        
+        # Validar apilabilidad
+        base_skus = sum(sku.base for sku in self.skus)
+        if abs(base_skus - self.base) > tolerancia:
+            errores.append(
+                f"Pedido {self.pedido}: base agregado ({self.base:.2f}) != "
+                f"suma SKUs ({base_skus:.2f})"
+            )
+        
+        # Similar para otras categorías...
+        
+        return len(errores) == 0, errores
+
     @classmethod
     def from_pandas_row(cls, row: Dict[str, Any]) -> Pedido:
         """
@@ -175,6 +397,7 @@ class Pedido:
             si_mismo=float(row.get("SI_MISMO", 0)),
             
             # Metadata (todo lo que no usamos arriba)
+            skus = [],
             metadata={
                 k: v for k, v in row.items() 
                 if k not in {
@@ -304,6 +527,8 @@ class Camion:
     _vcu_peso: Optional[float] = field(default=None, repr=False)
     _vcu_max: Optional[float] = field(default=None, repr=False)
     _pos_total: Optional[float] = field(default=None, repr=False)
+    
+    metadata: Optional[Dict[str, Any]] = field(default=None, repr=False)
     
     def __post_init__(self):
         # Convertir strings a enums si es necesario
@@ -449,8 +674,7 @@ class Camion:
         )
         self.pedidos.append(pedido)
         self._invalidar_cache()
-    
-    # services/models.py (actualizar método agregar_pedidos en clase Camion)
+
 
     def agregar_pedidos(self, pedidos: List[Pedido]):
         """
@@ -620,39 +844,49 @@ class Camion:
         
         return True
         
-        # ============ EXPORTACIÓN ============
-        
+    # ============ EXPORTACIÓN ============    
     def to_api_dict(self) -> Dict[str, Any]:
-        """
-        Convierte a formato API (diccionario).
-        SOLO se usa al devolver datos al frontend.
-        """
-        return {
-                "id": self.id,
-                "numero": self.numero,
-                "grupo": self.grupo,
-                "tipo_ruta": self.tipo_ruta.value,
-                "tipo_camion": self.tipo_camion.value,
-                "cd": self.cd,
-                "ce": self.ce,
-                "pedidos": [p.to_api_dict(self.capacidad) for p in self.pedidos],
-                "vcu_vol": self.vcu_vol,
-                "vcu_peso": self.vcu_peso,
-                "vcu_max": self.vcu_max,
-                "pallets_conf": self.pallets_conf,
-                "pos_total": self.pos_total,
-                "valor_total": self.valor_total,
-                "valor_cafe": self.valor_cafe,
-                "chocolates": "SI" if self.tiene_chocolates else "NO",
-                "skus_valiosos": self.tiene_valiosos,
-                "pdq": self.tiene_pdq,
-                "baja_vu": self.tiene_baja_vu,
-                "lote_dir": self.tiene_lote_dir,
-                "flujo_oc": self.flujo_oc,
-                "can_switch_tipo_camion": self.can_switch_tipo_camion,
-                "opciones_tipo_camion": self.opciones_tipo_camion,
-         }
+        """Convierte a formato API (diccionario)."""
+        result = {
+            "id": self.id,
+            "numero": self.numero,
+            "grupo": self.grupo,
+            "tipo_ruta": self.tipo_ruta.value,
+            "tipo_camion": self.tipo_camion.value,
+            "cd": self.cd,
+            "ce": self.ce,
+            "pedidos": [p.to_api_dict(self.capacidad) for p in self.pedidos],
+            "vcu_vol": self.vcu_vol,
+            "vcu_peso": self.vcu_peso,
+            "vcu_max": self.vcu_max,
+            "pallets_conf": self.pallets_conf,
+            "pos_total": self.pos_total,
+            "valor_total": self.valor_total,
+            "valor_cafe": self.valor_cafe,
+            "chocolates": "SI" if self.tiene_chocolates else "NO",
+            "skus_valiosos": self.tiene_valiosos,
+            "pdq": self.tiene_pdq,
+            "baja_vu": self.tiene_baja_vu,
+            "lote_dir": self.tiene_lote_dir,
+            "flujo_oc": self.flujo_oc,
+            "can_switch_tipo_camion": self.can_switch_tipo_camion,
+            "opciones_tipo_camion": self.opciones_tipo_camion,
+        }
         
+        # ✅ AGREGAR: Incluir información de validación si existe
+        if self.metadata:
+            if 'altura_validada' in self.metadata:
+                result['altura_validada'] = self.metadata['altura_validada']
+            
+            if 'errores_validacion' in self.metadata:
+                result['errores_validacion'] = self.metadata['errores_validacion']
+            
+            if 'layout_info' in self.metadata:
+                result['layout_info'] = self.metadata['layout_info']
+        
+        return result
+
+
     def to_api_dict_fast(self) -> Dict[str, Any]:
         """
         Versión optimizada: usa VCU cacheado.
@@ -695,7 +929,6 @@ class Camion:
                 "can_switch_tipo_camion": self.can_switch_tipo_camion,
                 "opciones_tipo_camion": self.opciones_tipo_camion,
         }
-
 
 
 @dataclass
@@ -767,6 +1000,39 @@ class EstadoOptimizacion:
         """Valor total de todos los pedidos asignados"""
         return sum(c.valor_total for c in self.camiones)
     
+    @property
+    def camiones_validos(self) -> List[Camion]:
+        """Camiones que pasaron validación de altura"""
+        return [
+            c for c in self.camiones
+            if c.metadata and c.metadata.get('altura_validada') == True
+        ]
+    
+    @property
+    def camiones_invalidos(self) -> List[Camion]:
+        """Camiones que NO pasaron validación de altura"""
+        return [
+            c for c in self.camiones
+            if c.metadata and c.metadata.get('altura_validada') == False
+        ]
+    
+    @property
+    def camiones_no_validados(self) -> List[Camion]:
+        """Camiones sin validación (legacy sin SKUs)"""
+        return [
+            c for c in self.camiones
+            if not c.metadata or c.metadata.get('altura_validada') is None
+        ]
+    
+    @property
+    def tasa_validacion(self) -> float:
+        """Porcentaje de camiones válidos (sobre los que fueron validados)"""
+        validados = self.camiones_validos + self.camiones_invalidos
+        if not validados:
+            return 0.0
+        return (len(self.camiones_validos) / len(validados)) * 100
+    
+
     # ============ MÉTODOS ============
     
     def get_capacidad_para_tipo(self, tipo_camion: TipoCamion) -> TruckCapacity:
@@ -776,14 +1042,10 @@ class EstadoOptimizacion:
         return self.capacidad_normal
     
     def to_api_dict(self) -> Dict[str, Any]:
-        """
-        Convierte a formato API completo con estadísticas.
-        SOLO se usa al devolver datos al frontend.
-        """
-        return {
+        base_result = {
             "camiones": [c.to_api_dict() for c in self.camiones],
             "pedidos_no_incluidos": [
-                p.to_api_dict(self.capacidad_normal) 
+                p.to_api_dict(self.capacidad_normal)
                 for p in self.pedidos_no_incluidos
             ],
             "estadisticas": {
@@ -798,7 +1060,22 @@ class EstadoOptimizacion:
                 "valorizado": self.valorizado,
             }
         }
-
+        
+        # Estadísticas de validación
+        total_validos = len(self.camiones_validos)
+        total_invalidos = len(self.camiones_invalidos)
+        total_no_validados = len(self.camiones_no_validados)
+        
+        if total_validos > 0 or total_invalidos > 0:
+            base_result["estadisticas"]["validacion"] = {
+                "camiones_validos": total_validos,
+                "camiones_invalidos": total_invalidos,
+                "camiones_no_validados": total_no_validados,
+                "tasa_validacion": round(self.tasa_validacion, 2),
+            }
+        
+        return base_result
+    
 
 @dataclass
 class ConfiguracionGrupo:

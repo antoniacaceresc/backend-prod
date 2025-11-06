@@ -104,13 +104,13 @@ def optimizar_grupo_binpacking(
     status_map = {cp_model.OPTIMAL: 'OPTIMAL', cp_model.FEASIBLE: 'FEASIBLE'}
     estado = status_map.get(resultado, 'NO_SOLUTION')
     
-    print(f"[TIMING] CP-SAT (Bin) grupo {grupo_cfg.id}: {t1 - t0:.3f}s (lÃ­mite: {tiempo_max_seg}s), estado: {estado}")
+    print(f"[TIMING] CP-SAT (Bin) grupo {grupo_cfg.id}: {t1 - t0:.3f}s (límite: {tiempo_max_seg}s), estado: {estado}")
     
     # Construir salida
     if estado in ('OPTIMAL', 'FEASIBLE'):
         return construir_camiones_desde_solver(
             solver, x, y_truck, pedidos, pedidos_ids, grupo_cfg,
-            capacidad, datos, n_cam, 'binpacking'
+            capacidad, datos, n_cam, 'binpacking', client_config=client_config
         )
     else:
         return {

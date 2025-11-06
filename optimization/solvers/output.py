@@ -22,7 +22,8 @@ def construir_camiones_desde_solver(
     capacidad: TruckCapacity,
     datos: Dict,
     n_cam: int,
-    modo: str
+    modo: str,
+    client_config=None
 ) -> Dict[str, Any]:
     """
     Construye lista de camiones desde la solución del solver.
@@ -78,7 +79,8 @@ def construir_camiones_desde_solver(
             ce=grupo_cfg.ce,
             grupo=grupo_cfg.id,
             capacidad=capacidad,
-            pedidos=pedidos_camion
+            pedidos=pedidos_camion,
+            metadata={} 
         )
         
         # Calcular posiciones de apilabilidad
@@ -89,6 +91,10 @@ def construir_camiones_desde_solver(
         
         camiones.append(camion)
     
+    # Validar camiones si está habilitado
+    if client_config and getattr(client_config, 'VALIDAR_ALTURA', False):
+        camiones = _validar_camiones_generados(camiones, capacidad, client_config)
+
     # Pedidos excluidos
     pedidos_excluidos_ids = [pid for pid in pedidos_ids if pid not in pedidos_incluidos_ids]
     pedidos_excluidos = [
@@ -109,6 +115,112 @@ def construir_camiones_desde_solver(
         'pedidos_excluidos': pedidos_excluidos,
         'camiones': camiones
     }
+
+
+# Validar camiones generados
+def _validar_camiones_generados(
+    camiones: List[Camion],
+    capacidad: TruckCapacity,
+    client_config
+) -> List[Camion]:
+    """
+    Valida altura de los camiones generados.
+    
+    Args:
+        camiones: Lista de camiones a validar
+        capacidad: Capacidad del camión
+        client_config: Configuración del cliente
+    
+    Returns:
+        Lista de camiones con metadata de validación agregada
+    """
+    from optimization.validation.height_validator import HeightValidator
+    
+    # Crear validador
+    validator = HeightValidator(
+        altura_maxima_cm=capacidad.altura_cm,
+        permite_consolidacion=getattr(client_config, 'PERMITE_CONSOLIDACION', False),
+        max_skus_por_pallet=getattr(client_config, 'MAX_SKUS_POR_PALLET', 3)
+    )
+    
+    validos = 0
+    invalidos = 0
+    
+    for camion in camiones:
+        # Solo validar si tiene pedidos con SKUs
+        tiene_skus = any(p.tiene_skus for p in camion.pedidos)
+        
+        if not tiene_skus:
+            # Skip validación para pedidos legacy
+            camion.metadata['altura_validada'] = None  # No aplicable
+            continue
+        
+        # Validar
+        valido, errores, layout = validator.validar_camion_rapido(camion)
+        
+        # Guardar resultado en metadata
+        camion.metadata['altura_validada'] = valido
+        
+        if valido:
+            validos += 1
+            if layout:
+                # Guardar layout completo detallado
+                camion.metadata['layout_info'] = {
+                    'posiciones_usadas': layout.posiciones_usadas,
+                    'posiciones_disponibles': layout.posiciones_disponibles,
+                    'altura_maxima_cm': layout.altura_maxima_cm,
+                    'posiciones': [  # Detalle por posición
+                        {
+                            'id': pos.id,
+                            'altura_usada_cm': pos.altura_usada_cm,
+                            'altura_disponible_cm': pos.espacio_disponible_cm,
+                            'num_pallets': pos.num_pallets,
+                            'pallets': [  # Detalle de cada pallet
+                                {
+                                    'id': pallet.id,
+                                    'nivel': pallet.nivel,
+                                    'altura_cm': pallet.altura_total_cm,
+                                    'skus': [ # SKUs en este pallet
+                                        {
+                                            'sku_id': frag.sku_id,
+                                            'pedido_id': frag.pedido_id,
+                                            'altura_cm': frag.altura_cm,
+                                            'categoria': frag.categoria.value,
+                                            'es_picking': frag.es_picking
+                                        }
+                                        for frag in pallet.fragmentos
+                                    ]
+                                }
+                                for pallet in pos.pallets_apilados
+                            ]
+                        }
+                        for pos in layout.posiciones
+                        if not pos.esta_vacia
+                    ]
+                }
+        else:
+            invalidos += 1
+            
+            # ✅ FILTRAR cualquier Ellipsis y convertir a string
+            errores_limpios = []
+            for e in errores:
+                if e is not ... and e is not Ellipsis:  # Filtrar Ellipsis
+                    errores_limpios.append(str(e))
+            
+            camion.metadata['errores_validacion'] = errores_limpios
+            
+            # Log
+            print(f"[VALIDATION] ⚠️  Camión {camion.id} INVÁLIDO:")
+            for error in errores_limpios[:3]:  # Primeros 3
+                print(f"             - {error}")
+            
+            if len(errores_limpios) > 3:
+                print(f"             ... y {len(errores_limpios) - 3} errores más")
+    
+    if validos > 0 or invalidos > 0:
+        print(f"[VALIDATION] Validados: {validos} ✅ válidos, {invalidos} ⚠️ inválidos")
+    
+    return camiones
 
 
 def _pedido_a_dict_asignado(pedido: Pedido, camion: Camion, capacidad: TruckCapacity) -> Dict[str, Any]:

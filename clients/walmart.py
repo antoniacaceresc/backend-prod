@@ -21,6 +21,11 @@ class WalmartConfig:
     MIX_GRUPOS = [
         ['INV', 'CRR'],
         ['CRR', 'XDOCK'],]
+    
+    # Configuración de validación altura
+    VALIDAR_ALTURA = True
+    PERMITE_CONSOLIDACION = False
+    MAX_SKUS_POR_PALLET = 1
 
     # Mapeo de columnas
     COLUMN_MAPPING = {
@@ -40,8 +45,11 @@ class WalmartConfig:
             "SUPERIOR": "Superior",
             "FLEXIBLE": "Flexible",
             "NO_APILABLE": "No Apilable",
-            "SI_MISMO": "Apilable por si mismo",
-            "PDQ": "PDQ"
+            "SI_MISMO": "Apilable si mismo",
+            "PDQ": "PDQ",
+            "SKU": "SKU",
+            "ALTURA_PICKING": "Altura Picking",
+            "ALTURA_FULL_PALLET": "Altura full Pallet"
 
         },
         "Purina": {
@@ -70,8 +78,8 @@ class WalmartConfig:
 
     # Tipos de camiones
     TRUCK_TYPES = {
-        'normal': {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.90, 'max_pallets': 60},
-        'bh':     {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.55, 'max_pallets': 56}
+        'normal': {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.90, 'max_pallets': 60,'altura_cm': 270},
+        'bh':     {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.55, 'max_pallets': 56, 'altura_cm': 270}
     }
 
     # Configuración agrupamiento especial
