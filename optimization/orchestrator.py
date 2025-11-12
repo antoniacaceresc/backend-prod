@@ -23,6 +23,7 @@ from core.constants import MAX_TIEMPO_POR_GRUPO
 from utils.math_utils import format_dates
 from optimization.groups import ( generar_grupos_optimizacion, calcular_tiempo_por_grupo, _generar_grupos_para_tipo, ajustar_tiempo_grupo )
 from utils.config_helpers import extract_truck_capacities
+from models.domain import Camion
 
 # ============================================================================
 # CONSTANTES
@@ -131,7 +132,7 @@ def optimizar_con_dos_fases(
     
     # 6) Etiquetar camiones BH en BinPacking (regla especial)
     resultado_bp = _etiquetar_bh_binpacking(resultado_bp, client_config, cliente)
-    
+
     return {
         "vcu": resultado_vcu,
         "binpacking": resultado_bp
@@ -285,7 +286,7 @@ def _ejecutar_optimizacion_completa(
             tpg, 
             request_timeout, 
             start_total,
-            pedidos_objetos  # ✅ Pasar todos los pedidos
+            pedidos_objetos
         )
     else:
         # BinPacking: generar todos los grupos
@@ -492,7 +493,7 @@ def _consolidar_resultados(
     pedidos_originales: List[Pedido],
     pedidos_dicts: List[Dict[str, Any]],
     capacidad_default: TruckCapacity,
-    client_config  # ✅ NUEVO: necesitamos el config
+    client_config 
 ) -> Dict[str, Any]:
     """
     Consolida resultados de todos los grupos en una respuesta única.
@@ -518,35 +519,72 @@ def _consolidar_resultados(
     
     for pedido_obj in pedidos_originales:
         if pedido_obj.pedido not in pedidos_asignados_ids:
-            vcu_peso, vcu_vol, _ = pedido_obj.calcular_vcu(capacidad_default)
+            # Usar to_api_dict para mantener consistencia y preservar SKUs
+            pedido_dict = pedido_obj.to_api_dict(capacidad_default)
             
-            pedido_dict = {
-                "PEDIDO": pedido_obj.pedido,
-                "CE": pedido_obj.ce,
-                "CD": pedido_obj.cd,
-                "OC": pedido_obj.oc,
-                "PO": pedido_obj.po,
-                "CHOCOLATES": pedido_obj.chocolates,
-                "PESO": pedido_obj.peso,
-                "VOL": pedido_obj.volumen,
-                "PALLETS": pedido_obj.pallets,
-                "VALOR": pedido_obj.valor,
-                "VCU_VOL": vcu_vol,
-                "VCU_PESO": vcu_peso,
-                "Fecha preferente de entrega": pedidos_map.get(pedido_obj.pedido, {}).get("Fecha preferente de entrega"),
-            }
+            # Agregar metadata adicional del Excel original si existe
+            pedidos_map = {p["PEDIDO"]: p for p in pedidos_dicts}
+            extra_data = pedidos_map.get(pedido_obj.pedido, {})
             
-            pedido_dict.update(pedidos_map.get(pedido_obj.pedido, {}))
+            # Solo agregar campos que no están en to_api_dict
+            if "Fecha preferente de entrega" in extra_data:
+                pedido_dict["Fecha preferente de entrega"] = extra_data["Fecha preferente de entrega"]
+            
             pedidos_no_incluidos.append(pedido_dict)
     
     # Convertir camiones a dicts para API
     camiones_dicts = [cam.to_api_dict() for cam in all_camiones]
-    
+
     return {
         "camiones": camiones_dicts,
-        "pedidos_no_incluidos": pedidos_no_incluidos
+        "pedidos_no_incluidos": pedidos_no_incluidos,
+        "estadisticas": _compute_stats_from_objects(all_camiones, pedidos_originales, pedidos_asignados_ids)
     }
 
+def _compute_stats_from_objects(
+    camiones: List[Camion],
+    pedidos_originales: List[Pedido],
+    pedidos_asignados_ids: set
+) -> Dict[str, Any]:
+    """
+    Calcula estadísticas desde objetos Camion y Pedido.
+    """
+    from collections import Counter
+    
+    total_pedidos = len(pedidos_originales)
+    pedidos_asignados = len(pedidos_asignados_ids)
+    
+    # Contadores
+    tipos_camion = Counter(c.tipo_camion.value for c in camiones)
+    cantidad_normal = tipos_camion.get('normal', 0)
+    cantidad_bh = tipos_camion.get('bh', 0)
+    
+    # VCU promedios
+    vcu_total = sum(c.vcu_max for c in camiones) / len(camiones) if camiones else 0
+    
+    camiones_normal = [c for c in camiones if c.tipo_camion.value == 'normal']
+    vcu_normal = sum(c.vcu_max for c in camiones_normal) / len(camiones_normal) if camiones_normal else 0
+    
+    camiones_bh = [c for c in camiones if c.tipo_camion.value == 'bh']
+    vcu_bh = sum(c.vcu_max for c in camiones_bh) / len(camiones_bh) if camiones_bh else 0
+    
+    # Valorizado
+    valorizado = sum(
+        sum(p.valor for p in c.pedidos)
+        for c in camiones
+    )
+    
+    return {
+        "promedio_vcu": round(vcu_total, 3),
+        "promedio_vcu_normal": round(vcu_normal, 3),
+        "promedio_vcu_bh": round(vcu_bh, 3),
+        "cantidad_camiones": len(camiones),
+        "cantidad_camiones_normal": cantidad_normal,
+        "cantidad_camiones_bh": cantidad_bh,
+        "cantidad_pedidos_asignados": pedidos_asignados,
+        "total_pedidos": total_pedidos,
+        "valorizado": valorizado
+    }
 
 def _aplicar_overrides_vcu(config, vcuTarget: Any, vcuTargetBH: Any):
     """
@@ -590,8 +628,11 @@ def _aplicar_objetivo_bh(
                 float(target_ratio)
             )
             
+            # Preservar estadísticas existentes
+            estadisticas_previas = resultado.get("estadisticas", {})
             resultado["camiones"] = cam_dicts
             resultado["pedidos_no_incluidos"] = pni_dicts
+            resultado["estadisticas"] = estadisticas_previas
     
     except Exception:
         # Si falla, continuar sin aplicar el objetivo

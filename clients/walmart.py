@@ -24,8 +24,8 @@ class WalmartConfig:
     
     # Configuración de validación altura
     VALIDAR_ALTURA = True
-    PERMITE_CONSOLIDACION = False
-    MAX_SKUS_POR_PALLET = 1
+    PERMITE_CONSOLIDACION = True
+    MAX_SKUS_POR_PALLET = 5
 
     # Mapeo de columnas
     COLUMN_MAPPING = {
@@ -78,8 +78,8 @@ class WalmartConfig:
 
     # Tipos de camiones
     TRUCK_TYPES = {
-        'normal': {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.90, 'max_pallets': 60,'altura_cm': 270},
-        'bh':     {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.55, 'max_pallets': 56, 'altura_cm': 270}
+        'normal': {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.5, 'max_pallets': 60,'altura_cm': 260},
+        'bh':     {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.5, 'max_pallets': 56, 'altura_cm': 260}
     }
 
     # Configuración agrupamiento especial

@@ -166,6 +166,7 @@ def _validar_camiones_generados(
             if layout:
                 # Guardar layout completo detallado
                 camion.metadata['layout_info'] = {
+                    'altura_validada': valido,
                     'posiciones_usadas': layout.posiciones_usadas,
                     'posiciones_disponibles': layout.posiciones_disponibles,
                     'altura_maxima_cm': layout.altura_maxima_cm,

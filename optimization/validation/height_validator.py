@@ -49,19 +49,11 @@ class HeightValidator:
         
         errores = []
         
-        # ✅ AGREGAR LOG
-        print(f"\n[VALIDATOR] Validando camión {camion.id}")
-        print(f"[VALIDATOR]    Pedidos: {len(camion.pedidos)}")
-        print(f"[VALIDATOR]    Altura máxima: {self.altura_maxima_cm}cm")
-        
         # 1. Extraer fragmentos
         fragmentos = self._extraer_fragmentos_batch(camion.pedidos)
         
-        # ✅ AGREGAR LOG
-        print(f"[VALIDATOR]    Fragmentos extraídos: {len(fragmentos)}")
-        
         if not fragmentos:
-            print(f"[VALIDATOR]    ✅ Camión vacío (válido)")
+            print("NO hay fragmentosssss")
             return True, [], None
         
         # 2. Validación rápida
@@ -77,25 +69,19 @@ class HeightValidator:
         # 3. Agrupar por categoría
         grupos = self._agrupar_por_categoria(fragmentos)
         
-        # ✅ AGREGAR LOG
-        print(f"[VALIDATOR]    Categorías:")
-        for cat, frags in grupos.items():
-            print(f"[VALIDATOR]       {cat.value}: {len(frags)} fragmentos")
-        
         # 4. Estimar posiciones
         posiciones_necesarias = self._estimar_posiciones_necesarias(grupos)
         
         # ✅ AGREGAR LOG
         print(f"[VALIDATOR]    Posiciones estimadas: {posiciones_necesarias}")
         print(f"[VALIDATOR]    Posiciones disponibles: {camion.capacidad.max_positions}")
-        
+        """
         if posiciones_necesarias > camion.capacidad.max_positions:
             errores.append(f"Posiciones necesarias exceden capacidad")
             print(f"[VALIDATOR]    ❌ Excede posiciones")
             return False, errores, None
-        
+        """
         # 5. Construir layout
-        print(f"[VALIDATOR]    Construyendo layout...")
         layout = self._construir_layout(camion, fragmentos)
         
         if layout is None:
@@ -103,7 +89,6 @@ class HeightValidator:
             print(f"[VALIDATOR]    ❌ No se pudo construir layout")
             return False, errores, None
         
-        # ✅ AGREGAR LOG
         print(f"[VALIDATOR]    ✅ Layout construido: {layout.posiciones_usadas} posiciones usadas")
         
         return True, [], layout
@@ -115,7 +100,6 @@ class HeightValidator:
         """
         Extrae fragmentos de todos los pedidos.
         
-        ACTUALIZADO: Usa altura_picking directamente (ya viene calculada del Excel)
         """
         fragmentos = []
         
@@ -360,13 +344,12 @@ class HeightValidator:
             for posicion in layout.posiciones:
                 if posicion.esta_vacia:
                     continue
-                
-                # Verificar consolidación ANTES de intentar apilar
-                # Obtener el pallet del nivel superior (donde se agregaría)
-                if posicion.pallets_apilados:
+
+                # SOLO consolidar pickings, NO pallets completos
+                if frag.es_picking and posicion.pallets_apilados:
                     pallet_superior = posicion.pallets_apilados[-1]
                     
-                    # Verificar si se puede agregar a este pallet
+                    # Verificar si se puede agregar a este pallet (solo para pickings)
                     if self._puede_agregar_a_pallet(pallet_superior, frag):
                         # Intentar agregar al pallet existente
                         pallet_superior.agregar_fragmento(frag)
@@ -378,6 +361,7 @@ class HeightValidator:
                         else:
                             # Rollback: quitar el fragmento
                             pallet_superior.fragmentos.remove(frag)
+                
                 
                 # Si no se pudo agregar al pallet existente,
                 # intentar crear nuevo nivel en esta posición

@@ -453,6 +453,28 @@ class Pedido:
         
         # Añadir metadata extra
         result.update(self.metadata)
+
+        if self.skus:
+            result["SKUS"] = [
+                {
+                    "sku_id": sku.sku_id,
+                    "pedido_id": sku.pedido_id,
+                    "cantidad_pallets": sku.cantidad_pallets,
+                    "altura_full_pallet_cm": sku.altura_full_pallet_cm,
+                    "altura_picking_cm": sku.altura_picking_cm,
+                    "peso_kg": sku.peso_kg,
+                    "volumen_m3": sku.volumen_m3,
+                    "valor": sku.valor,
+                    "base": sku.base,
+                    "superior": sku.superior,
+                    "flexible": sku.flexible,
+                    "no_apilable": sku.no_apilable,
+                    "si_mismo": sku.si_mismo,
+                    "max_altura_apilable_cm": sku.max_altura_apilable_cm,
+                    "descripcion": sku.descripcion
+                }
+                for sku in self.skus
+            ]
         
         return result
     
@@ -531,6 +553,9 @@ class Camion:
     metadata: Optional[Dict[str, Any]] = field(default=None, repr=False)
     
     def __post_init__(self):
+        # Inicializar metadata si es None
+        if self.metadata is None:
+            self.metadata = {}
         # Convertir strings a enums si es necesario
         if isinstance(self.tipo_ruta, str):
             self.tipo_ruta = TipoRuta(self.tipo_ruta)

@@ -17,7 +17,7 @@ class CencosudConfig:
 
     # Configuración de validación altura
     VALIDAR_ALTURA = True
-    PERMITE_CONSOLIDACION = True
+    PERMITE_CONSOLIDACION = False
     MAX_SKUS_POR_PALLET = 5 # Verificar
 
     # Mapeo de columnas
@@ -66,8 +66,8 @@ class CencosudConfig:
 
     # Tipos de camiones
     TRUCK_TYPES = {
-        'normal': {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.85, 'max_pallets': 60, 'altura_cm': 270},
-        'bh':     {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 26, 'levels': 2, 'vcu_min': 0.55, 'max_pallets': 52, 'altura_cm': 270}
+        'normal': {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.85, 'max_pallets': 60, 'altura_cm': 260},
+        'bh':     {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 26, 'levels': 2, 'vcu_min': 0.55, 'max_pallets': 52, 'altura_cm': 260}
     }
 
 

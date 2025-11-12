@@ -433,7 +433,7 @@ class LayoutCamion:
             altura_maxima_cm=capacidad.altura_cm  # NUEVO: usa altura de capacidad
         )
     
-    def to_dict(self) -> Dict:
+    def to_dict(self, altura_validada: Optional[bool] = None) -> Dict:
         """
         Exporta a formato API para frontend.
         
@@ -442,6 +442,7 @@ class LayoutCamion:
         """
         return {
             'camion_id': self.camion_id,
+            'altura_validada': altura_validada,
             'max_posiciones': self.max_posiciones,
             'posiciones_usadas': self.posiciones_usadas,
             'posiciones_disponibles': self.posiciones_disponibles,
