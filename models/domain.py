@@ -700,7 +700,6 @@ class Camion:
         self.pedidos.append(pedido)
         self._invalidar_cache()
 
-
     def agregar_pedidos(self, pedidos: List[Pedido]):
         """
         Agrega pedidos al camión con validación de capacidad.
@@ -818,8 +817,6 @@ class Camion:
         
         self._invalidar_cache()
 
-    # services/models.py (actualizar método valida_capacidad_para en clase Camion)
-
     def valida_capacidad(self, nueva_capacidad: TruckCapacity) -> bool:
         """
         Verifica si el camión cumple con una nueva capacidad sin excederla.
@@ -878,6 +875,7 @@ class Camion:
             "grupo": self.grupo,
             "tipo_ruta": self.tipo_ruta.value,
             "tipo_camion": self.tipo_camion.value,
+            "opciones_tipo_camion": self.opciones_tipo_camion,
             "cd": self.cd,
             "ce": self.ce,
             "pedidos": [p.to_api_dict(self.capacidad) for p in self.pedidos],
@@ -980,12 +978,12 @@ class EstadoOptimizacion:
     @property
     def camiones_normal(self) -> List[Camion]:
         """Lista de camiones tipo normal"""
-        return [c for c in self.camiones if c.tipo_camion == TipoCamion.NORMAL]
+        return [c for c in self.camiones if c.tipo_camion.es_nestle]
     
     @property
     def camiones_bh(self) -> List[Camion]:
         """Lista de camiones tipo BH"""
-        return [c for c in self.camiones if c.tipo_camion == TipoCamion.BH]
+        return [c for c in self.camiones if c.tipo_camion == TipoCamion.BACKHAUL]
     
     @property
     def total_pedidos_asignados(self) -> int:
@@ -1062,7 +1060,7 @@ class EstadoOptimizacion:
     
     def get_capacidad_para_tipo(self, tipo_camion: TipoCamion) -> TruckCapacity:
         """Obtiene la capacidad correspondiente al tipo de camión"""
-        if tipo_camion == TipoCamion.BH and self.capacidad_bh:
+        if tipo_camion == TipoCamion.BACKHAUL and self.capacidad_bh:
             return self.capacidad_bh
         return self.capacidad_normal
     

@@ -6,11 +6,6 @@ class DisvetConfig:
     USA_OC = False
     AGRUPAR_POR_PO = False
 
-    # BH
-    PERMITE_BH = True
-    CD_CON_BH = ['Cerro Grande', 'Kameid']
-    BH_VCU_MAX = 1
-
     # MIX Flujo
     MIX_GRUPOS = []
 
@@ -18,19 +13,6 @@ class DisvetConfig:
     VALIDAR_ALTURA = True
     PERMITE_CONSOLIDACION = True
     MAX_SKUS_POR_PALLET = 5
-
-    # Qué tipos de ruta usa BIN PACKING para este cliente, Si no se define un tipo aquí, se usa RUTAS_POSIBLES[tipo] por defecto.
-    BINPACKING_TIPOS_RUTA = ['normal', 'bh']
-    RUTAS_BINPACKING = {
-        'bh': [
-            (["Cerro Grande"],["0088"]),
-            (["Cerro Grande"],["0097"]),
-            (["Cerro Grande"],["0103"]),
-            (["Kameid"],["0088"]),
-            (["Kameid"],["0097"]),
-            (["Kameid"],["0103"]),
-        ]
-    }
 
     # Mapeo de columnas 
     COLUMN_MAPPING = {
@@ -67,88 +49,88 @@ class DisvetConfig:
 
     # Tipos de camiones
     TRUCK_TYPES = {
-        'normal': {'cap_weight':23000,'cap_volume':70000, 'max_positions':30,'levels':2,'vcu_min':0.90,'max_pallets':59, 'altura_cm': 260},
-        'bh':     {'cap_weight':23000,'cap_volume':70000, 'max_positions':28,'levels':2,'vcu_min':0.55,'max_pallets':55, 'altura_cm': 260}
+        'paquetera':        {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.5, 'max_pallets': 60,'altura_cm': 260},
+        'rampla_directa':   {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.5, 'max_pallets': 56,'altura_cm': 250},
+        'backhaul':         {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.5, 'max_pallets': 56, 'altura_cm': 260}
     }
 
     # Configuración agrupamiento especial
-
+# Configuración agrupamiento especial
     RUTAS_POSIBLES = {
         "normal": [
+            # CDs que NO permiten backhaul - solo Nestlé
+            {"cds": ["Bioñuble"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["Bioñuble"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["Bioñuble"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
             
-            (["Bioñuble"],["0088"]),
-            (["Bioñuble"],["0097"]),
-            (["Bioñuble"],["0103"]),
+            {"cds": ["Comech"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["Comech"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["Comech"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
             
-            (["Comech"],["0088"]),
-            (["Comech"],["0097"]),
-            (["Comech"],["0103"]),
+            {"cds": ["Ferrbest"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["Ferrbest"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["Ferrbest"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+
+            {"cds": ["Friex"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["Friex"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["Friex"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+
+            {"cds": ["HN"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["HN"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["HN"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
             
-            (["Ferrbest"],["0088"]),
-            (["Ferrbest"],["0097"]),
-            (["Ferrbest"],["0103"]),
+            {"cds": ["Jama"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["Jama"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["Jama"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
 
-            (["Friex"],["0088"]),
-            (["Friex"],["0097"]),
-            (["Friex"],["0103"]),
+            {"cds": ["Maxima"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["Maxima"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["Maxima"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
 
-            (["HN"],["0088"]),
-            (["HN"],["0097"]),
-            (["HN"],["0103"]),
+            {"cds": ["Norkoshe"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["Norkoshe"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["Norkoshe"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
             
-            (["Jama"],["0088"]),
-            (["Jama"],["0097"]),
-            (["Jama"],["0103"]),
+            {"cds": ["Pan de Azucar"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["Pan de Azucar"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["Pan de Azucar"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
 
-            (["Maxima"],["0088"]),
-            (["Maxima"],["0097"]),
-            (["Maxima"],["0103"]),
+            {"cds": ["Relun"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["Relun"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["Relun"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
 
-            (["Norkoshe"],["0088"]),
-            (["Norkoshe"],["0097"]),
-            (["Norkoshe"],["0103"]),
+            {"cds": ["Vivancos SPA"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["Vivancos SPA"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["Vivancos SPA"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
             
-            (["Pan de Azucar"],["0088"]),
-            (["Pan de Azucar"],["0097"]),
-            (["Pan de Azucar"],["0103"]),
-
-            (["Relun"],["0088"]),
-            (["Relun"],["0097"]),
-            (["Relun"],["0103"]),
-
-            (["Vivancos SPA"],["0088"]),
-            (["Vivancos SPA"],["0097"]),
-            (["Vivancos SPA"],["0103"]),
+            # CDs que SOLO permiten backhaul
+            {"cds": ["Cerro Grande"], "ces": ["0088"], "camiones_permitidos": ["backhaul"]},
+            {"cds": ["Cerro Grande"], "ces": ["0097"], "camiones_permitidos": ["backhaul"]},
+            {"cds": ["Cerro Grande"], "ces": ["0103"], "camiones_permitidos": ["backhaul"]},
+            
+            {"cds": ["Kameid"], "ces": ["0088"], "camiones_permitidos": ["backhaul"]},
+            {"cds": ["Kameid"], "ces": ["0097"], "camiones_permitidos": ["backhaul"]},
+            {"cds": ["Kameid"], "ces": ["0103"], "camiones_permitidos": ["backhaul"]},
         ],
 
         "multi_ce": [
-
-        ],
-        "multi_cd": [
-            # Desde Quilicura
-            (["Bioñuble","Relun"],["0088"]),
-            (["Norkoshe", "HN"],["0088"]),
-            (["Pan de Azucar", "Jama"],["0088"]),
-            (["Ferrbest", "Comech"],["0088"]),
-
-            # Desde Maipú
-            (["Bioñuble","Relun"],["0103"]),
-            (["Norkoshe", "HN"],["0103"]),
-            (["Pan de Azucar", "Jama"],["0103"]),
-            (["Ferrbest", "Comech"],["0103"]),
-
+            # Multi-CE SOLO con backhaul
+            {"cds": ["Cerro Grande"], "ces": ["0088", "0103"], "camiones_permitidos": ["backhaul"]},
+            {"cds": ["Kameid"], "ces": ["0088", "0103"], "camiones_permitidos": [ "backhaul"]},
         ],
         
-        "bh": [
-            (["Cerro Grande"],["0088"]),
-            (["Cerro Grande"],["0097"]),
-            (["Cerro Grande"],["0103"]),
-            (["Cerro Grande"],["0088", "0103"]),
-            (["Kameid"],["0088"]),
-            (["Kameid"],["0097"]),
-            (["Kameid"],["0103"]),
-            (["Kameid"],["0088", "0103"]),
-        ]
+        "multi_cd": [
+            # Desde Quilicura - solo Nestlé
+            {"cds": ["Bioñuble","Relun"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["Norkoshe", "HN"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["Pan de Azucar", "Jama"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["Ferrbest", "Comech"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
 
+            # Desde Maipú - solo Nestlé
+            {"cds": ["Bioñuble","Relun"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["Norkoshe", "HN"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["Pan de Azucar", "Jama"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["Ferrbest", "Comech"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+        ],
     }
 

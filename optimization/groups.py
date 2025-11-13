@@ -20,7 +20,7 @@ def _generar_grupos_para_tipo(
     Args:
         pedidos_disponibles: Pedidos aún NO asignados
         client_config: Configuración del cliente
-        tipo: Tipo de ruta ("multi_ce", "multi_cd", "bh", etc.)
+        tipo: Tipo de ruta ("multi_ce", "multi_cd", etc.)
     
     Returns:
         Lista de (ConfiguracionGrupo, pedidos) para este tipo
@@ -37,7 +37,6 @@ def _generar_grupos_para_tipo(
     mix_grupos = getattr(client_config, "MIX_GRUPOS", [])
     
     grupos = []
-    
     # Generar grupos según el tipo
     if tipo == "normal":
         grupos_tipo, _ = _build_normal_groups(
@@ -47,7 +46,7 @@ def _generar_grupos_para_tipo(
         grupos_tipo, _ = _build_other_groups(
             pedidos_disponibles, rutas, tipo, usa_oc, mix_grupos
         )
-    
+
     return grupos_tipo
 
 
@@ -85,7 +84,7 @@ def generar_grupos_optimizacion(
             t, client_config.RUTAS_POSIBLES.get(t, [])
         )
     else:  # VCU
-        tipos_ruta = ["multi_ce_prioridad", "normal", "multi_ce", "multi_cd", "bh"]
+        tipos_ruta = ["multi_ce_prioridad", "normal", "multi_ce", "multi_cd"]
         rutas_func = lambda t: client_config.RUTAS_POSIBLES.get(t, [])
     
     fases = [(t, rutas_func(t)) for t in tipos_ruta if rutas_func(t)]
@@ -105,26 +104,26 @@ def generar_grupos_optimizacion(
             )
         
         grupos.extend(grupos_fase)
-    
     return grupos
 
 
 def _build_normal_groups(
     pedidos: List[Pedido],
-    rutas: List[Tuple[List[str], List[str]]],
+    rutas,  # Puede ser List[Dict] o List[Tuple]
     mix_grupos: List[List[str]],
-    usa_oc: bool) -> Tuple[List[Tuple[ConfiguracionGrupo, List[Pedido]]], List[Pedido]]:
+    usa_oc: bool
+) -> Tuple[List[Tuple[ConfiguracionGrupo, List[Pedido]]], List[Pedido]]:
     """
     Construye grupos para rutas normales sin solapamiento.
     """
     grupos = []
-    asignados: Set[str] = set()  # ✅ RESTAURAR
+    asignados: Set[str] = set()
     
     for cds, ces, oc in _generar_iterador_rutas("normal", rutas, pedidos, mix_grupos, usa_oc):
         # Filtrar pedidos que coinciden y no están asignados
         pedidos_grupo = [
             p for p in pedidos
-            if p.pedido not in asignados  # ✅ RESTAURAR
+            if p.pedido not in asignados
             and p.cd in cds
             and p.ce in ces
             and _match_oc(p.oc, oc)
@@ -143,11 +142,10 @@ def _build_normal_groups(
         )
         
         grupos.append((cfg, pedidos_grupo))
-        asignados.update(p.pedido for p in pedidos_grupo)  # ✅ RESTAURAR
+        asignados.update(p.pedido for p in pedidos_grupo)
     
     pedidos_restantes = [p for p in pedidos if p.pedido not in asignados]
     return grupos, pedidos_restantes
-
 
 def _build_other_groups(
     pedidos: List[Pedido],
@@ -159,43 +157,52 @@ def _build_other_groups(
     """
     Construye grupos para otros tipos de ruta.
     """
+    
     grupos = []
-    asignados: Set[str] = set()  # ✅ RESTAURAR
+    asignados: Set[str] = set()
     
-    for cds, ces, oc in _generar_iterador_rutas(tipo, rutas, pedidos, mix_grupos, usa_oc):
-        pedidos_grupo = [
-            p for p in pedidos
-            if p.pedido not in asignados  # ✅ RESTAURAR
-            and p.cd in cds
-            and p.ce in ces
-            and _match_oc(p.oc, oc)
-        ]
+    try:
+        iterador = _generar_iterador_rutas(tipo, rutas, pedidos, mix_grupos, usa_oc)
         
-        if not pedidos_grupo:
-            continue
-        
-        if not _validar_grupo_por_tipo(tipo, pedidos_grupo, cds, ces):
-            continue
-        
-        oc_str = _format_oc_str(oc)
-        cfg = ConfiguracionGrupo(
-            id=f"{tipo}__{'-'.join(cds)}__{'-'.join(map(str, ces))}{oc_str}",
-            tipo=TipoRuta(tipo),
-            cd=cds,
-            ce=ces,
-            oc=oc
-        )
-        
-        grupos.append((cfg, pedidos_grupo))
-        asignados.update(p.pedido for p in pedidos_grupo)  # ✅ RESTAURAR
+        for idx, (cds, ces, oc) in enumerate(iterador):
+            
+            pedidos_grupo = [
+                p for p in pedidos
+                if p.pedido not in asignados
+                and p.cd in cds
+                and p.ce in ces
+                and _match_oc(p.oc, oc)
+            ]
+            
+            if not pedidos_grupo:
+                continue
+            
+            if not _validar_grupo_por_tipo(tipo, pedidos_grupo, cds, ces):
+                continue
+            
+            oc_str = _format_oc_str(oc)
+            cfg = ConfiguracionGrupo(
+                id=f"{tipo}__{'-'.join(cds)}__{'-'.join(map(str, ces))}{oc_str}",
+                tipo=TipoRuta(tipo),
+                cd=cds,
+                ce=ces,
+                oc=oc
+            )
+            
+            grupos.append((cfg, pedidos_grupo))
+            asignados.update(p.pedido for p in pedidos_grupo)
     
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise
+
     pedidos_restantes = [p for p in pedidos if p.pedido not in asignados]
     return grupos, pedidos_restantes
 
-
 def _generar_iterador_rutas(
     tipo: str,
-    rutas: List[Tuple[List[str], List[str]]],
+    rutas,
     pedidos: List[Pedido],
     mix_grupos: List[List[str]],
     usa_oc: bool
@@ -206,20 +213,26 @@ def _generar_iterador_rutas(
     """
     if tipo == "normal":
         yield from _iter_normal_routes(rutas, pedidos, mix_grupos, usa_oc)
-    elif tipo == "bh":
-        yield from _iter_bh_routes(rutas, pedidos, usa_oc)
     else:  # multi_ce, multi_cd, multi_ce_prioridad
         yield from _iter_multi_routes(rutas, pedidos, usa_oc)
 
 
 def _iter_normal_routes(
-    rutas: List[Tuple[List[str], List[str]]],
+    rutas,  # Puede ser List[Dict] o List[Tuple]
     pedidos: List[Pedido],
     mix_grupos: List[List[str]],
     usa_oc: bool
 ) -> Iterator[Tuple[List[str], List[str], any]]:
-    """Iterador para rutas normales"""
-    for cds, ces in rutas:
+    """Iterador para rutas normales - soporta formato dict y tuple"""
+    # Normalizar rutas a formato tuple
+    rutas_normalizadas = []
+    for ruta in rutas:
+        if isinstance(ruta, dict):
+            rutas_normalizadas.append((ruta['cds'], ruta['ces']))
+        elif isinstance(ruta, tuple):
+            rutas_normalizadas.append(ruta)
+    
+    for cds, ces in rutas_normalizadas:
         if cds == [CD_LO_AGUIRRE]:
             # Caso especial: Lo Aguirre por CE individual
             pedidos_cd = [p for p in pedidos if p.cd == CD_LO_AGUIRRE]
@@ -238,10 +251,10 @@ def _iter_normal_routes(
                         if all(o in oc_unique for o in ocg):
                             yield ([CD_LO_AGUIRRE], [ce], ocg)
                     
-                    # ✅ NUEVO: Pedidos SIN OC (None) van juntos
+                    # Pedidos SIN OC (None) van juntos
                     pedidos_sin_oc = [p for p in pedidos_ce if p.oc is None]
                     if pedidos_sin_oc:
-                        yield ([CD_LO_AGUIRRE], [ce], "SIN_OC")  # ✅ Grupo especial
+                        yield ([CD_LO_AGUIRRE], [ce], "SIN_OC")
                 else:
                     if pedidos_ce:
                         yield ([CD_LO_AGUIRRE], [ce], None)
@@ -250,13 +263,13 @@ def _iter_normal_routes(
             pedidos_ruta = [p for p in pedidos if p.cd in cds and p.ce in ces]
             
             if usa_oc:
-                # ✅ NUEVO: Agrupar por OC
+                # Agrupar por OC
                 oc_unique = list(set(p.oc for p in pedidos_ruta if p.oc))
                 
                 for oc in oc_unique:
                     yield (cds, ces, oc)
                 
-                # ✅ NUEVO: Pedidos SIN OC van juntos
+                # Pedidos SIN OC van juntos
                 pedidos_sin_oc = [p for p in pedidos_ruta if p.oc is None]
                 if pedidos_sin_oc:
                     yield (cds, ces, "SIN_OC")
@@ -265,47 +278,35 @@ def _iter_normal_routes(
                     yield (cds, ces, None)
 
 
-def _iter_bh_routes(
-    rutas: List[Tuple[List[str], List[str]]],
-    pedidos: List[Pedido],
-    usa_oc: bool) -> Iterator[Tuple[List[str], List[str], any]]:
-    """Iterador para rutas BH"""
-    for cds, ces in rutas:
-        pedidos_ruta = [p for p in pedidos if p.cd in cds and p.ce in ces]
-        
-        if usa_oc:
-            # OCs existentes
-            for oc in set(p.oc for p in pedidos_ruta if p.oc):
-                yield (cds, ces, oc)
-            
-            # ✅ NUEVO: Pedidos sin OC
-            pedidos_sin_oc = [p for p in pedidos_ruta if p.oc is None]
-            if pedidos_sin_oc:
-                yield (cds, ces, "SIN_OC")
-        else:
-            if pedidos_ruta:
-                yield (cds, ces, None)
-
-
 def _iter_multi_routes(
-    rutas: List[Tuple[List[str], List[str]]],
+    rutas,  # Puede ser List[Dict] o List[Tuple]
     pedidos: List[Pedido],
     usa_oc: bool
 ) -> Iterator[Tuple[List[str], List[str], any]]:
-    """Iterador para rutas multi (multi_ce, multi_cd)"""
-    for cds, ces in rutas:
+    """Iterador para rutas multi (multi_ce, multi_cd) - soporta formato dict y tuple"""
+    
+    # Normalizar rutas a formato tuple
+    rutas_normalizadas = []
+    for ruta in rutas:
+        if isinstance(ruta, dict):
+            rutas_normalizadas.append((ruta['cds'], ruta['ces']))
+        elif isinstance(ruta, tuple):
+            rutas_normalizadas.append(ruta)
+    
+    for cds, ces in rutas_normalizadas:
         pedidos_ruta = [p for p in pedidos if p.cd in cds and p.ce in ces]
         
         if not pedidos_ruta:
             continue
         
-        if CD_LO_AGUIRRE in cds and usa_oc:
-            # OCs existentes
-            for oc in set(p.oc for p in pedidos_ruta if p.oc):
-                if [p for p in pedidos_ruta if p.oc == oc]:
-                    yield (cds, ces, oc)
+        if usa_oc:
+            # Agrupar por OC
+            oc_unique = list(set(p.oc for p in pedidos_ruta if p.oc))
             
-            # ✅ NUEVO: Pedidos sin OC
+            for oc in oc_unique:
+                yield (cds, ces, oc)
+            
+            # Pedidos SIN OC van juntos
             pedidos_sin_oc = [p for p in pedidos_ruta if p.oc is None]
             if pedidos_sin_oc:
                 yield (cds, ces, "SIN_OC")
@@ -426,7 +427,7 @@ def _estimar_cantidad_grupos_mejorado(
             'grandes': int     # > 20 pedidos
         }
     """
-    tipos_ruta = ["multi_ce_prioridad", "normal", "multi_ce", "multi_cd", "bh"]
+    tipos_ruta = ["multi_ce_prioridad", "normal", "multi_ce", "multi_cd"]
     fases = [
         (tipo, config.RUTAS_POSIBLES.get(tipo, []))
         for tipo in tipos_ruta
@@ -441,7 +442,16 @@ def _estimar_cantidad_grupos_mejorado(
     
     for tipo, rutas in fases:
         if tipo == "normal":
-            for cds, ces in rutas:
+            for ruta in rutas:
+                # Normalizar formato (dict o tupla)
+                if isinstance(ruta, dict):
+                    cds = ruta['cds']
+                    ces = ruta['ces']
+                elif isinstance(ruta, tuple):
+                    cds, ces = ruta
+                else:
+                    continue
+                
                 if cds == [CD_LO_AGUIRRE]:
                     pedidos_cd = [p for p in pedidos if p.cd == CD_LO_AGUIRRE]
                     
@@ -452,7 +462,7 @@ def _estimar_cantidad_grupos_mejorado(
                             continue
                         
                         if usa_oc:
-                            # ✅ Contar OCs existentes
+                            # Contar OCs existentes
                             oc_unique = list(set(p.oc for p in pedidos_ce if p.oc))
                             
                             for oc in oc_unique:
@@ -460,14 +470,14 @@ def _estimar_cantidad_grupos_mejorado(
                                 total += 1
                                 _clasificar_grupo(pedidos_oc, distribucion)
                             
-                            # ✅ Contar grupos MIX
+                            # Contar grupos MIX
                             for ocg in mix_grupos:
                                 if all(o in oc_unique for o in ocg):
                                     pedidos_mix = [p for p in pedidos_ce if p.oc in ocg]
                                     total += 1
                                     _clasificar_grupo(pedidos_mix, distribucion)
                             
-                            # ✅ CRÍTICO: Contar SIN_OC
+                            # CRÍTICO: Contar SIN_OC
                             pedidos_sin_oc = [p for p in pedidos_ce if p.oc is None]
                             if pedidos_sin_oc:
                                 total += 1
@@ -476,14 +486,14 @@ def _estimar_cantidad_grupos_mejorado(
                             total += 1
                             _clasificar_grupo(pedidos_ce, distribucion)
                 else:
-                    # Ruta normal (no Lo Aguirre)
+                    # Caso general
                     pedidos_ruta = [p for p in pedidos if p.cd in cds and p.ce in ces]
                     
                     if not pedidos_ruta:
                         continue
                     
                     if usa_oc:
-                        # ✅ Contar por OC
+                        # Contar OCs
                         oc_unique = list(set(p.oc for p in pedidos_ruta if p.oc))
                         
                         for oc in oc_unique:
@@ -491,7 +501,7 @@ def _estimar_cantidad_grupos_mejorado(
                             total += 1
                             _clasificar_grupo(pedidos_oc, distribucion)
                         
-                        # ✅ CRÍTICO: Contar SIN_OC
+                        # CRÍTICO: Contar SIN_OC
                         pedidos_sin_oc = [p for p in pedidos_ruta if p.oc is None]
                         if pedidos_sin_oc:
                             total += 1
@@ -500,15 +510,24 @@ def _estimar_cantidad_grupos_mejorado(
                         total += 1
                         _clasificar_grupo(pedidos_ruta, distribucion)
         
-        elif tipo == "bh":
-            for cds, ces in rutas:
+        else:  # multi_ce, multi_cd, multi_ce_prioridad
+            for ruta in rutas:
+                # Normalizar formato (dict o tupla)
+                if isinstance(ruta, dict):
+                    cds = ruta['cds']
+                    ces = ruta['ces']
+                elif isinstance(ruta, tuple):
+                    cds, ces = ruta
+                else:
+                    continue
+                
                 pedidos_ruta = [p for p in pedidos if p.cd in cds and p.ce in ces]
                 
                 if not pedidos_ruta:
                     continue
                 
                 if usa_oc:
-                    # ✅ Contar por OC
+                    # Contar OCs
                     oc_unique = list(set(p.oc for p in pedidos_ruta if p.oc))
                     
                     for oc in oc_unique:
@@ -516,32 +535,7 @@ def _estimar_cantidad_grupos_mejorado(
                         total += 1
                         _clasificar_grupo(pedidos_oc, distribucion)
                     
-                    # ✅ CRÍTICO: Contar SIN_OC
-                    pedidos_sin_oc = [p for p in pedidos_ruta if p.oc is None]
-                    if pedidos_sin_oc:
-                        total += 1
-                        _clasificar_grupo(pedidos_sin_oc, distribucion)
-                else:
-                    total += 1
-                    _clasificar_grupo(pedidos_ruta, distribucion)
-        
-        else:  # multi_ce, multi_cd, multi_ce_prioridad
-            for cds, ces in rutas:
-                pedidos_ruta = [p for p in pedidos if p.cd in cds and p.ce in ces]
-                
-                if not pedidos_ruta:
-                    continue
-                
-                if CD_LO_AGUIRRE in cds and usa_oc:
-                    # ✅ Contar por OC
-                    oc_unique = list(set(p.oc for p in pedidos_ruta if p.oc))
-                    
-                    for oc in oc_unique:
-                        pedidos_oc = [p for p in pedidos_ruta if p.oc == oc]
-                        total += 1
-                        _clasificar_grupo(pedidos_oc, distribucion)
-                    
-                    # ✅ CRÍTICO: Contar SIN_OC
+                    # CRÍTICO: Contar SIN_OC
                     pedidos_sin_oc = [p for p in pedidos_ruta if p.oc is None]
                     if pedidos_sin_oc:
                         total += 1
@@ -573,7 +567,7 @@ def _clasificar_grupo(pedidos: List[Pedido], distribucion: dict):
     else:
         distribucion['grandes'] += 1
         
-        # Sub-clasificación para grupos grandes (para debugging)
+        # Sub-clasificación para grupos grandes
         if 'muy_grandes' not in distribucion:
             distribucion['muy_grandes'] = 0
         if n > 40:
@@ -592,7 +586,7 @@ def ajustar_tiempo_grupo(
     Args:
         tiempo_base: Tiempo base calculado
         num_pedidos: Número de pedidos en el grupo
-        tipo_grupo: Tipo de grupo (normal, bh, multi_ce, etc.)
+        tipo_grupo: Tipo de grupo (normal, multi_ce, etc.)
     
     Returns:
         Tiempo ajustado en segundos

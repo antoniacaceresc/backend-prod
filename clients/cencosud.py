@@ -7,14 +7,6 @@ class CencosudConfig:
     AGRUPAR_POR_PO = True
     MIX_GRUPOS = []
 
-    # Parámetros de Optimización
-
-    # BH
-    PERMITE_BH = True
-    CD_CON_BH = ['N725 Bodega Noviciado', 'N641 Bodega Noviciado PYP']
-    BH_VCU_MAX = 1
-    BH_TRUCK_TARGET_RATIO = 0.60
-
     # Configuración de validación altura
     VALIDAR_ALTURA = True
     PERMITE_CONSOLIDACION = False
@@ -66,59 +58,43 @@ class CencosudConfig:
 
     # Tipos de camiones
     TRUCK_TYPES = {
-        'normal': {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.85, 'max_pallets': 60, 'altura_cm': 260},
-        'bh':     {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 26, 'levels': 2, 'vcu_min': 0.55, 'max_pallets': 52, 'altura_cm': 260}
+        'paquetera':        {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.85, 'max_pallets': 60, 'altura_cm': 260},
+        'rampla_directa':   {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.85, 'max_pallets': 56, 'altura_cm': 250},
+        'backhaul':         {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 26, 'levels': 2, 'vcu_min': 0.55, 'max_pallets': 52, 'altura_cm': 260}
     }
 
 
 
-    # Configuración agrupamiento especial
-
+    # Configuración de rutas posibles con tipos de camiones permitidos
     RUTAS_POSIBLES = {
         "normal": [
-            (["N725 Bodega Noviciado"],["0079"]),
-            (["N725 Bodega Noviciado"],["0080"]),
-            (["N725 Bodega Noviciado"],["0088"]),
-            (["N725 Bodega Noviciado"],["0103"]),
-            (["N725 Bodega Noviciado"],["3598"]),
-            (["N725 Bodega Noviciado"],["8150"]),
+            # N725 Bodega Noviciado
+            {"cds": ["N725 Bodega Noviciado"], "ces": ["0079"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            {"cds": ["N725 Bodega Noviciado"], "ces": ["0080"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            {"cds": ["N725 Bodega Noviciado"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            {"cds": ["N725 Bodega Noviciado"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            {"cds": ["N725 Bodega Noviciado"], "ces": ["3598"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            {"cds": ["N725 Bodega Noviciado"], "ces": ["8150"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
 
-            (["N641 Bodega Noviciado PYP"],["0079"]),
-            (["N641 Bodega Noviciado PYP"],["0080"]),
-            (["N641 Bodega Noviciado PYP"],["0088"]),
-            (["N641 Bodega Noviciado PYP"],["0103"]),
-            (["N641 Bodega Noviciado PYP"],["3598"]),
-            (["N641 Bodega Noviciado PYP"],["8150"]),
+            # N641 Bodega Noviciado PYP
+            {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["0079"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["0080"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["3598"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["8150"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
 
-            (["N794 Bodega Chillan"],["0079"]),
-            (["N794 Bodega Chillan"],["0080"]),
-            (["N794 Bodega Chillan"],["0088"]),
-            (["N794 Bodega Chillan"],["0103"]),
-            (["N794 Bodega Chillan"],["3598"]),
-            (["N794 Bodega Chillan"],["8150"])
+            # N794 Bodega Chillan - Solo Nestlé
+            {"cds": ["N794 Bodega Chillan"], "ces": ["0079"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["N794 Bodega Chillan"], "ces": ["0080"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["N794 Bodega Chillan"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["N794 Bodega Chillan"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["N794 Bodega Chillan"], "ces": ["3598"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["N794 Bodega Chillan"], "ces": ["8150"], "camiones_permitidos": ["paquetera", "rampla_directa"]}
         ],
 
         "multi_ce": [
-
-            (["N794 Bodega Chillan"],["0088", "0103"]),
-
-        ],
-
-        "bh": [
-            (["N725 Bodega Noviciado"],["0079"]),
-            (["N725 Bodega Noviciado"],["0080"]),
-            (["N725 Bodega Noviciado"],["0088"]),
-            (["N725 Bodega Noviciado"],["0103"]),
-            (["N725 Bodega Noviciado"],["3598"]),
-            (["N725 Bodega Noviciado"],["8150"]),
-
-            (["N641 Bodega Noviciado PYP"],["0079"]),
-            (["N641 Bodega Noviciado PYP"],["0080"]),
-            (["N641 Bodega Noviciado PYP"],["0088"]),
-            (["N641 Bodega Noviciado PYP"],["0103"]),
-            (["N641 Bodega Noviciado PYP"],["3598"]),
-            (["N641 Bodega Noviciado PYP"],["8150"]),
+            # Solo Nestlé
+            {"cds": ["N794 Bodega Chillan"], "ces": ["0088", "0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]}
         ]
-
     }
-

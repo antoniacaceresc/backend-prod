@@ -12,11 +12,6 @@ class WalmartConfig:
     # CRR
     MAX_PALLETS_REAL_CRR = 90
 
-    # BH
-    PERMITE_BH = True
-    CD_CON_BH = ['6009 Lo Aguirre', '6020 Peñón']
-    BH_VCU_MAX = 1
-
     # MIX Flujo
     MIX_GRUPOS = [
         ['INV', 'CRR'],
@@ -78,131 +73,108 @@ class WalmartConfig:
 
     # Tipos de camiones
     TRUCK_TYPES = {
-        'normal': {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.5, 'max_pallets': 60,'altura_cm': 260},
-        'bh':     {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.5, 'max_pallets': 56, 'altura_cm': 260}
+        'paquetera':        {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.5, 'max_pallets': 60,'altura_cm': 260},
+        'rampla_directa':   {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.5, 'max_pallets': 56,'altura_cm': 250},
+        'backhaul':         {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.5, 'max_pallets': 56, 'altura_cm': 260}
     }
 
     # Configuración agrupamiento especial
-
     RUTAS_POSIBLES = {
         "multi_ce_prioridad": [
-            (["6009 Lo Aguirre"],["0088", "3598"]),
-            (["6020 Peñón"],["0088", "3598"]),
-            (["6003 Antofagasta"],["0088", "3598"]),
-            (["6010 Chillán"],["0088", "3598"]),
-            (["6024 Temuco"],["0088", "3598"]),
+            {"cds": ["6009 Lo Aguirre"], "ces": ["0088", "3598"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            {"cds": ["6020 Peñón"], "ces": ["0088", "3598"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            {"cds": ["6003 Antofagasta"], "ces": ["0088", "3598"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6010 Chillán"], "ces": ["0088", "3598"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6024 Temuco"], "ces": ["0088", "3598"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
         ],
         
         "normal": [
-            (["6009 Lo Aguirre"],["0079"]),
-            (["6009 Lo Aguirre"],["0080"]),
-            (["6009 Lo Aguirre"],["0088"]),
-            (["6009 Lo Aguirre"],["0097"]),
-            (["6009 Lo Aguirre"],["0103"]),
-            (["6009 Lo Aguirre"],["3598"]),
-            (["6009 Lo Aguirre"],["8150"]),
-            (["6020 Peñón"],["0079"]),
-            (["6020 Peñón"],["0080"]),
-            (["6020 Peñón"],["0088"]),
-            (["6020 Peñón"],["0097"]),
-            (["6020 Peñón"],["0103"]),
-            (["6020 Peñón"],["3598"]),
-            (["6020 Peñón"],["8150"]),
-            (["6010 Chillán"],["0079"]),
-            (["6010 Chillán"],["0080"]),
-            (["6010 Chillán"],["0088"]),
-            (["6010 Chillán"],["0097"]),
-            (["6010 Chillán"],["0103"]),
-            (["6010 Chillán"],["3598"]),
-            (["6010 Chillán"],["8150"]),
-            (["6024 Temuco"],["0079"]),
-            (["6024 Temuco"],["0080"]),
-            (["6024 Temuco"],["0088"]),
-            (["6024 Temuco"],["0097"]),
-            (["6024 Temuco"],["0103"]),
-            (["6024 Temuco"],["3598"]),
-            (["6024 Temuco"],["8150"]),
-            (["6003 Antofagasta"],["0079"]),
-            (["6003 Antofagasta"],["0080"]),
-            (["6003 Antofagasta"],["0088"]),
-            (["6003 Antofagasta"],["0097"]),
-            (["6003 Antofagasta"],["0103"]),
-            (["6003 Antofagasta"],["3598"]),
-            (["6003 Antofagasta"],["8150"]),
-            (["6011 LTS Fríos"],["0076"])
+            # Lo Aguirre - permite backhaul
+            {"cds": ["6009 Lo Aguirre"], "ces": ["0079"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            {"cds": ["6009 Lo Aguirre"], "ces": ["0080"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            {"cds": ["6009 Lo Aguirre"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            {"cds": ["6009 Lo Aguirre"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            {"cds": ["6009 Lo Aguirre"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            {"cds": ["6009 Lo Aguirre"], "ces": ["3598"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            {"cds": ["6009 Lo Aguirre"], "ces": ["8150"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            
+            # Peñón - permite backhaul
+            {"cds": ["6020 Peñón"], "ces": ["0079"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            {"cds": ["6020 Peñón"], "ces": ["0080"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            {"cds": ["6020 Peñón"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            {"cds": ["6020 Peñón"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            {"cds": ["6020 Peñón"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            {"cds": ["6020 Peñón"], "ces": ["3598"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            {"cds": ["6020 Peñón"], "ces": ["8150"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            
+            # Chillán - solo Nestlé
+            {"cds": ["6010 Chillán"], "ces": ["0079"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6010 Chillán"], "ces": ["0080"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6010 Chillán"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6010 Chillán"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6010 Chillán"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6010 Chillán"], "ces": ["3598"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6010 Chillán"], "ces": ["8150"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            
+            # Temuco - solo Nestlé
+            {"cds": ["6024 Temuco"], "ces": ["0079"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6024 Temuco"], "ces": ["0080"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6024 Temuco"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6024 Temuco"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6024 Temuco"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6024 Temuco"], "ces": ["3598"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6024 Temuco"], "ces": ["8150"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            
+            # Antofagasta - solo Nestlé
+            {"cds": ["6003 Antofagasta"], "ces": ["0079"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6003 Antofagasta"], "ces": ["0080"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6003 Antofagasta"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6003 Antofagasta"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6003 Antofagasta"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6003 Antofagasta"], "ces": ["3598"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6003 Antofagasta"], "ces": ["8150"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+
         ],
 
         "multi_ce": [
+            # Lo Aguirre
+            {"cds": ["6009 Lo Aguirre"], "ces": ["0088", "0097"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            {"cds": ["6009 Lo Aguirre"], "ces": ["0088", "3598"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
             
-            (["6009 Lo Aguirre"],["0088", "0097"]),
-            (["6020 Peñón"],["0088", "0097"]),
-            (["6003 Antofagasta"],["0088", "0097"]),
-            (["6010 Chillán"],["0088", "0097"]),
-            (["6024 Temuco"],["0088", "0097"]),
-
-            # Ces: Quilicura
-            (["6009 Lo Aguirre"],["0088", "3598"]),
-            (["6020 Peñón"],["0088", "3598"]),
-            (["6003 Antofagasta"],["0088", "3598"]),
-            (["6010 Chillán"],["0088", "3598"]),
-            (["6024 Temuco"],["0088", "3598"]),
-
-            # Ces: Quilicura y Maipú
-            (["6003 Antofagasta"],["0088", "0103"]),
-            (["6010 Chillán"],["0088", "0103"]),
-            (["6024 Temuco"],["0088", "0103"]),
-
-            # Ces: Quilicura y Teno
-            (["6003 Antofagasta"],["0088", "8151"]),
-            (["6010 Chillán"],["0088", "8151"]),
-            (["6024 Temuco"],["0088", "8151"]),
-
-            # Ces: Maipú y Teno
-            (["6003 Antofagasta"],["0103", "8151"]),
-            (["6010 Chillán"],["0103", "8151"]),
-            (["6024 Temuco"],["0103", "8151"]),
-
-            # Ces: Quilicura y San Fernando
-            (["6010 Chillán"],["0088", "0079"]),
-            (["6024 Temuco"],["0088", "0079"]),
-
-            # Ces: Maipú y San Fernando
-            (["6010 Chillán"],["0103", "0079"]),
-            (["6024 Temuco"],["0103", "0079"]),
-
-            # Ces: Maipú y Teno
-            (["6003 Antofagasta"],["0103", "8151"]),
-
-            # Ces: San Fernando y Teno
-            (["6003 Antofagasta"],["0079", "8151"]),
-
+            # Peñón
+            {"cds": ["6020 Peñón"], "ces": ["0088", "0097"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            {"cds": ["6020 Peñón"], "ces": ["0088", "3598"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+            
+            # Antofagasta - solo Nestlé
+            {"cds": ["6003 Antofagasta"], "ces": ["0088", "0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6003 Antofagasta"], "ces": ["0088", "3598"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6003 Antofagasta"], "ces": ["0088", "0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6003 Antofagasta"], "ces": ["0088", "8151"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6003 Antofagasta"], "ces": ["0103", "8151"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6003 Antofagasta"], "ces": ["0079", "8151"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            
+            # Chillán - solo Nestlé
+            {"cds": ["6010 Chillán"], "ces": ["0088", "0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6010 Chillán"], "ces": ["0088", "3598"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6010 Chillán"], "ces": ["0088", "0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6010 Chillán"], "ces": ["0088", "8151"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6010 Chillán"], "ces": ["0103", "8151"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6010 Chillán"], "ces": ["0088", "0079"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6010 Chillán"], "ces": ["0103", "0079"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            
+            # Temuco - solo Nestlé
+            {"cds": ["6024 Temuco"], "ces": ["0088", "0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6024 Temuco"], "ces": ["0088", "3598"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6024 Temuco"], "ces": ["0088", "0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6024 Temuco"], "ces": ["0088", "8151"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6024 Temuco"], "ces": ["0103", "8151"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6024 Temuco"], "ces": ["0088", "0079"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6024 Temuco"], "ces": ["0103", "0079"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
         ],
 
         "multi_cd": [
-            # Desde Quilicura
-            (["6010 Chillán","6024 Temuco"],["0088"]),
-
-            # Desde Maipú
-            (["6010 Chillán","6024 Temuco"],["0103"]),
-
+            # Solo Nestlé
+            {"cds": ["6010 Chillán","6024 Temuco"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+            {"cds": ["6010 Chillán","6024 Temuco"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
         ],
-
-        "bh": [
-            (["6009 Lo Aguirre"],["0079"]),
-            (["6009 Lo Aguirre"],["0080"]),
-            (["6009 Lo Aguirre"],["0088"]),
-            (["6009 Lo Aguirre"],["0097"]),
-            (["6009 Lo Aguirre"],["0103"]),
-            (["6009 Lo Aguirre"],["3598"]),
-            (["6009 Lo Aguirre"],["8150"]),
-            (["6020 Peñón"],["0079"]),
-            (["6020 Peñón"],["0080"]),
-            (["6020 Peñón"],["0088"]),
-            (["6020 Peñón"],["0097"]),
-            (["6020 Peñón"],["0103"]),
-            (["6020 Peñón"],["3598"]),
-            (["6020 Peñón"],["8150"]),
-        ]
-
     }
-

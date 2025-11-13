@@ -22,7 +22,7 @@ from core.config import get_client_config
 from core.constants import MAX_TIEMPO_POR_GRUPO
 from utils.math_utils import format_dates
 from optimization.groups import ( generar_grupos_optimizacion, calcular_tiempo_por_grupo, _generar_grupos_para_tipo, ajustar_tiempo_grupo )
-from utils.config_helpers import extract_truck_capacities
+from utils.config_helpers import extract_truck_capacities, get_camiones_permitidos_para_ruta, get_capacity_for_type
 from models.domain import Camion
 
 # ============================================================================
@@ -110,7 +110,6 @@ def optimizar_con_dos_fases(
     """
     # 1) Preprocesamiento
     pedidos_objetos, pedidos_dicts = _preprocesar_datos(df_raw, client_config, cliente, venta)
-    
     # 2) Calcular tiempo por grupo
     tpg = calcular_tiempo_por_grupo(pedidos_objetos, client_config, request_timeout, max_tpg)
     
@@ -125,13 +124,6 @@ def optimizar_con_dos_fases(
         pedidos_objetos, pedidos_dicts, client_config,
         cliente, "binpacking", tpg, request_timeout
     )
-    
-    # 5) Aplicar objetivo de ratio BH (si existe)
-    resultado_vcu = _aplicar_objetivo_bh(resultado_vcu, cliente, client_config)
-    resultado_bp = _aplicar_objetivo_bh(resultado_bp, cliente, client_config)
-    
-    # 6) Etiquetar camiones BH en BinPacking (regla especial)
-    resultado_bp = _etiquetar_bh_binpacking(resultado_bp, client_config, cliente)
 
     return {
         "vcu": resultado_vcu,
@@ -172,8 +164,6 @@ def _preprocesar_datos(
     
     return pedidos_objetos, pedidos_dicts
 
-
-# En orchestrator.py, reemplazar la función _dataframe_a_pedidos
 
 def _dataframe_a_pedidos(df: pd.DataFrame, pedidos_dicts: List[Dict]) -> List[Pedido]:
     """
@@ -253,196 +243,453 @@ def _dataframe_a_pedidos(df: pd.DataFrame, pedidos_dicts: List[Dict]) -> List[Pe
     
     return pedidos
 
+
 def _ejecutar_optimizacion_completa(
     pedidos_objetos: List[Pedido],
     pedidos_dicts: List[Dict[str, Any]],
     client_config,
     cliente: str,
-    modo: str,
+    fase: str,
     tpg: int,
     request_timeout: int
 ) -> Dict[str, Any]:
     """
-    Ejecuta optimización completa para un modo (VCU o BinPacking).
+    Ejecuta optimización completa (VCU o BinPacking).
+    
+    Args:
+        pedidos_objetos: Lista de objetos Pedido
+        pedidos_dicts: Lista de dicts de pedidos
+        client_config: Configuración del cliente
+        cliente: Nombre del cliente
+        fase: "vcu" o "binpacking"
+        tpg: Tiempo por grupo
+        request_timeout: Timeout total
+    
+    Returns:
+        Dict con resultados consolidados
     """
     start_total = time.time()
     
     # Extraer capacidades
     capacidades = extract_truck_capacities(client_config)
+    capacidad_default = capacidades.get(TipoCamion.PAQUETERA, next(iter(capacidades.values())))
     
-    if modo == "vcu":
-        # ✅ Para VCU: Solo generar grupos NORMALES inicialmente
-        grupos_iniciales = generar_grupos_optimizacion(
-            pedidos_objetos, client_config, "normal"  # ✅ Solo normales
+    print(f"\n{'='*80}")
+    print(f"INICIANDO OPTIMIZACIÓN {fase.upper()}")
+    print(f"{'='*80}")
+    print(f"Total pedidos: {len(pedidos_objetos)}")
+    print(f"Tiempo por grupo: {tpg}s")
+    print(f"Timeout total: {request_timeout}s")
+    
+    if fase == "vcu":
+        # Usar nueva función de cascada con tipos de camión
+        resultados = _optimizar_grupos_vcu_cascada_con_camiones(
+            pedidos_objetos, client_config, capacidades,
+            tpg, request_timeout, start_total
         )
-        
-        print(f"[VCU] Grupos normales generados: {len(grupos_iniciales)}")
-        
-        # ✅ VCU maneja cascada internamente
-        resultados = _optimizar_grupos_vcu(
-            grupos_iniciales, 
-            client_config, 
-            capacidades,
-            tpg, 
-            request_timeout, 
-            start_total,
-            pedidos_objetos
-        )
-    else:
-        # BinPacking: generar todos los grupos
-        grupos = generar_grupos_optimizacion(pedidos_objetos, client_config, modo)
-        
+    else:  # binpacking
+        grupos = generar_grupos_optimizacion(pedidos_objetos, client_config, "binpacking")
         resultados = _optimizar_grupos_binpacking(
             grupos, client_config, capacidades,
             tpg, request_timeout, start_total
         )
     
-    # Consolidar
+    # Consolidar resultados
     return _consolidar_resultados(
-        resultados, pedidos_objetos, pedidos_dicts, 
-        capacidades[TipoCamion.NORMAL], client_config
+        resultados, pedidos_objetos, pedidos_dicts,
+        capacidad_default, client_config
     )
 
 
-def _optimizar_grupos_vcu(
-    grupos_iniciales: List[Tuple],  # Solo grupos normales
+def _optimizar_grupos_paralelo_nestle(
+    grupos_con_capacidad: List[Tuple],
+    client_config,
+    tpg: int,
+    request_timeout: int,
+    start_total: float
+) -> List[Tuple[Dict[str, Any], TipoCamion]]:
+    """
+    Optimiza grupos normales en paralelo con camiones Nestlé.
+    
+    Returns:
+        Lista de tuplas (resultado, tipo_camion_usado)
+    """
+    resultados = []
+    
+    def optimizar_grupo_wrapper(args):
+        cfg, pedidos_grupo, cap, tipo_camion = args
+        n_pedidos = len(pedidos_grupo)
+        tiempo_grupo = ajustar_tiempo_grupo(tpg, n_pedidos, "normal")
+        
+        print(f"[VCU]   Optimizando {cfg.id}: {n_pedidos} pedidos, {tiempo_grupo}s, camión: {tipo_camion.value}")
+        
+        res = optimizar_grupo_vcu(
+            pedidos_grupo, cfg, client_config, cap, tiempo_grupo
+        )
+        
+        return (res, tipo_camion, cfg.id, n_pedidos)
+    
+    # Ejecutar en paralelo
+    with ThreadPoolExecutor(max_workers=THREAD_WORKERS_NORMAL) as executor:
+        futures = {
+            executor.submit(optimizar_grupo_wrapper, args): args 
+            for args in grupos_con_capacidad
+        }
+        
+        for future in as_completed(futures):
+            if time.time() - start_total > (request_timeout - 2):
+                print("[VCU] Timeout cercano, cancelando tareas pendientes")
+                break
+            
+            try:
+                res, tipo_camion, grupo_id, n_pedidos = future.result()
+                
+                if res.get("status") in ("OPTIMAL", "FEASIBLE"):
+                    nuevos = res.get("pedidos_asignados_ids", [])
+                    n_camiones = len(res.get("camiones", []))
+                    
+                    if nuevos and n_camiones > 0:
+                        resultados.append((res, tipo_camion))
+                        print(f"[VCU] ✓ Normal {grupo_id}: {len(nuevos)}/{n_pedidos} pedidos en {n_camiones} camiones")
+                    else:
+                        print(f"[VCU] ⚠️ Normal {grupo_id}: {res.get('status')} pero 0 pedidos/camiones")
+                else:
+                    print(f"[VCU] ✗ Normal {grupo_id}: {res.get('status', 'NO_SOLUTION')}")
+            
+            except Exception as e:
+                print(f"[VCU] Error en grupo: {e}")
+    
+    return resultados
+
+
+def _optimizar_grupos_vcu_cascada_con_camiones(
+    pedidos_originales: List[Pedido],
     client_config,
     capacidades: Dict[TipoCamion, TruckCapacity],
     tpg: int,
     request_timeout: int,
-    start_total: float,
-    todos_los_pedidos: List[Pedido]
+    start_total: float
 ) -> List[Dict[str, Any]]:
     """
-    Optimiza grupos en modo VCU con cascada serial:
-    1. Optimiza grupos NORMALES en paralelo
-    2. Regenera grupos ESPECIALES con pedidos no asignados y optimiza en serie
+    Optimización VCU en cascada considerando tipos de camión.
+    
+    Flujo:
+    0. Procesa rutas multi_ce_prioridad SECUENCIAL con camiones Nestlé (si existen)
+    1. Procesa rutas normales EN PARALELO con camiones Nestlé (paquetera, rampla_directa)
+    2. Procesa multi_ce SECUENCIAL con camiones Nestlé
+    3. Procesa multi_cd SECUENCIAL con camiones Nestlé
+    4. Repite el ciclo anterior con camiones backhaul en rutas que lo permitan
+    
+    Los pedidos no asignados fluyen de una etapa a otra.
     """
-
-
+    from utils.config_helpers import get_camiones_permitidos_para_ruta, get_capacity_for_type
+    
     resultados = []
     pedidos_asignados_global = set()
+    pedidos_disponibles = pedidos_originales.copy()
     
-    # ========================================
-    # FASE 1: Optimizar NORMALES en PARALELO
-    # ========================================
-    grupos_normal = [(cfg, peds) for cfg, peds in grupos_iniciales if cfg.tipo.value == "normal"]
+    # ========================================================================
+    # FASE 1: OPTIMIZACIÓN CON CAMIONES NESTLÉ
+    # ========================================================================
+    print("\n" + "="*80)
+    print("FASE 1: OPTIMIZACIÓN CON CAMIONES NESTLÉ")
+    print("="*80)
     
-    print(f"[VCU] Fase 1: Optimizando {len(grupos_normal)} grupos NORMALES en paralelo")
+    # 0. Rutas MULTI_CE_PRIORIDAD en SECUENCIAL (PRIMERO)
+    print("armando grupos prioridad")
+    grupos_prioridad = _generar_grupos_para_tipo(pedidos_disponibles, client_config, "multi_ce_prioridad")
+    print("previo a grupos prioridad")
     
-    if grupos_normal:
-        with ThreadPoolExecutor(max_workers=min(THREAD_WORKERS_NORMAL, len(grupos_normal))) as pool:
-            futures = []
-            
-            for cfg, pedidos_grupo in grupos_normal:
-                if not pedidos_grupo:
-                    continue
-                
-                n_pedidos = len(pedidos_grupo)
-                tiempo_grupo = ajustar_tiempo_grupo(tpg, n_pedidos, "normal")
-                
-                if time.time() - start_total + tiempo_grupo > (request_timeout - 2):
-                    continue
-                
-                cap = capacidades[TipoCamion.NORMAL]
-                
-                fut = pool.submit(
-                    optimizar_grupo_vcu,
-                    pedidos_grupo, cfg, client_config, cap, tiempo_grupo
-                )
-                futures.append((fut, cfg.id, len(pedidos_grupo)))
-            
-            # Recoger resultados
-            for fut, grupo_id, n_pedidos in futures:
-                try:
-                    res = fut.result(timeout=max(1, request_timeout - int(time.time() - start_total)))
-                    
-                    if res.get("status") in ("OPTIMAL", "FEASIBLE") and res.get("camiones"):
-                        nuevos = res.get("pedidos_asignados_ids", [])
-                        pedidos_asignados_global.update(nuevos)
-                        resultados.append(res)
-                        print(f"[VCU] ✓ Normal {grupo_id}: {len(nuevos)}/{n_pedidos} pedidos asignados")
-                    else:
-                        print(f"[VCU] ✗ Normal {grupo_id}: NO_SOLUTION")
-                except Exception as e:
-                    print(f"[VCU] ✗ Normal {grupo_id}: ERROR - {e}")
-    
-    print(f"[VCU] Fase 1 completa: {len(pedidos_asignados_global)} pedidos asignados totales")
-    
-    # ========================================
-    # FASE 2: CASCADA DINÁMICA DE RUTAS ESPECIALES
-    # ========================================
-    tipos_especiales = ["multi_ce_prioridad", "multi_ce", "multi_cd", "bh"]
-    
-    for tipo in tipos_especiales:
-        # ✅ CALCULAR pedidos NO asignados hasta ahora
-        pedidos_disponibles = [
-            p for p in todos_los_pedidos 
-            if p.pedido not in pedidos_asignados_global
-        ]
+    if grupos_prioridad:
+        print(f"\n[VCU] Procesando MULTI_CE_PRIORIDAD con camiones Nestlé SECUENCIAL: {len(grupos_prioridad)} grupos")
         
-        if not pedidos_disponibles:
-            print(f"[VCU] Fase 2 ({tipo}): No quedan pedidos disponibles, deteniendo cascada")
-            break
-        
-        print(f"\n[VCU] Fase 2 ({tipo}): {len(pedidos_disponibles)} pedidos disponibles")
-        
-        # ✅ GENERAR grupos de este tipo CON pedidos disponibles
-        grupos_tipo = _generar_grupos_para_tipo(
-            pedidos_disponibles, 
-            client_config, 
-            tipo
-        )
-        
-        if not grupos_tipo:
-            print(f"[VCU] Fase 2 ({tipo}): No se generaron grupos, skip")
-            continue
-        
-        print(f"[VCU] Fase 2 ({tipo}): {len(grupos_tipo)} grupos generados")
-        
-        # ✅ OPTIMIZAR cada grupo de este tipo EN SERIE
-        for cfg, pedidos_grupo in grupos_tipo:
-            if not pedidos_grupo:
-                continue
-            
-            n_ped = len(pedidos_grupo)
-            tiempo_grupo = ajustar_tiempo_grupo(tpg, n_ped, tipo)
-            
-            if time.time() - start_total + tiempo_grupo > (request_timeout - 2):
-                print(f"[VCU] Timeout cercano, deteniendo cascada")
+        for cfg, pedidos_grupo in grupos_prioridad:
+            if time.time() - start_total > (request_timeout - 2):
                 break
             
-            # Determinar capacidad
-            if tipo == "bh":
-                cap = capacidades.get(TipoCamion.BH, capacidades[TipoCamion.NORMAL])
-            else:
-                cap = capacidades[TipoCamion.NORMAL]
+            # Filtrar pedidos ya asignados
+            pedidos_no_asignados = [p for p in pedidos_grupo if p.pedido not in pedidos_asignados_global]
+            if not pedidos_no_asignados:
+                continue
             
-            print(f"[VCU]   Optimizando {cfg.id}: {n_ped} pedidos, {tiempo_grupo}s")
+            n_pedidos = len(pedidos_no_asignados)
+            tiempo_grupo = ajustar_tiempo_grupo(tpg, n_pedidos, "multi_ce_prioridad")
+            
+            # Obtener camiones permitidos para esta ruta
+            camiones_permitidos = get_camiones_permitidos_para_ruta(
+                client_config, cfg.cd, cfg.ce, "multi_ce_prioridad"
+            )
+            camiones_nestle = [c for c in camiones_permitidos if c.es_nestle]
+            
+            if not camiones_nestle:
+                continue
+            
+            # Elegir tipo de camión
+            if TipoCamion.PAQUETERA in camiones_nestle:
+                tipo_camion = TipoCamion.PAQUETERA
+            elif TipoCamion.RAMPLA_DIRECTA in camiones_nestle:
+                tipo_camion = TipoCamion.RAMPLA_DIRECTA
+            else:
+                tipo_camion = camiones_nestle[0]
+            
+            cap = get_capacity_for_type(client_config, tipo_camion)
+            
+            print(f"[VCU]   Optimizando {cfg.id}: {n_pedidos} pedidos, {tiempo_grupo}s, camión: {tipo_camion.value}")
             
             res = optimizar_grupo_vcu(
-                pedidos_grupo, cfg, client_config, cap, tiempo_grupo
+                pedidos_no_asignados, cfg, client_config, cap, tiempo_grupo
             )
             
             if res.get("status") in ("OPTIMAL", "FEASIBLE"):
                 nuevos = res.get("pedidos_asignados_ids", [])
-                n_camiones = len(res.get("camiones", []))
+                camiones = res.get("camiones", [])
                 
-                if nuevos and n_camiones > 0:
+                if nuevos and camiones:
+                    # Reclasificar y etiquetar camiones
+                    for cam in camiones:
+                        tipo_optimo = _reclasificar_camion_nestle(cam, client_config)
+                        
+                        # Asignar el tipo - siempre es un objeto Camion aquí
+                        cam.tipo_camion = TipoCamion(tipo_optimo)
+                        
+                        # También actualizar en todos los pedidos del camión
+                        for pedido in cam.pedidos:
+                            pedido.tipo_camion = tipo_optimo
+                    
                     pedidos_asignados_global.update(nuevos)
                     resultados.append(res)
-                    print(f"[VCU] ✓ Normal {grupo_id}: {len(nuevos)}/{n_pedidos} pedidos asignados en {n_camiones} camiones")
+                    print(f"[VCU] ✓ MULTI_CE_PRIORIDAD Nestlé: {len(nuevos)}/{n_pedidos} pedidos en {len(camiones)} camiones")
                 else:
-                    print(f"[VCU] ⚠️ Normal {grupo_id}: {res.get('status')} pero 0 pedidos/camiones asignados")
+                    print(f"[VCU] ⚠️ MULTI_CE_PRIORIDAD Nestlé: {res.get('status')} pero 0 pedidos/camiones")
             else:
-                print(f"[VCU] ✗ Normal {grupo_id}: {res.get('status', 'NO_SOLUTION')}")
+                print(f"[VCU] ✗ MULTI_CE_PRIORIDAD Nestlé: {res.get('status', 'NO_SOLUTION')}")
+        
+        # Actualizar pedidos disponibles
+        pedidos_disponibles = [p for p in pedidos_disponibles if p.pedido not in pedidos_asignados_global]
+    
+    # 1. Rutas NORMALES en PARALELO
+    print("armando grupos normales")
+    grupos_normal = _generar_grupos_para_tipo(pedidos_disponibles, client_config, "normal")
+    print("previo a grupos normales")
+    
+    if grupos_normal:
+        print(f"\n[VCU] Procesando NORMAL con camiones Nestlé EN PARALELO: {len(grupos_normal)} grupos")
+        
+        # Preparar grupos con sus capacidades
+        grupos_con_capacidad = []
+        for cfg, pedidos_grupo in grupos_normal:
+            # Filtrar pedidos ya asignados
+            pedidos_no_asignados = [p for p in pedidos_grupo if p.pedido not in pedidos_asignados_global]
+            if not pedidos_no_asignados:
+                continue
             
+            # Obtener tipo de camión Nestlé para esta ruta
+            camiones_permitidos = get_camiones_permitidos_para_ruta(
+                client_config, cfg.cd, cfg.ce, "normal"
+            )
+            camiones_nestle = [c for c in camiones_permitidos if c.es_nestle]
+            
+            if not camiones_nestle:
+                continue
+            
+            # Elegir tipo de camión (paquetera por defecto)
+            if TipoCamion.PAQUETERA in camiones_nestle:
+                tipo_camion = TipoCamion.PAQUETERA
+            elif TipoCamion.RAMPLA_DIRECTA in camiones_nestle:
+                tipo_camion = TipoCamion.RAMPLA_DIRECTA
+            else:
+                tipo_camion = camiones_nestle[0]
+            
+            cap = get_capacity_for_type(client_config, tipo_camion)
+            
+            grupos_con_capacidad.append((cfg, pedidos_no_asignados, cap, tipo_camion))
+        
+        # Optimizar rutas normales EN PARALELO
+        if grupos_con_capacidad:
+            resultados_normal = _optimizar_grupos_paralelo_nestle(
+                grupos_con_capacidad, client_config, tpg, request_timeout, start_total
+            )
+            
+            # Consolidar resultados con reclasificación
+            for res, tipo_camion_usado in resultados_normal:
+                if res.get("status") in ("OPTIMAL", "FEASIBLE"):
+                    nuevos = res.get("pedidos_asignados_ids", [])
+                    camiones = res.get("camiones", [])
+                    
+                    if nuevos and camiones:
+                        # Reclasificar cada camión individualmente
+                        for cam in camiones:
+                            tipo_optimo = _reclasificar_camion_nestle(cam, client_config)
+                            
+                            # Asignar el tipo - siempre es un objeto Camion aquí
+                            cam.tipo_camion = TipoCamion(tipo_optimo)
+                            
+                            # También actualizar en todos los pedidos del camión
+                            for pedido in cam.pedidos:
+                                pedido.tipo_camion = tipo_optimo
+                        
+                        pedidos_asignados_global.update(nuevos)
+                        resultados.append(res)
+        
+        # Actualizar pedidos disponibles
+        pedidos_disponibles = [p for p in pedidos_disponibles if p.pedido not in pedidos_asignados_global]
+    
+    # 2. Rutas MULTI_CE y MULTI_CD en SECUENCIAL (cascada)
+    for tipo_ruta in ["multi_ce", "multi_cd"]:
+        if time.time() - start_total > (request_timeout - 2):
+            print(f"[VCU] Timeout cercano, deteniendo en tipo {tipo_ruta}")
+            break
+        
+        # Generar grupos para este tipo de ruta
+        grupos_tipo = _generar_grupos_para_tipo(pedidos_disponibles, client_config, tipo_ruta)
+        
+        if not grupos_tipo:
+            print(f"[VCU] {tipo_ruta.upper()}: No hay grupos")
+            continue
+        
+        print(f"\n[VCU] Procesando {tipo_ruta.upper()} con camiones Nestlé SECUENCIAL: {len(grupos_tipo)} grupos")
+        
+        # Procesar cada grupo secuencialmente
+        for cfg, pedidos_grupo in grupos_tipo:
             if time.time() - start_total > (request_timeout - 2):
                 break
+            
+            # Filtrar pedidos ya asignados
+            pedidos_no_asignados = [p for p in pedidos_grupo if p.pedido not in pedidos_asignados_global]
+            if not pedidos_no_asignados:
+                continue
+            
+            n_pedidos = len(pedidos_no_asignados)
+            tiempo_grupo = ajustar_tiempo_grupo(tpg, n_pedidos, tipo_ruta)
+            
+            # Obtener camiones permitidos para esta ruta
+            camiones_permitidos = get_camiones_permitidos_para_ruta(
+                client_config, cfg.cd, cfg.ce, tipo_ruta
+            )
+            camiones_nestle = [c for c in camiones_permitidos if c.es_nestle]
+            
+            if not camiones_nestle:
+                continue
+            
+            # Elegir tipo de camión
+            if TipoCamion.PAQUETERA in camiones_nestle:
+                tipo_camion = TipoCamion.PAQUETERA
+            elif TipoCamion.RAMPLA_DIRECTA in camiones_nestle:
+                tipo_camion = TipoCamion.RAMPLA_DIRECTA
+            else:
+                tipo_camion = camiones_nestle[0]
+            
+            cap = get_capacity_for_type(client_config, tipo_camion)
+            
+            print(f"[VCU]   Optimizando {cfg.id}: {n_pedidos} pedidos, {tiempo_grupo}s, camión: {tipo_camion.value}")
+            
+            res = optimizar_grupo_vcu(
+                pedidos_no_asignados, cfg, client_config, cap, tiempo_grupo
+            )
+            
+            if res.get("status") in ("OPTIMAL", "FEASIBLE"):
+                nuevos = res.get("pedidos_asignados_ids", [])
+                camiones = res.get("camiones", [])
+                
+                if nuevos and camiones:
+                    # Reclasificar y etiquetar camiones
+                    for cam in camiones:
+                        tipo_optimo = _reclasificar_camion_nestle(cam, client_config)
+                        
+                        # Asignar el tipo - siempre es un objeto Camion aquí
+                        cam.tipo_camion = TipoCamion(tipo_optimo)
+                        
+                        # También actualizar en todos los pedidos del camión
+                        for pedido in cam.pedidos:
+                            pedido.tipo_camion = tipo_optimo
+                    
+                    pedidos_asignados_global.update(nuevos)
+                    resultados.append(res)
+                    print(f"[VCU] ✓ {tipo_ruta.upper()} Nestlé: {len(nuevos)}/{n_pedidos} pedidos en {len(camiones)} camiones")
+                else:
+                    print(f"[VCU] ⚠️ {tipo_ruta.upper()} Nestlé: {res.get('status')} pero 0 pedidos/camiones")
+            else:
+                print(f"[VCU] ✗ {tipo_ruta.upper()} Nestlé: {res.get('status', 'NO_SOLUTION')}")
         
-        # Si timeout, detener cascada
+        # Actualizar pedidos disponibles
+        pedidos_disponibles = [p for p in pedidos_disponibles if p.pedido not in pedidos_asignados_global]
+    
+    # ========================================================================
+    # FASE 2: OPTIMIZACIÓN CON CAMIONES BACKHAUL
+    # ========================================================================
+    print("\n" + "="*80)
+    print("FASE 2: OPTIMIZACIÓN CON CAMIONES BACKHAUL")
+    print("="*80)
+    
+    # Definir el orden: multi_ce_prioridad, normal, multi_ce, multi_cd
+    orden_tipos_ruta_bh = ["multi_ce_prioridad", "normal", "multi_ce", "multi_cd"]
+    
+    for tipo_ruta in orden_tipos_ruta_bh:
         if time.time() - start_total > (request_timeout - 2):
+            print(f"[VCU] Timeout cercano, deteniendo en tipo {tipo_ruta} BH")
             break
+        
+        # Generar grupos para este tipo de ruta
+        grupos_tipo = _generar_grupos_para_tipo(pedidos_disponibles, client_config, tipo_ruta)
+        
+        if not grupos_tipo:
+            continue
+        
+        print(f"\n[VCU] Procesando {tipo_ruta.upper()} con camiones Backhaul: {len(grupos_tipo)} grupos")
+        
+        # Procesar cada grupo
+        for cfg, pedidos_grupo in grupos_tipo:
+            if time.time() - start_total > (request_timeout - 2):
+                break
+            
+            # Filtrar pedidos ya asignados
+            pedidos_no_asignados = [p for p in pedidos_grupo if p.pedido not in pedidos_asignados_global]
+            if not pedidos_no_asignados:
+                continue
+            
+            n_pedidos = len(pedidos_no_asignados)
+            tiempo_grupo = ajustar_tiempo_grupo(tpg, n_pedidos, tipo_ruta)
+            
+            # Verificar si esta ruta permite backhaul
+            camiones_permitidos = get_camiones_permitidos_para_ruta(
+                client_config, cfg.cd, cfg.ce, tipo_ruta
+            )
+            
+            if TipoCamion.BACKHAUL not in camiones_permitidos:
+                continue
+            
+            # Usar capacidad backhaul
+            cap = get_capacity_for_type(client_config, TipoCamion.BACKHAUL)
+            
+            print(f"[VCU]   Optimizando {cfg.id}: {n_pedidos} pedidos, {tiempo_grupo}s, camión: backhaul")
+            
+            res = optimizar_grupo_vcu(
+                pedidos_no_asignados, cfg, client_config, cap, tiempo_grupo
+            )
+            
+            if res.get("status") in ("OPTIMAL", "FEASIBLE"):
+                nuevos = res.get("pedidos_asignados_ids", [])
+                camiones = res.get("camiones", [])
+                
+                if nuevos and camiones:
+                    # Etiquetar camiones como backhaul
+                    for cam in camiones:
+                        cam.tipo_camion = TipoCamion.BACKHAUL
+                        
+                        # También actualizar en todos los pedidos del camión
+                        for pedido in cam.pedidos:
+                            pedido.tipo_camion = "backhaul"
+                    
+                    pedidos_asignados_global.update(nuevos)
+                    resultados.append(res)
+                    print(f"[VCU] ✓ {tipo_ruta.upper()} BH: {len(nuevos)}/{n_pedidos} pedidos en {len(camiones)} camiones")
+                else:
+                    print(f"[VCU] ⚠️ {tipo_ruta.upper()} BH: {res.get('status')} pero 0 pedidos/camiones")
+            else:
+                print(f"[VCU] ✗ {tipo_ruta.upper()} BH: {res.get('status', 'NO_SOLUTION')}")
+        
+        # Actualizar pedidos disponibles para siguiente tipo de ruta
+        pedidos_disponibles = [p for p in pedidos_disponibles if p.pedido not in pedidos_asignados_global]
     
     print(f"\n[VCU] Optimización completa: {len(resultados)} grupos, {len(pedidos_asignados_global)} pedidos asignados")
     
@@ -460,6 +707,8 @@ def _optimizar_grupos_binpacking(
     """
     Optimiza grupos en modo BinPacking (secuencial).
     """
+    from utils.config_helpers import get_camiones_permitidos_para_ruta, get_capacity_for_type
+    
     resultados = []
     
     for cfg, pedidos_grupo in grupos:
@@ -472,21 +721,44 @@ def _optimizar_grupos_binpacking(
         if time.time() - start_total + tiempo_grupo > (request_timeout - 2):
             break
         
-        cap = capacidades.get(
-            TipoCamion.BH if cfg.tipo.value == 'bh' else TipoCamion.NORMAL,
-            capacidades[TipoCamion.NORMAL]
+        # Obtener camiones permitidos para esta ruta
+        camiones_permitidos = get_camiones_permitidos_para_ruta(
+            client_config, cfg.cd, cfg.ce, cfg.tipo.value
         )
+        
+        # Usar el primer tipo permitido (prioridad a Nestlé)
+        tipo_camion = camiones_permitidos[0] if camiones_permitidos else TipoCamion.PAQUETERA
+        cap = get_capacity_for_type(client_config, tipo_camion)
         
         res = optimizar_grupo_binpacking(pedidos_grupo, cfg, client_config, cap, tiempo_grupo)
         
         if res.get("status") in ("OPTIMAL", "FEASIBLE") and res.get("camiones"):
+            camiones = res.get("camiones", [])
+            
+            # Etiquetar camiones - son objetos Camion
+            for cam in camiones:
+                # Si es Nestlé, reclasificar
+                if tipo_camion.es_nestle:
+                    tipo_optimo = _reclasificar_camion_nestle(cam, client_config)
+                    cam.tipo_camion = TipoCamion(tipo_optimo)
+                    
+                    # Actualizar en todos los pedidos
+                    for pedido in cam.pedidos:
+                        pedido.tipo_camion = tipo_optimo
+                else:
+                    # Si es backhaul, asignar directamente
+                    cam.tipo_camion = tipo_camion
+                    
+                    # Actualizar en todos los pedidos
+                    for pedido in cam.pedidos:
+                        pedido.tipo_camion = tipo_camion.value
+            
             resultados.append(res)
         
         if time.time() - start_total > (request_timeout - 2):
             break
     
     return resultados
-
 
 def _consolidar_resultados(
     resultados: List[Dict[str, Any]],
@@ -541,6 +813,7 @@ def _consolidar_resultados(
         "estadisticas": _compute_stats_from_objects(all_camiones, pedidos_originales, pedidos_asignados_ids)
     }
 
+
 def _compute_stats_from_objects(
     camiones: List[Camion],
     pedidos_originales: List[Pedido],
@@ -554,18 +827,24 @@ def _compute_stats_from_objects(
     total_pedidos = len(pedidos_originales)
     pedidos_asignados = len(pedidos_asignados_ids)
     
-    # Contadores
+    # Contadores por tipo de camión
     tipos_camion = Counter(c.tipo_camion.value for c in camiones)
-    cantidad_normal = tipos_camion.get('normal', 0)
-    cantidad_bh = tipos_camion.get('bh', 0)
+    cantidad_paquetera = tipos_camion.get('paquetera', 0)
+    cantidad_rampla = tipos_camion.get('rampla_directa', 0)
+    cantidad_backhaul = tipos_camion.get('backhaul', 0)
+    
+    # Camiones Nestlé = paquetera + rampla_directa
+    cantidad_nestle = cantidad_paquetera + cantidad_rampla
     
     # VCU promedios
     vcu_total = sum(c.vcu_max for c in camiones) / len(camiones) if camiones else 0
     
-    camiones_normal = [c for c in camiones if c.tipo_camion.value == 'normal']
-    vcu_normal = sum(c.vcu_max for c in camiones_normal) / len(camiones_normal) if camiones_normal else 0
+    # VCU promedio de camiones Nestlé (paquetera + rampla_directa)
+    camiones_nestle = [c for c in camiones if c.tipo_camion.es_nestle]
+    vcu_nestle = sum(c.vcu_max for c in camiones_nestle) / len(camiones_nestle) if camiones_nestle else 0
     
-    camiones_bh = [c for c in camiones if c.tipo_camion.value == 'bh']
+    # VCU promedio de camiones Backhaul
+    camiones_bh = [c for c in camiones if c.tipo_camion == TipoCamion.BACKHAUL]
     vcu_bh = sum(c.vcu_max for c in camiones_bh) / len(camiones_bh) if camiones_bh else 0
     
     # Valorizado
@@ -576,14 +855,21 @@ def _compute_stats_from_objects(
     
     return {
         "promedio_vcu": round(vcu_total, 3),
-        "promedio_vcu_normal": round(vcu_normal, 3),
-        "promedio_vcu_bh": round(vcu_bh, 3),
+        "promedio_vcu_nestle": round(vcu_nestle, 3),
+        "promedio_vcu_backhaul": round(vcu_bh, 3),
         "cantidad_camiones": len(camiones),
-        "cantidad_camiones_normal": cantidad_normal,
-        "cantidad_camiones_bh": cantidad_bh,
+        "cantidad_camiones_nestle": cantidad_nestle,
+        "cantidad_camiones_paquetera": cantidad_paquetera,
+        "cantidad_camiones_rampla_directa": cantidad_rampla,
+        "cantidad_camiones_backhaul": cantidad_backhaul,
         "cantidad_pedidos_asignados": pedidos_asignados,
         "total_pedidos": total_pedidos,
-        "valorizado": valorizado
+        "valorizado": valorizado,
+        # Mantener compatibilidad con frontend antiguo (deprecated)
+        "promedio_vcu_normal": round(vcu_nestle, 3),
+        "promedio_vcu_bh": round(vcu_bh, 3),
+        "cantidad_camiones_normal": cantidad_nestle,
+        "cantidad_camiones_bh": cantidad_backhaul,
     }
 
 def _aplicar_overrides_vcu(config, vcuTarget: Any, vcuTargetBH: Any):
@@ -607,79 +893,107 @@ def _aplicar_overrides_vcu(config, vcuTarget: Any, vcuTargetBH: Any):
     return config
 
 
-def _aplicar_objetivo_bh(
-    resultado: Dict[str, Any],
-    cliente: str,
+def _reclasificar_camion_nestle(camion, client_config) -> str:
+    """
+    Determina el tipo de camión Nestlé óptimo para un camión ya optimizado.
+    
+    Lógica:
+    - Se optimiza inicialmente con PAQUETERA (más posiciones)
+    - Si el resultado cabe en RAMPLA_DIRECTA, se reclasifica
+    
+    Args:
+        camion: Objeto Camion o dict con datos del camión
+        client_config: Configuración del cliente
+    
+    Returns:
+        Tipo de camión óptimo: "paquetera" o "rampla_directa"
+    """
+    from utils.config_helpers import get_capacity_for_type
+    
+    # Obtener capacidades de ambos tipos
+    cap_paquetera = get_capacity_for_type(client_config, TipoCamion.PAQUETERA)
+    cap_rampla = get_capacity_for_type(client_config, TipoCamion.RAMPLA_DIRECTA)
+    
+    # Si tienen las mismas capacidades, no hay diferencia
+    if (cap_paquetera.max_positions == cap_rampla.max_positions and
+        cap_paquetera.cap_weight == cap_rampla.cap_weight and
+        cap_paquetera.cap_volume == cap_rampla.cap_volume):
+        return "paquetera"  # Por defecto
+    
+    # Extraer métricas del camión (soporta objeto o dict)
+    if hasattr(camion, 'pedidos'):
+        # Es un objeto Camion
+        num_pedidos = len(camion.pedidos)
+        peso_total = sum(p.peso for p in camion.pedidos)
+        volumen_total = sum(p.volumen for p in camion.pedidos)
+        pallets_total = camion.pallets_capacidad
+    else:
+        # Es un dict
+        num_pedidos = len(camion.get("pedidos", []))
+        peso_total = camion.get("peso_total", 0)
+        volumen_total = camion.get("volumen_total", 0)
+        pallets_total = camion.get("pallets_total", 0)
+    
+    # Verificar si cabe en rampla directa
+    cabe_en_rampla = (
+        num_pedidos <= cap_rampla.max_positions and
+        peso_total <= cap_rampla.cap_weight and
+        volumen_total <= cap_rampla.cap_volume and
+        pallets_total <= cap_rampla.max_pallets
+    )
+    
+    if cabe_en_rampla:
+        # Calcular VCU con rampla para verificar que cumple el target
+        vcu_peso_rampla = peso_total / cap_rampla.cap_weight if cap_rampla.cap_weight > 0 else 0
+        vcu_vol_rampla = volumen_total / cap_rampla.cap_volume if cap_rampla.cap_volume > 0 else 0
+        vcu_max_rampla = max(vcu_peso_rampla, vcu_vol_rampla)
+        
+        # Verificar si cumple el target de VCU
+        if vcu_max_rampla >= cap_rampla.vcu_min:
+            return "rampla_directa"
+    
+    # Si no cabe o no cumple VCU target, usar paquetera
+    return "paquetera"
+
+
+def _aplicar_reclasificacion_nestle(
+    resultados: List[Tuple[Dict[str, Any], TipoCamion]], 
     client_config
-) -> Dict[str, Any]:
+) -> List[Tuple[Dict[str, Any], TipoCamion]]:
     """
-    Intenta alcanzar ratio objetivo de camiones BH.
+    Aplica reclasificación de camiones Nestlé a resultados de optimización.
+    
+    Args:
+        resultados: Lista de tuplas (resultado_optimizacion, tipo_camion)
+        client_config: Configuración del cliente
+    
+    Returns:
+        Lista de tuplas con tipos de camión reclasificados
     """
-    try:
-        from services.postprocess import enforce_bh_target
-        
-        target_ratio = getattr(client_config, "BH_TRUCK_TARGET_RATIO", None)
-        
-        if isinstance(target_ratio, (int, float)) and target_ratio > 0:
-            cam_dicts, pni_dicts = enforce_bh_target(
-                resultado.get("camiones", []),
-                resultado.get("pedidos_no_incluidos", []),
-                cliente,
-                float(target_ratio)
-            )
-            
-            # Preservar estadísticas existentes
-            estadisticas_previas = resultado.get("estadisticas", {})
-            resultado["camiones"] = cam_dicts
-            resultado["pedidos_no_incluidos"] = pni_dicts
-            resultado["estadisticas"] = estadisticas_previas
+    resultados_reclasificados = []
     
-    except Exception:
-        # Si falla, continuar sin aplicar el objetivo
-        pass
+    total_reclasificados = 0
     
-    return resultado
-
-
-def _etiquetar_bh_binpacking(
-    resultado: Dict[str, Any],
-    client_config,
-    cliente: str
-) -> Dict[str, Any]:
-    """
-    Etiqueta camiones como BH en BinPacking según reglas especiales.
-    """
-    if not getattr(client_config, "PERMITE_BH", False):
-        return resultado
-    
-    cd_con_bh = getattr(client_config, "CD_CON_BH", [])
-    bh_vcu_max = getattr(client_config, "BH_VCU_MAX", 1)
-    
-    # Obtener vcu_min desde TRUCK_TYPES['bh']
-    truck_types = getattr(client_config, "TRUCK_TYPES", {})
-    normal_truck = truck_types.get('normal', {})
-    normal_target = float(normal_truck.get('vcu_min', 1))
-    
-    conversiones = 0
-
-    for cam in resultado.get("camiones", []):
-        cds = cam.get("cd", [])
-        if not cds:
+    for res, tipo_camion_original in resultados:
+        # Solo reclasificar si es camión Nestlé
+        if tipo_camion_original not in (TipoCamion.PAQUETERA, TipoCamion.RAMPLA_DIRECTA):
+            resultados_reclasificados.append((res, tipo_camion_original))
             continue
         
-        vcu = cam.get("vcu_max", 0)
+        camiones = res.get("camiones", [])
         
-        if (cds[0] in cd_con_bh
-            and cam.get("flujo_oc") != "MIX"
-            and vcu <= bh_vcu_max
-            and vcu < normal_target
-            and cam.get("tipo_ruta") == "normal"):
+        for camion in camiones:
+            # Reclasificar cada camión
+            tipo_optimo = _reclasificar_camion_nestle(camion, client_config)
             
-            cam["tipo_camion"] = "bh"
-            conversiones += 1
-
-    if conversiones > 0:
-        print(f"[BINPACKING] Auto-etiquetados {conversiones} camiones como BH")
-
+            if tipo_optimo != tipo_camion_original.value:
+                total_reclasificados += 1
+            
+            # Actualizar tipo en el camión (se hará después en el flujo principal)
+        
+        resultados_reclasificados.append((res, tipo_camion_original))
     
-    return resultado
+    if total_reclasificados > 0:
+        print(f"[VCU] Reclasificados {total_reclasificados} camiones de paquetera a rampla_directa")
+    
+    return resultados_reclasificados

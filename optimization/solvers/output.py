@@ -48,10 +48,7 @@ def construir_camiones_desde_solver(
     camiones = []
     
     # Determinar tipo de camión base
-    if grupo_cfg.tipo.value == 'bh':
-        tipo_camion = TipoCamion.BH
-    else:
-        tipo_camion = TipoCamion.NORMAL
+    tipo_camion = TipoCamion.PAQUETERA
     
     # Construir cada camión
     for j in range(n_cam):
@@ -158,12 +155,18 @@ def _validar_camiones_generados(
         # Validar
         valido, errores, layout = validator.validar_camion_rapido(camion)
         
+        errores_limpios = [str(e) for e in (errores or []) if e not in (None, Ellipsis)]
+
         # Guardar resultado en metadata
-        camion.metadata['altura_validada'] = valido
+        layout_info = {
+            "altura_validada": bool(valido),
+            "errores_validacion": errores_limpios,
+        }
         
         if valido:
             validos += 1
             if layout:
+                camion.pos_total = layout.posiciones_usadas
                 # Guardar layout completo detallado
                 camion.metadata['layout_info'] = {
                     'altura_validada': valido,
@@ -201,14 +204,7 @@ def _validar_camiones_generados(
                 }
         else:
             invalidos += 1
-            
-            # ✅ FILTRAR cualquier Ellipsis y convertir a string
-            errores_limpios = []
-            for e in errores:
-                if e is not ... and e is not Ellipsis:  # Filtrar Ellipsis
-                    errores_limpios.append(str(e))
-            
-            camion.metadata['errores_validacion'] = errores_limpios
+            camion.metadata["layout_info"] = layout_info
             
             # Log
             print(f"[VALIDATION] ⚠️  Camión {camion.id} INVÁLIDO:")
