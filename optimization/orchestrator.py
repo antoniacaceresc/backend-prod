@@ -6,7 +6,7 @@ Orquesta el flujo completo de optimización en dos fases (VCU y BinPacking).
 from __future__ import annotations
 
 import time
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 
@@ -32,6 +32,8 @@ from models.domain import Camion
 MAX_TIEMPO_POR_GRUPO = int(os.getenv("MAX_TIEMPO_POR_GRUPO", "30"))
 THREAD_WORKERS_NORMAL = int(os.getenv("THREAD_WORKERS_NORMAL", str(min(8, (os.cpu_count() or 4)))))
 
+# Flag para activar/desactivar prints de debug
+DEBUG_VALIDATION = True  # ✅ CAMBIAR A True TEMPORALMENTE
 
 # ============================================================================
 # API PÚBLICA
@@ -396,9 +398,7 @@ def _optimizar_grupos_vcu_cascada_con_camiones(
     print("="*80)
     
     # 0. Rutas MULTI_CE_PRIORIDAD en SECUENCIAL (PRIMERO)
-    print("armando grupos prioridad")
     grupos_prioridad = _generar_grupos_para_tipo(pedidos_disponibles, client_config, "multi_ce_prioridad")
-    print("previo a grupos prioridad")
     
     if grupos_prioridad:
         print(f"\n[VCU] Procesando MULTI_CE_PRIORIDAD con camiones Nestlé SECUENCIAL: {len(grupos_prioridad)} grupos")
@@ -473,11 +473,19 @@ def _optimizar_grupos_vcu_cascada_con_camiones(
     print("previo a grupos normales")
     
     if grupos_normal:
+        # ORDENAR grupos por complejidad (más pedidos primero)
+        grupos_normal_sorted = sorted(
+            grupos_normal,
+            key=lambda x: len(x[1]),  # x[1] son los pedidos del grupo
+            reverse=True  # Descendente: más complejos primero
+        )
+
+        tamaños = [len(g[1]) for g in grupos_normal_sorted[:5]]
         print(f"\n[VCU] Procesando NORMAL con camiones Nestlé EN PARALELO: {len(grupos_normal)} grupos")
-        
+
         # Preparar grupos con sus capacidades
         grupos_con_capacidad = []
-        for cfg, pedidos_grupo in grupos_normal:
+        for cfg, pedidos_grupo in grupos_normal_sorted:
             # Filtrar pedidos ya asignados
             pedidos_no_asignados = [p for p in pedidos_grupo if p.pedido not in pedidos_asignados_global]
             if not pedidos_no_asignados:
@@ -760,6 +768,7 @@ def _optimizar_grupos_binpacking(
     
     return resultados
 
+
 def _consolidar_resultados(
     resultados: List[Dict[str, Any]],
     pedidos_originales: List[Pedido],
@@ -776,6 +785,9 @@ def _consolidar_resultados(
     all_camiones = []
     for res in resultados:
         all_camiones.extend(res.get("camiones", []))
+
+    # Validación masiva de altura
+    all_camiones = _validar_altura_camiones_paralelo(all_camiones, client_config)
     
     for camion in all_camiones:
         _actualizar_opciones_tipo_camion(camion, client_config)
@@ -812,6 +824,271 @@ def _consolidar_resultados(
         "pedidos_no_incluidos": pedidos_no_incluidos,
         "estadisticas": _compute_stats_from_objects(all_camiones, pedidos_originales, pedidos_asignados_ids)
     }
+
+
+def _validar_altura_camiones_paralelo(
+        camiones: List[Camion],
+        config,
+        operacion: str = "operacion"
+    ) -> None:
+        """
+        Valida altura de múltiples camiones EN PARALELO con logging ordenado.
+        """
+        import time
+        import threading
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from optimization.validation.height_validator import HeightValidator
+        
+        # ✅ LOCK para prints ordenados
+        print_lock = threading.Lock()
+        
+        # Filtrar camiones que tienen pedidos con SKUs
+        camiones_a_validar = [
+            cam for cam in camiones
+            if cam.pedidos and any(p.tiene_skus for p in cam.pedidos)
+        ]
+        
+        if not camiones_a_validar:
+            if DEBUG_VALIDATION:
+                print(f"[{operacion.upper()}] No hay camiones con SKUs para validar")
+            return
+        
+        with print_lock:
+            print(f"\n{'='*80}")
+            print(f"VALIDACIÓN DE ALTURA PARALELA - {operacion.upper()}")
+            print(f"{'='*80}")
+            print(f"Total camiones a validar: {len(camiones_a_validar)}")
+        
+        # Determinar número de threads
+        max_workers = min(8, len(camiones_a_validar))
+        with print_lock:
+            print(f"Threads paralelos: {max_workers}")
+            print(f"{'='*80}\n")
+        
+        # Crear validador
+        altura_maxima = 270
+        if hasattr(config, 'TRUCK_TYPES') and 'paquetera' in config.TRUCK_TYPES:
+            altura_maxima = config.TRUCK_TYPES['paquetera'].get('altura_cm', 270)
+        
+        permite_consolidacion = getattr(config, 'PERMITE_CONSOLIDACION', False)
+        max_skus_por_pallet = getattr(config, 'MAX_SKUS_POR_PALLET', 3)
+        
+        validator = HeightValidator(
+            altura_maxima_cm=altura_maxima,
+            permite_consolidacion=permite_consolidacion,
+            max_skus_por_pallet=max_skus_por_pallet
+        )
+        
+        # Función worker con logging ordenado
+        def validar_camion_worker(cam: Camion, cam_idx: int) -> Tuple[str, bool, float, Optional[str]]:
+            """
+            Worker que valida un camión.
+            Returns: (camion_id, es_valido, tiempo_ms, error_msg)
+            """
+            start = time.time()
+            elapsed_ms = 0 
+            error_msg = None
+            
+            with print_lock:
+                print(f"\n{'─'*80}")
+                print(f"🔍 VALIDANDO CAMIÓN [{cam_idx}/{len(camiones_a_validar)}]: {cam.id}")
+                print(f"   Pedidos: {len(cam.pedidos)} | Pallets: {cam.pallets_conf:.1f}")
+                print(f"{'─'*80}")
+            
+            try:
+                es_valido, errores, layout = validator.validar_camion_rapido(cam)
+                
+                # 🔍 DEBUG: Imprimir qué retornó la validación
+                with print_lock:
+                    print(f"[DEBUG] Retorno validación:")
+                    print(f"  es_valido: {es_valido} (type: {type(es_valido)})")
+                    print(f"  errores: {errores} (type: {type(errores)})")
+                    print(f"  layout: {layout} (type: {type(layout)})")
+                
+                # Normalizar errores con validación exhaustiva
+                errores_limpios = []
+                
+                if errores is None:
+                    with print_lock:
+                        print(f"[DEBUG] errores es None, usando lista vacía")
+                    errores_limpios = []
+                elif not isinstance(errores, (list, tuple)):
+                    with print_lock:
+                        print(f"[DEBUG] errores NO es lista/tupla, convirtiendo a string")
+                    errores_limpios = [str(errores)]
+                else:
+                    with print_lock:
+                        print(f"[DEBUG] errores es lista con {len(errores)} elementos")
+                        for i, e in enumerate(errores):
+                            print(f"    [{i}]: {repr(e)} (type: {type(e)})")
+                    
+                    # Filtrar elementos válidos
+                    for e in errores:
+                        if e is not None and e is not Ellipsis and e != "":
+                            try:
+                                errores_limpios.append(str(e))
+                            except Exception as conv_err:
+                                with print_lock:
+                                    print(f"[DEBUG] Error convirtiendo elemento: {conv_err}")
+
+                error_msg = "; ".join(errores_limpios) if errores_limpios else None
+
+                with print_lock:
+                    print(f"[DEBUG] errores_limpios final: {errores_limpios}")
+
+                elapsed_ms = (time.time() - start) * 1000
+
+
+                # ✅ CONSTRUIR Y GUARDAR LAYOUT_INFO COMPLETO
+                layout_info = {
+                    'altura_validada': bool(es_valido),
+                    'errores_validacion': errores_limpios,
+                }
+                
+                if layout is not None:
+                    cam.pos_total = layout.posiciones_usadas
+                    
+                    layout_info.update({
+                        'posiciones_usadas': layout.posiciones_usadas,
+                        'posiciones_disponibles': layout.posiciones_disponibles,
+                        'altura_maxima_cm': layout.altura_maxima_cm,
+                        'total_pallets_fisicos': layout.total_pallets,
+                        'altura_maxima_usada_cm': round(layout.altura_maxima_usada, 1),
+                        'altura_promedio_usada': round(layout.altura_promedio_usada, 1),
+                        'aprovechamiento_altura': round(layout.aprovechamiento_altura * 100, 1),
+                        'aprovechamiento_posiciones': round(layout.aprovechamiento_posiciones * 100, 1),
+                        'posiciones': [
+                            {
+                                'id': pos.id,
+                                'altura_usada_cm': pos.altura_usada_cm,
+                                'altura_disponible_cm': pos.espacio_disponible_cm,
+                                'num_pallets': pos.num_pallets,
+                                'pallets': [
+                                    {
+                                        'id': pallet.id,
+                                        'nivel': pallet.nivel,
+                                        'altura_cm': pallet.altura_total_cm,
+                                        'skus': [
+                                            {
+                                                'sku_id': frag.sku_id,
+                                                'pedido_id': frag.pedido_id,
+                                                'altura_cm': frag.altura_cm,
+                                                'categoria': frag.categoria.value,
+                                                'es_picking': frag.es_picking
+                                            }
+                                            for frag in pallet.fragmentos
+                                        ]
+                                    }
+                                    for pallet in pos.pallets_apilados
+                                ]
+                            }
+                            for pos in layout.posiciones
+                            if not pos.esta_vacia
+                        ]
+                    })
+                else:
+                    # Si no hay layout válido pero pasó validación
+                    if es_valido:
+                        layout_info['posiciones_usadas'] = 0
+                
+                # ✅ GUARDAR EN METADATA
+                cam.metadata['layout_info'] = layout_info
+                
+                # Print de resultado
+                with print_lock:
+                    if es_valido:
+                        print(f"✅ Camión {cam.id}: VÁLIDO ({elapsed_ms:.0f}ms)")
+                    else:
+                        print(f"{'='*80}")
+                        print(f"❌ Camión {cam.id}: INVÁLIDO ({elapsed_ms:.0f}ms)")
+                        if errores_limpios:
+                            for err in errores_limpios:
+                                print(f"   • {err}")
+                        print(f"{'='*80}")
+                
+                return (cam.id, es_valido, elapsed_ms, error_msg)
+
+
+            except Exception as e:
+                elapsed_ms = (time.time() - start) * 1000
+                error_msg = str(e)
+                
+                import traceback
+                error_detail = traceback.format_exc()
+                
+                with print_lock:
+                    print(f"❌❌❌ EXCEPCIÓN en camión {cam.id} ❌❌❌")
+                    print(f"Tipo: {type(e).__name__}")
+                    print(f"Mensaje: {str(e)}")
+                    print(f"Traceback:")
+                    print(error_detail)
+                    print(f"{'─'*80}")
+                
+                cam.metadata['layout_info'] = {
+                    'altura_validada': False,
+                    'errores_validacion': [f"Error en validación: {str(e)}"],
+                    'error_tipo': type(e).__name__,
+                    'error_detalle': str(e),
+                    'error_traceback': error_detail
+                }
+                
+                return (cam.id, False, elapsed_ms, str(e))
+        
+        # Ejecutar validaciones en paralelo
+        validos = 0
+        invalidos = 0
+        errores_capturados = []
+        tiempos = []
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Enviar todos los trabajos con índice
+            futures = {
+                executor.submit(validar_camion_worker, cam, idx+1): cam
+                for idx, cam in enumerate(camiones_a_validar)
+            }
+            
+            # Recolectar resultados
+            for future in as_completed(futures):
+                cam = futures[future]
+                try:
+                    camion_id, es_valido, tiempo_ms, error_msg = future.result()
+                    tiempos.append(tiempo_ms)
+                    
+                    if es_valido:
+                        validos += 1
+                    else:
+                        invalidos += 1
+                        if error_msg:
+                            errores_capturados.append((camion_id, error_msg))
+                        
+                except Exception as e:
+                    invalidos += 1
+                    with print_lock:
+                        print(f"❌ Error obteniendo resultado de {cam.id}: {e}")
+                        import traceback
+                        traceback.print_exc()
+        
+        # Reporte final
+        tiempo_promedio = sum(tiempos) / len(tiempos) if tiempos else 0
+        
+        with print_lock:
+            print(f"\n{'='*80}")
+            print(f"RESUMEN DE VALIDACIÓN - {operacion.upper()}")
+            print(f"{'='*80}")
+            print(f"✅ Válidos: {validos}")
+            print(f"❌ Inválidos: {invalidos}")
+            print(f"⏱️  Tiempo promedio: {tiempo_promedio:.0f}ms")
+            
+            if errores_capturados:
+                print(f"\n🔴 CAMIONES CON ERRORES:")
+                for cam_id, error_msg in errores_capturados:
+                    print(f"   • {cam_id}: {error_msg}")
+            
+            print(f"{'='*80}\n")
+
+        return camiones
+
+
 
 
 def _compute_stats_from_objects(

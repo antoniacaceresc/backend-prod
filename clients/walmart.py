@@ -44,7 +44,9 @@ class WalmartConfig:
             "PDQ": "PDQ",
             "SKU": "SKU",
             "ALTURA_PICKING": "Altura Picking",
-            "ALTURA_FULL_PALLET": "Altura full Pallet"
+            "ALTURA_FULL_PALLET": "Altura full Pallet",
+            "APILABLE_BASE": "Apilable Base",
+            "MONTADO": "Montado",  
 
         },
         "Purina": {

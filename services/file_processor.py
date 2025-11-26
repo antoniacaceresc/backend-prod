@@ -223,14 +223,24 @@ def _process_dataframe_con_skus(
     
     # 1. Limpieza y normalización a nivel SKU
     df_skus = _limpiar_datos_skus(df_raw)
+
+    # 2. Optimizar apilabilidad ANTES de validar
+    altura_maxima = 270  # Default, o extraer de client_config
+    if hasattr(client_config, 'TRUCK_TYPES'):
+        # Usar altura de paquetera como referencia
+        truck_types = client_config.TRUCK_TYPES
+        if 'paquetera' in truck_types:
+            altura_maxima = truck_types['paquetera'].get('altura_cm', 270)
     
-    # 2. Validar datos de SKU
+    df_skus = _optimizar_apilabilidad_skus(df_skus, altura_maxima)
+    
+    # 3. Validar datos de SKU
     df_skus = _validar_datos_skus(df_skus)
     
-    # 3. Agregar SKUs por pedido
+    # 4. Agregar SKUs por pedido
     df_pedidos, df_skus_con_pedido = _agregar_skus_a_pedidos(df_skus, client_config)
     
-    # 4. Crear lista de dicts de pedidos (para metadata)
+    # 5. Crear lista de dicts de pedidos (para metadata)
     pedidos_dicts = _crear_pedidos_dicts_con_skus(df_pedidos, df_skus_con_pedido)
     
     print(f"[FILE] ✓ Procesados: {len(df_pedidos)} pedidos, {len(df_skus)} SKUs")
@@ -304,6 +314,102 @@ def _limpiar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _optimizar_apilabilidad_skus(df: pd.DataFrame, altura_maxima_cm: float = 270) -> pd.DataFrame:
+    """
+    Optimiza categorías de apilabilidad ANTES de la optimización.
+    
+    Reglas:
+    1. SI_MISMO > 200cm → NO_APILABLE
+    2. SI_MISMO × 2 > altura_max → intentar convertir a BASE/SUPERIOR
+    3. SI_MISMO con cantidad impar → convertir último a BASE/SUPERIOR
+    
+    Args:
+        df: DataFrame de SKUs con columnas de apilabilidad
+        altura_maxima_cm: Altura máxima del camión (default 270cm)
+    
+    Returns:
+        DataFrame con apilabilidad optimizada
+    """
+    df = df.copy()
+    
+    # Contador de cambios
+    cambios = {
+        'si_mismo_a_no_apilable': 0,
+        'si_mismo_a_base_superior': 0,
+        'impares_ajustados': 0
+    }
+    
+    # Iterar sobre SKUs con SI_MISMO > 0
+    for idx in df[df['SI_MISMO'] > 0].index:
+        altura = df.at[idx, 'ALTURA_FULL_PALLET']
+        si_mismo = df.at[idx, 'SI_MISMO']
+        
+        # REGLA 1: Si altura > 200cm → NO_APILABLE
+        if altura > 200:
+            df.at[idx, 'NO_APILABLE'] += si_mismo
+            df.at[idx, 'SI_MISMO'] = 0
+            cambios['si_mismo_a_no_apilable'] += 1
+            continue
+        
+        # REGLA 2: Si 2 × altura > altura_max → intentar BASE/SUPERIOR
+        if 2 * altura > altura_maxima_cm:
+            puede_ser_base = df.at[idx, 'BASE'] > 0 or _tiene_columna_base(df, idx)
+            puede_ser_superior = df.at[idx, 'SUPERIOR'] > 0 or _tiene_columna_superior(df, idx)
+            
+            if puede_ser_base:
+                df.at[idx, 'BASE'] += si_mismo
+                df.at[idx, 'SI_MISMO'] = 0
+                cambios['si_mismo_a_base_superior'] += 1
+            elif puede_ser_superior:
+                df.at[idx, 'SUPERIOR'] += si_mismo
+                df.at[idx, 'SI_MISMO'] = 0
+                cambios['si_mismo_a_base_superior'] += 1
+            # Si no puede ser ni BASE ni SUPERIOR, dejar como SI_MISMO
+            continue
+        
+        # REGLA 3: Cantidad impar → convertir 1 pallet a BASE/SUPERIOR
+        if si_mismo % 2 != 0:  # Impar
+            puede_ser_base = df.at[idx, 'BASE'] > 0 or _tiene_columna_base(df, idx)
+            puede_ser_superior = df.at[idx, 'SUPERIOR'] > 0 or _tiene_columna_superior(df, idx)
+            
+            if puede_ser_base:
+                df.at[idx, 'BASE'] += 1
+                df.at[idx, 'SI_MISMO'] -= 1
+                cambios['impares_ajustados'] += 1
+            elif puede_ser_superior:
+                df.at[idx, 'SUPERIOR'] += 1
+                df.at[idx, 'SI_MISMO'] -= 1
+                cambios['impares_ajustados'] += 1
+    
+    # Log de cambios
+    print(f"[OPTIMIZACIÓN APILABILIDAD]")
+    print(f"  - SI_MISMO → NO_APILABLE (altura > 200cm): {cambios['si_mismo_a_no_apilable']}")
+    print(f"  - SI_MISMO → BASE/SUPERIOR (2×altura > max): {cambios['si_mismo_a_base_superior']}")
+    print(f"  - Impares ajustados: {cambios['impares_ajustados']}")
+    
+    return df
+
+
+def _tiene_columna_base(df: pd.DataFrame, idx: int) -> bool:
+    """Verifica si el SKU puede ser BASE según columna APILABLE_BASE"""
+    if 'APILABLE_BASE' in df.columns:
+        valor = df.at[idx, 'APILABLE_BASE']
+        # Manejar diferentes formatos: SI, si, 1, True
+        if pd.notna(valor):
+            return str(valor).upper() in ('SI', 'SÍ', '1', 'TRUE')
+    return False
+
+
+def _tiene_columna_superior(df: pd.DataFrame, idx: int) -> bool:
+    """Verifica si el SKU puede ser SUPERIOR según columna MONTADO"""
+    if 'MONTADO' in df.columns:
+        valor = df.at[idx, 'MONTADO']
+        # Manejar diferentes formatos: SI, si, 1, True
+        if pd.notna(valor):
+            return str(valor).upper() in ('SI', 'SÍ', '1', 'TRUE')
+    return False
+
+
 def _validar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
     """
     Valida que los datos de SKU sean coherentes.
@@ -372,6 +478,7 @@ def _validar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
         raise ValueError(f"Errores de validación:\n" + "\n".join(errores))
     
     return df
+
 
 def _agregar_skus_a_pedidos(
     df_skus: pd.DataFrame,

@@ -32,7 +32,12 @@ class CencosudConfig:
             "NO_APILABLE": "No Apilable",
             "SI_MISMO": "Apilable si mismo",
             "VALIOSO": "Valioso Cencosud",
-            "PDQ": "PDQ"
+            "PDQ": "PDQ",
+            "SKU": "SKU",
+            "ALTURA_PICKING": "Altura Picking",
+            "ALTURA_FULL_PALLET": "Altura full Pallet",
+            "APILABLE_BASE": "Apilable Base",
+            "MONTADO": "Montado",  
         },
         "Purina": {
             "CD": "CD",
@@ -60,7 +65,7 @@ class CencosudConfig:
     TRUCK_TYPES = {
         'paquetera':        {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.85, 'max_pallets': 60, 'altura_cm': 260},
         'rampla_directa':   {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.85, 'max_pallets': 56, 'altura_cm': 250},
-        'backhaul':         {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 26, 'levels': 2, 'vcu_min': 0.55, 'max_pallets': 52, 'altura_cm': 260}
+        'backhaul':         {'cap_weight': 22000, 'cap_volume': 60000, 'max_positions': 26, 'levels': 2, 'vcu_min': 0.55, 'max_pallets': 52, 'altura_cm': 230}
     }
 
 

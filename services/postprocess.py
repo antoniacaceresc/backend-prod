@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import List, Dict, Any, Optional, Tuple
 import uuid
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from models.domain import Pedido, Camion, TruckCapacity, TipoCamion, TipoRuta, SKU
 from utils.config_helpers import extract_truck_capacities
@@ -27,7 +28,7 @@ from optimization.validation.height_validator import HeightValidator
 # ============================================================================
 
 # Flag para activar/desactivar prints de debug
-DEBUG_VALIDATION = False  # Cambiar a True para ver prints detallados
+DEBUG_VALIDATION = True  # Cambiar a True para ver prints detallados
 
 
 # ============================================================================
@@ -253,7 +254,6 @@ def move_orders(
     _revalidar_altura_camiones(camiones, config, cliente, operacion="move_orders")
 
     # RECALCULAR opciones para TODOS los camiones
-    print("[DEBUG] Recalculando opciones de tipo para todos los camiones...")
     for cam in camiones:
         _actualizar_opciones_tipo_camion(cam, config)
     
@@ -311,7 +311,6 @@ def add_truck(
     _revalidar_altura_camiones(camiones, config, cliente, operacion="add_truck")
 
     # RECALCULAR opciones para TODOS los camiones
-    print("[DEBUG] Recalculando opciones de tipo para todos los camiones...")
     for cam in camiones:
         _actualizar_opciones_tipo_camion(cam, config)
     
@@ -360,7 +359,6 @@ def delete_truck(
     _revalidar_altura_camiones(camiones, config, cliente, operacion="delete_truck")
 
     # RECALCULAR opciones para TODOS los camiones
-    print("[DEBUG] Recalculando opciones de tipo para todos los camiones...")
     for cam in camiones:
         _actualizar_opciones_tipo_camion(cam, config)
     
@@ -590,9 +588,6 @@ def enforce_bh_target(
     )
 
 
-# ============================================================================
-# HELPERS DE VALIDACIÓN Y METADATA (con código centralizado)
-# ============================================================================
 
 def _revalidar_altura_camiones(
     camiones: List[Camion], 
@@ -601,26 +596,19 @@ def _revalidar_altura_camiones(
     operacion: str = "operacion"
 ) -> None:
     """
-    Función centralizada para revalidar altura de múltiples camiones.
-    
-    Args:
-        camiones: Lista de camiones a validar
-        config: Configuración del cliente
-        cliente: Nombre del cliente
-        operacion: Nombre de la operación (para logging)
+    Revalidación masiva paralela (para operaciones de postproceso).
     """
-    if DEBUG_VALIDATION:
-        print(f"\n[{operacion.upper()}] Revalidando {len(camiones)} camiones...")
+    if not getattr(config, 'VALIDAR_ALTURA', False):
+        return
     
-    for cam in camiones:
-        if cam.pedidos:  # Solo validar si tiene pedidos
-            if DEBUG_VALIDATION:
-                print(f"[{operacion.upper()}] Validando camión {cam.id}: {len(cam.pedidos)} pedidos")
-            _validar_altura_no_bloqueante(cam, config, cliente)
-        else:
-            if DEBUG_VALIDATION:
-                print(f"[{operacion.upper()}] Saltando camión vacío: {cam.id}")
-
+    # Reusar la función de validación masiva del orchestrator
+    from optimization.orchestrator import _validar_altura_camiones_paralelo
+    
+    if DEBUG_VALIDATION:
+        print(f"\n[{operacion.upper()}] Revalidando camiones...")
+    
+    _validar_altura_camiones_paralelo(camiones, config)
+                                      
 
 def _validar_reglas_cliente(camion: Camion, config, cliente: str):
     """
@@ -669,11 +657,11 @@ def _validar_altura_no_bloqueante(camion: Camion, config, cliente: str) -> None:
     
     if not validar_altura:
         camion.metadata['layout_info'] = {
-        'altura_validada': False,
-        'errores_validacion': [
-            f"Validación de altura deshabilitada para cliente {cliente}"
-        ]
-    }
+            'altura_validada': False,
+            'errores_validacion': [
+                f"Validación de altura deshabilitada para cliente {cliente}"
+            ]
+        }
         return
     
     # Verificar si hay SKUs para validar
@@ -699,9 +687,14 @@ def _validar_altura_no_bloqueante(camion: Camion, config, cliente: str) -> None:
         
         # Ejecutar validación
         es_valido, errores, layout = validator.validar_camion_rapido(camion)
-
-        # Normalizar errores
-        errores_limpios = [str(e) for e in (errores or []) if e not in (None, Ellipsis)]
+        print("Imprimiento errores desde postprocess, vlaidar altura no bloqueante:", errores)
+        # Normalizar errores - MANEJAR None explícitamente
+        if errores is None:
+            errores_limpios = []
+        elif isinstance(errores, list):
+            errores_limpios = [str(e) for e in errores if e not in (None, Ellipsis, ...)]
+        else:
+            errores_limpios = []
         
         # Construir layout_info base
         layout_info = {
@@ -710,7 +703,7 @@ def _validar_altura_no_bloqueante(camion: Camion, config, cliente: str) -> None:
         }
 
         if layout is not None:
-            # Modificir posiciones usadas 
+            # Modificar posiciones usadas 
             camion.pos_total = layout.posiciones_usadas
 
             # Guardar layout_info completo
@@ -724,6 +717,7 @@ def _validar_altura_no_bloqueante(camion: Camion, config, cliente: str) -> None:
                 'altura_promedio_usada': round(layout.altura_promedio_usada, 1),
                 'aprovechamiento_altura': round(layout.aprovechamiento_altura * 100, 1),
                 'aprovechamiento_posiciones': round(layout.aprovechamiento_posiciones * 100, 1),
+                'errores_validacion': errores_limpios,  # ✅ AGREGAR AQUÍ
                 'posiciones': [
                     {
                         'id': pos.id,
@@ -754,10 +748,13 @@ def _validar_altura_no_bloqueante(camion: Camion, config, cliente: str) -> None:
                     if not pos.esta_vacia
                 ]
             }
-
-                
         else:
-             # Si no hubo layout, usamos la fórmula de apilabilidad
+            # ✅ CORRECCIÓN: Construir layout_info primero, LUEGO modificarlo
+            if not es_valido:
+                layout_info['fallo_construccion'] = True
+                layout_info['razon_fallo'] = errores_limpios[0] if errores_limpios else "Desconocida"
+
+            # Si no hubo layout, usamos la fórmula de apilabilidad
             camion.pos_total = calcular_posiciones_apilabilidad(
                 camion.pedidos,
                 camion.capacidad.max_positions
@@ -765,18 +762,20 @@ def _validar_altura_no_bloqueante(camion: Camion, config, cliente: str) -> None:
             
             camion.metadata['layout_info'] = layout_info
 
-            if DEBUG_VALIDATION and errores_limpios:
-                print(f"[VALIDATION] Errores: {len(errores_limpios)}")
-                for i, error in enumerate(errores_limpios[:3], 1):
-                    print(f"[VALIDATION]   {i}. {error}")
+        if DEBUG_VALIDATION and errores_limpios:
+            print(f"[VALIDATION] Errores: {len(errores_limpios)}")
+            for i, error in enumerate(errores_limpios[:3], 1):
+                print(f"[VALIDATION]   {i}. {error}")
             
-        
     except Exception as e:
         if DEBUG_VALIDATION:
             print(f"[VALIDATION] ❌ Excepción: {type(e).__name__}: {str(e)}")
         
-        # Si hay error en validación, registrarlo pero no bloquear
-        camion.metadata['layout_info'] = layout_info
+        # ✅ CORRECCIÓN: Crear layout_info de emergencia si falla
+        camion.metadata['layout_info'] = {
+            'altura_validada': False,
+            'errores_validacion': [f"Error en validación: {str(e)}"]
+        }
 
 def _actualizar_opciones_tipo_camion(camion: Camion, client_config):
     """

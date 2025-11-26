@@ -38,7 +38,7 @@ app.add_middleware(GZipMiddleware, minimum_size=int(os.getenv("GZIP_MIN_SIZE", "
 # ----------------------------------------------------------------------------
 # Concurrencia
 # ----------------------------------------------------------------------------
-REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "200"))
+REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "300"))
 CPU_COUNT = os.cpu_count() or 4
 MAX_WORKERS = max(CPU_COUNT - 1, 1)
 MAX_CONCURRENT = max(1, MAX_WORKERS)
