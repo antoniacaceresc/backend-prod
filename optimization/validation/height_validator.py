@@ -9,6 +9,10 @@ from __future__ import annotations
 from typing import List, Tuple, Optional, Dict
 from collections import defaultdict
 
+# Para guardar el debug
+import json
+from pathlib import Path
+
 from models.domain import Camion, Pedido, TruckCapacity
 from models.stacking import (
     LayoutCamion,
@@ -19,7 +23,7 @@ from models.stacking import (
 )
 
 # Flag para activar/desactivar prints de debug
-DEBUG_VALIDATION = True  # ✅ CAMBIAR A True TEMPORALMENTE
+DEBUG_VALIDATION = False  # CAMBIAR A True TEMPORALMENTE
 
 
 class HeightValidator:
@@ -47,7 +51,7 @@ class HeightValidator:
     def validar_camion_rapido(
         self,
         camion: Camion
-    ) -> Tuple[bool, List[str], Optional[LayoutCamion]]:
+    ) -> Tuple[bool, List[str], Optional[LayoutCamion], Optional[Dict]]:
         """Validación RÁPIDA con logging detallado."""
         
         errores = []
@@ -70,7 +74,7 @@ class HeightValidator:
             if not fragmentos:
                 errores.append("No se pudieron extraer fragmentos de los pedidos")
                 self._reportar_fallas_detallado(camion, debug_info, fragmentos, errores)
-                return False, errores, None
+                return False, errores, None, debug_info
             
             # 2. Validación rápida
             for frag in fragmentos:
@@ -80,7 +84,7 @@ class HeightValidator:
             
             if errores and any(e is not None for e in errores):
                 self._reportar_fallas_detallado(camion, debug_info, fragmentos, errores)
-                return False, [e for e in errores if e is not None], None
+                return False, [e for e in errores if e is not None], None, debug_info
             
             # 3. Agrupar por categoría
             grupos = self._agrupar_por_categoria(fragmentos)
@@ -95,14 +99,14 @@ class HeightValidator:
             if debug_info['fragmentos_fallidos']:
                 self._reportar_fallas_detallado(camion, debug_info, fragmentos, errores)
                 errores.append(f"No se pudieron colocar {len(debug_info['fragmentos_fallidos'])} fragmentos")
-                return False, errores, debug_info.get('layout_parcial')
+                return False, errores, debug_info.get('layout_parcial'), debug_info
             
             if layout is None:
                 errores.append("No se pudo construir layout")
                 self._reportar_fallas_detallado(camion, debug_info, fragmentos, errores)
-                return False, [e for e in errores if e is not None], None
+                return False, [e for e in errores if e is not None], None, debug_info
             
-            return True, [], layout
+            return True, [], layout, debug_info
         
         except Exception as e:
             import traceback
@@ -120,7 +124,7 @@ class HeightValidator:
             
             self._reportar_fallas_detallado(camion, debug_info, [], errores)
             
-            return False, errores, None
+            return False, errores, None, debug_info
 
     def _extraer_fragmentos_batch(
         self,
@@ -262,8 +266,6 @@ class HeightValidator:
             print(f"[ERROR] ⚠️ NO se extrajeron fragmentos de {len(pedidos)} pedidos")
             for p in pedidos[:3]:
                 print(f"  - Pedido {p.pedido}: tiene_skus={p.tiene_skus}, num_skus={len(p.skus) if p.tiene_skus else 0}")
-        else:
-            print(f"[VALIDATOR] ✅ Extraídos {len(fragmentos)} fragmentos de {len(pedidos)} pedidos")
         
         return fragmentos
 
@@ -775,6 +777,7 @@ class HeightValidator:
                 print(f"   ... y {len(camion.pedidos) - 5} pedidos más")
             
             print(f"\n{'='*80}\n")
+
             return
         
         # Resumen general
@@ -818,23 +821,29 @@ class HeightValidator:
         
         for razon, frags in por_razon.items():
             print(f"\n🔴 Razón: {razon.upper().replace('_', ' ')} ({len(frags)} fragmentos)")
+            print(f"")
             
-            for frag_info in frags[:5]:  # Mostrar primeros 5
-                print(f"   • {frag_info['fragmento']}")
-                print(f"     Altura: {frag_info['altura_cm']:.1f}cm | "
-                    f"Categoría: {frag_info['categoria']} | "
-                    f"Picking: {frag_info['es_picking']}")
+            # Mostrar TODOS los fragmentos fallidos (no solo los primeros 5)
+            for i, frag_info in enumerate(frags, 1):
+                # Extraer SKU del string "SKU_ID (pedido PEDIDO_ID)"
+                fragmento_str = frag_info['fragmento']
+                sku_id = fragmento_str.split(' ')[0] if ' ' in fragmento_str else fragmento_str
+                pedido_id = fragmento_str.split('pedido ')[-1].rstrip(')') if 'pedido' in fragmento_str else '?'
                 
-                # Mostrar intentos
+                print(f"   [{i}] SKU: {sku_id} | Pedido: {pedido_id}")
+                print(f"       Altura: {frag_info['altura_cm']:.1f}cm | "
+                    f"Categoría: {frag_info['categoria'].upper()} | "
+                    f"Picking: {'Sí' if frag_info['es_picking'] else 'No'}")
+                
+                # Mostrar intentos solo si hay información útil
                 if frag_info.get('intentos'):
-                    print(f"     Intentos:")
-                    for intento in frag_info['intentos'][:3]:
-                        print(f"       - {intento['tipo']}: {intento.get('resultado', 'N/A')}")
-                        if 'razon' in intento and intento['razon']:
-                            print(f"         Razón: {intento['razon']}")
-            
-            if len(frags) > 5:
-                print(f"   ... y {len(frags) - 5} más")
+                    intentos_con_razon = [i for i in frag_info['intentos'] if i.get('razon')]
+                    if intentos_con_razon:
+                        print(f"       Intentos con error:")
+                        for intento in intentos_con_razon[:2]:  # Mostrar max 2 intentos con razón
+                            print(f"         • {intento['tipo']}: {intento.get('razon', 'N/A')}")
+                
+                print(f"")  # Línea en blanco entre fragmentos
         
         # Análisis de pedidos afectados
         pedidos_afectados = set()

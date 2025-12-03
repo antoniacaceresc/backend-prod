@@ -57,14 +57,29 @@ def optimizar_grupo_binpacking(
     datos = preparar_datos_solver(pedidos, capacidad)
     pedidos_ids = [p.pedido for p in pedidos]
     
-    # Estimar nÃºmero de camiones con FFD 
+    # Obtener max_ordenes si existe
+    max_ordenes = getattr(client_config, 'MAX_ORDENES', None)
+    
     n_cam_heur = heuristica_ffd(
         pedidos,
         {p.pedido: p.peso for p in pedidos},
         {p.pedido: p.volumen for p in pedidos},
-        capacidad
+        capacidad,
+        max_ordenes
     )
     n_cam = min(len(pedidos), n_cam_heur + 5, MAX_CAMIONES_CP_SAT)
+    
+    # DEBUG: Imprimir información del grupo
+    print(f"[BIN DEBUG] Grupo {grupo_cfg.id}:")
+    print(f"   Pedidos: {len(pedidos)}, max_ordenes: {max_ordenes}")
+    print(f"   n_cam_heur: {n_cam_heur}, n_cam final: {n_cam}")
+    
+    # Verificar si hay pedidos que exceden capacidad individual
+    for p in pedidos:
+        if p.peso > capacidad.cap_weight:
+            print(f"   ⚠️ Pedido {p.pedido} excede peso: {p.peso} > {capacidad.cap_weight}")
+        if p.volumen > capacidad.cap_volume:
+            print(f"   ⚠️ Pedido {p.pedido} excede volumen: {p.volumen} > {capacidad.cap_volume}")
     
     # Construir modelo CP-SAT
     model = cp_model.CpModel()
@@ -113,6 +128,27 @@ def optimizar_grupo_binpacking(
             capacidad, datos, n_cam, 'binpacking', client_config=client_config
         )
     else:
+        # DEBUG: Diagnóstico de NO_SOLUTION
+        print(f"\n[BIN] ❌ NO_SOLUTION para {grupo_cfg.id}")
+        print(f"   Pedidos: {len(pedidos)}, Camiones disponibles: {n_cam}")
+        
+        total_peso = sum(p.peso for p in pedidos)
+        total_vol = sum(p.volumen for p in pedidos)
+        total_pallets = sum(p.pallets_capacidad for p in pedidos)
+        
+        print(f"   Total peso: {total_peso:.0f} / {capacidad.cap_weight * n_cam:.0f} (capacidad total)")
+        print(f"   Total vol: {total_vol:.0f} / {capacidad.cap_volume * n_cam:.0f}")
+        print(f"   Total pallets: {total_pallets:.1f} / {capacidad.max_pallets * n_cam}")
+        
+        # Verificar apilabilidad
+        total_base = sum(p.base for p in pedidos)
+        total_sup = sum(p.superior for p in pedidos)
+        total_noap = sum(p.no_apilable for p in pedidos)
+        total_flex = sum(p.flexible for p in pedidos)
+        total_self = sum(p.si_mismo for p in pedidos)
+        
+        print(f"   Apilabilidad: BASE={total_base:.1f}, SUP={total_sup:.1f}, NOAP={total_noap:.1f}, FLEX={total_flex:.1f}, SELF={total_self:.1f}")
+        print(f"   Posiciones disponibles: {capacidad.max_positions * n_cam}")
         return {
             'status': estado,
             'pedidos_asignados_ids': [],

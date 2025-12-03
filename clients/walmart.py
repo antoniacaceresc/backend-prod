@@ -17,6 +17,9 @@ class WalmartConfig:
         ['INV', 'CRR'],
         ['CRR', 'XDOCK'],]
     
+    ADHERENCIA_BACKHAUL = None
+    MODO_ADHERENCIA = None
+    
     # Configuración de validación altura
     VALIDAR_ALTURA = True
     PERMITE_CONSOLIDACION = True
@@ -75,9 +78,9 @@ class WalmartConfig:
 
     # Tipos de camiones
     TRUCK_TYPES = {
-        'paquetera':        {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.5, 'max_pallets': 60,'altura_cm': 260},
-        'rampla_directa':   {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.5, 'max_pallets': 56,'altura_cm': 250},
-        'backhaul':         {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.5, 'max_pallets': 56, 'altura_cm': 260}
+        'paquetera':        {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.8, 'max_pallets': 60,'altura_cm': 260},
+        'rampla_directa':   {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.8, 'max_pallets': 56,'altura_cm': 250},
+        'backhaul':         {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.5, 'max_pallets': 56, 'altura_cm': 240}
     }
 
     # Configuración agrupamiento especial

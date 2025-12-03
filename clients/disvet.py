@@ -9,6 +9,9 @@ class DisvetConfig:
     # MIX Flujo
     MIX_GRUPOS = []
 
+    ADHERENCIA_BACKHAUL = None
+    MODO_ADHERENCIA = None
+
     # Configuración de validación altura
     VALIDAR_ALTURA = True
     PERMITE_CONSOLIDACION = True

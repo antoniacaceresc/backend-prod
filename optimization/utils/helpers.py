@@ -215,19 +215,21 @@ def heuristica_ffd(
     pedidos: List[Pedido],
     peso_map: Dict[str, float],
     vol_map: Dict[str, float],
-    capacidad: TruckCapacity
+    capacidad: TruckCapacity,
+    max_ordenes: int = None
 ) -> int:
     """
-    HeurÃ­stica First Fit Decreasing para estimar nÃºmero de camiones.
+    Heurística First Fit Decreasing para estimar número de camiones.
     
     Args:
         pedidos: Lista de pedidos
         peso_map: Mapeo pedido_id -> peso
         vol_map: Mapeo pedido_id -> volumen
-        capacidad: Capacidad del camiÃ³n
+        capacidad: Capacidad del camión
+        max_ordenes: Máximo de pedidos por camión (opcional)
     
     Returns:
-        NÃºmero estimado de camiones necesarios
+        Número estimado de camiones necesarios
     """
     cap_weight = capacidad.cap_weight
     cap_volume = capacidad.cap_volume
@@ -243,24 +245,29 @@ def heuristica_ffd(
     )
     
     # First Fit Decreasing
-    camiones = []  # [(peso_usado, vol_usado)]
+    camiones = []  # [(peso_usado, vol_usado, n_pedidos)]
     
     for pedido in pedidos_orden:
         pid = pedido.pedido
         peso = peso_map.get(pid, 0)
         vol = vol_map.get(pid, 0)
         
-        # Intentar asignar a camiÃ³n existente
+        # Intentar asignar a camión existente
         asignado = False
         for idx in range(len(camiones)):
-            peso_usado, vol_usado = camiones[idx]
-            if peso_usado + peso <= cap_weight and vol_usado + vol <= cap_volume:
-                camiones[idx] = (peso_usado + peso, vol_usado + vol)
+            peso_usado, vol_usado, n_pedidos = camiones[idx]
+            
+            # Verificar capacidad y max_ordenes
+            cabe_peso_vol = peso_usado + peso <= cap_weight and vol_usado + vol <= cap_volume
+            cabe_ordenes = max_ordenes is None or n_pedidos < max_ordenes
+            
+            if cabe_peso_vol and cabe_ordenes:
+                camiones[idx] = (peso_usado + peso, vol_usado + vol, n_pedidos + 1)
                 asignado = True
                 break
         
-        # Si no cabe, crear nuevo camiÃ³n
+        # Si no cabe, crear nuevo camión
         if not asignado:
-            camiones.append((peso, vol))
+            camiones.append((peso, vol, 1))
     
     return len(camiones)

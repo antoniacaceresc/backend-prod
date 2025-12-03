@@ -107,6 +107,20 @@ def _camion_from_dict(cam_dict: Dict[str, Any], capacidades: Dict[TipoCamion, Tr
     except ValueError:
         tipo_ruta = TipoRuta.NORMAL
     
+    # ✅ Reconstruir metadata incluyendo layout_info del nivel raíz
+    metadata = cam_dict.get("metadata", {}).copy()
+    
+    # Si layout_info está en la raíz del dict (formato API), moverlo a metadata
+    if "layout_info" in cam_dict:
+        metadata["layout_info"] = cam_dict["layout_info"]
+    
+    # También preservar otros campos de validación si existen
+    if "altura_validada" in cam_dict:
+        metadata["altura_validada"] = cam_dict["altura_validada"]
+    
+    if "errores_validacion" in cam_dict:
+        metadata["errores_validacion"] = cam_dict["errores_validacion"]
+    
     return Camion(
         id=cam_dict["id"],
         numero=cam_dict.get("numero", 0),
@@ -117,7 +131,7 @@ def _camion_from_dict(cam_dict: Dict[str, Any], capacidades: Dict[TipoCamion, Tr
         grupo=cam_dict.get("grupo", ""),
         capacidad=capacidad,
         pedidos=pedidos,
-        metadata=cam_dict.get("metadata", {})
+        metadata=metadata
     )
 
 
@@ -409,8 +423,6 @@ def apply_truck_type_change(
         'rampla_directa': 'rampla_directa',
         'backhaul': 'backhaul',
         'bh': 'backhaul',
-        # Legacy (deprecated pero soportado)
-        'normal': 'paquetera',  # Por defecto normal → paquetera
     }
     
     tipo_nuevo = tipo_mapping.get(tipo_nuevo, tipo_nuevo)
@@ -449,7 +461,10 @@ def apply_truck_type_change(
     # 6) Validar reglas específicas del cliente
     _validar_cambio_tipo_cliente(camion, nuevo_tipo_enum, config, cliente)
     
-    # 7) Aplicar cambio
+    # 7) Aplicar cambio y actualizar layout inteligentemente
+    tipo_anterior = camion.tipo_camion
+    capacidad_anterior = camion.capacidad
+    
     camion.cambiar_tipo(nuevo_tipo_enum, nueva_capacidad)
     
     # Recalcular posiciones con la nueva capacidad
@@ -458,13 +473,62 @@ def apply_truck_type_change(
         nueva_capacidad.max_positions
     )
     
-    # 8) Revalidar altura (CRÍTICO: nueva altura máxima)
-    _revalidar_altura_camiones(camiones, config, cliente, operacion="change_truck_type")
-
+    # 8) Manejo inteligente de validación de altura
+    debe_revalidar_completo = False
+    
+    if 'layout_info' in camion.metadata:
+        layout_info = camion.metadata['layout_info']
+        
+        # Solo procesar si el layout estaba validado
+        if layout_info.get('altura_validada'):
+            altura_usada = layout_info.get('altura_maxima_usada_cm', 0)
+            
+            # CASO 1: Layout sigue siendo válido con nueva altura
+            if altura_usada <= nueva_capacidad.altura_cm:
+                # ✅ Solo actualizar referencias, no revalidar
+                layout_info['altura_maxima_cm'] = nueva_capacidad.altura_cm
+                
+                # Recalcular aprovechamientos
+                if nueva_capacidad.altura_cm > 0:
+                    nuevo_aprovechamiento = (altura_usada / nueva_capacidad.altura_cm) * 100
+                    layout_info['aprovechamiento_altura'] = round(nuevo_aprovechamiento, 1)
+                
+                layout_info['posiciones_disponibles'] = nueva_capacidad.max_positions
+                
+                posiciones_usadas = layout_info.get('posiciones_usadas', 0)
+                if nueva_capacidad.max_positions > 0:
+                    nuevo_aprov_pos = (posiciones_usadas / nueva_capacidad.max_positions) * 100
+                    layout_info['aprovechamiento_posiciones'] = round(nuevo_aprov_pos, 1)
+                
+                # ✅ ACTUALIZAR pos_total del camión con valor real del layout
+                camion.pos_total = posiciones_usadas
+                
+                print(f"[CHANGE_TYPE] ✅ Layout válido: {capacidad_anterior.altura_cm:.0f}cm → {nueva_capacidad.altura_cm:.0f}cm")
+                print(f"              Altura usada: {altura_usada:.1f}cm (aprovechamiento: {layout_info['aprovechamiento_altura']:.1f}%)")
+            
+            # CASO 2: Layout NO es válido con nueva altura (excede límite)
+            else:
+                print(f"[CHANGE_TYPE] ⚠️ Layout INVÁLIDO: altura usada {altura_usada:.1f}cm > nueva max {nueva_capacidad.altura_cm:.0f}cm")
+                print(f"              Revalidando camión {camion.id}...")
+                debe_revalidar_completo = True
+        else:
+            # Layout no estaba validado previamente
+            debe_revalidar_completo = True
+    else:
+        # No hay layout_info previo
+        debe_revalidar_completo = True
+    
+    # Revalidar solo si es necesario
+    if debe_revalidar_completo:
+        if getattr(config, 'VALIDAR_ALTURA', False) and any(p.tiene_skus for p in camion.pedidos):
+            print(f"[CHANGE_TYPE] Revalidando altura del camión {camion.id}...")
+            _revalidar_altura_camiones([camion], config, cliente, operacion="change_truck_type")
+    
+    # 9) Actualizar opciones para todos los camiones
     for cam in camiones:
         _actualizar_opciones_tipo_camion(cam, config)
     
-    # 9) Devolver respuesta
+    # 10) Devolver respuesta
     return _to_response(camiones, pedidos_no_inc, cap_default)
 
 
@@ -588,7 +652,6 @@ def enforce_bh_target(
     )
 
 
-
 def _revalidar_altura_camiones(
     camiones: List[Camion], 
     config, 
@@ -596,12 +659,12 @@ def _revalidar_altura_camiones(
     operacion: str = "operacion"
 ) -> None:
     """
-    Revalidación masiva paralela (para operaciones de postproceso).
+    Revalidación paralela (para operaciones de postproceso).
     """
     if not getattr(config, 'VALIDAR_ALTURA', False):
         return
     
-    # Reusar la función de validación masiva del orchestrator
+    # Reusar la función de validación del orchestrator
     from optimization.orchestrator import _validar_altura_camiones_paralelo
     
     if DEBUG_VALIDATION:
@@ -776,6 +839,7 @@ def _validar_altura_no_bloqueante(camion: Camion, config, cliente: str) -> None:
             'altura_validada': False,
             'errores_validacion': [f"Error en validación: {str(e)}"]
         }
+
 
 def _actualizar_opciones_tipo_camion(camion: Camion, client_config):
     """

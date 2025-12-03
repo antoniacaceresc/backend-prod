@@ -7,6 +7,9 @@ class CencosudConfig:
     AGRUPAR_POR_PO = True
     MIX_GRUPOS = []
 
+    ADHERENCIA_BACKHAUL = 0.60
+    MODO_ADHERENCIA = "pre_split"
+
     # Configuración de validación altura
     VALIDAR_ALTURA = True
     PERMITE_CONSOLIDACION = False
@@ -65,7 +68,7 @@ class CencosudConfig:
     TRUCK_TYPES = {
         'paquetera':        {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.85, 'max_pallets': 60, 'altura_cm': 260},
         'rampla_directa':   {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.85, 'max_pallets': 56, 'altura_cm': 250},
-        'backhaul':         {'cap_weight': 22000, 'cap_volume': 60000, 'max_positions': 26, 'levels': 2, 'vcu_min': 0.55, 'max_pallets': 52, 'altura_cm': 230}
+        'backhaul':         {'cap_weight': 22000, 'cap_volume': 60000, 'max_positions': 26, 'levels': 2, 'vcu_min': 0.55, 'max_pallets': 40, 'altura_cm': 230}
     }
 
 

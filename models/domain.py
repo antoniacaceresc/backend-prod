@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from .enums import TipoRuta, TipoCamion
 from typing import List, Dict, Any, Optional, TYPE_CHECKING
+import math
 
 if TYPE_CHECKING:
     from models.stacking import FragmentoSKU
@@ -251,6 +252,26 @@ class Pedido:
         Solo usar si tiene_skus == True.
         """
         return sum(sku.cantidad_pallets for sku in self.skus)
+    
+    @property
+    def cantidad_fragmentos(self) -> int:
+        """
+        Cantidad de fragmentos físicos que genera este pedido.
+        Un fragmento = 1 pallet completo O 1 picking.
+        """
+        if not self.tiene_skus:
+            return max(1, math.ceil(self.pallets))
+        
+        total = 0
+        for sku in self.skus:
+            cantidad = sku.cantidad_pallets
+            if cantidad < 1.0:
+                total += 1  # Solo picking
+            else:
+                total += int(cantidad)  # Pallets completos
+                if cantidad - int(cantidad) > 0.01:
+                    total += 1  # Picking adicional
+        return total
     
     @property
     def pallets_capacidad(self) -> float:

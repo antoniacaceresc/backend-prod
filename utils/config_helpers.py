@@ -69,6 +69,7 @@ def _normalize_cd_list(lst):
         return []
     return [str(x).strip() for x in lst]
 
+
 def _normalize_ce_list(lst):
     if not lst:
         return []
@@ -117,3 +118,19 @@ def get_camiones_permitidos_para_ruta(
     # Si no se encuentra, retornar todos los tipos Nestlé por defecto
     print(f"[DEBUG] ⚠️ No se encontró match exacto, usando default: PAQUETERA + RAMPLA_DIRECTA")
     return [TipoCamion.PAQUETERA, TipoCamion.RAMPLA_DIRECTA]
+
+
+def es_ruta_solo_backhaul(client_config, cd: str, ce: str, tipo_ruta: str = "normal") -> bool:
+    """
+    Verifica si una ruta SOLO permite backhaul (no permite Nestlé).
+    """
+    from models.enums import TipoCamion
+    
+    # Convertir a listas para compatibilidad con get_camiones_permitidos_para_ruta
+    camiones_permitidos = get_camiones_permitidos_para_ruta(client_config, [cd], [ce], tipo_ruta)
+    
+    # Solo backhaul si BH está permitido y NO hay camiones Nestlé
+    tiene_backhaul = TipoCamion.BACKHAUL in camiones_permitidos
+    tiene_nestle = any(c.es_nestle for c in camiones_permitidos)
+    
+    return tiene_backhaul and not tiene_nestle

@@ -314,7 +314,7 @@ def _limpiar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _optimizar_apilabilidad_skus(df: pd.DataFrame, altura_maxima_cm: float = 270) -> pd.DataFrame:
+def _optimizar_apilabilidad_skus(df: pd.DataFrame, altura_maxima_cm: float = 260) -> pd.DataFrame:
     """
     Optimiza categorías de apilabilidad ANTES de la optimización.
     
@@ -325,7 +325,7 @@ def _optimizar_apilabilidad_skus(df: pd.DataFrame, altura_maxima_cm: float = 270
     
     Args:
         df: DataFrame de SKUs con columnas de apilabilidad
-        altura_maxima_cm: Altura máxima del camión (default 270cm)
+        altura_maxima_cm: Altura máxima del camión
     
     Returns:
         DataFrame con apilabilidad optimizada
@@ -353,6 +353,7 @@ def _optimizar_apilabilidad_skus(df: pd.DataFrame, altura_maxima_cm: float = 270
         
         # REGLA 2: Si 2 × altura > altura_max → intentar BASE/SUPERIOR
         if 2 * altura > altura_maxima_cm:
+            print("ALTURAS:", altura, altura_maxima_cm)
             puede_ser_base = df.at[idx, 'BASE'] > 0 or _tiene_columna_base(df, idx)
             puede_ser_superior = df.at[idx, 'SUPERIOR'] > 0 or _tiene_columna_superior(df, idx)
             

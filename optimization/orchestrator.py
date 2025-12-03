@@ -4,6 +4,7 @@ Orquesta el flujo completo de optimización en dos fases (VCU y BinPacking).
 """
 
 from __future__ import annotations
+from itertools import combinations
 
 import time
 from typing import List, Dict, Any, Tuple, Optional
@@ -299,7 +300,7 @@ def _ejecutar_optimizacion_completa(
     # Consolidar resultados
     return _consolidar_resultados(
         resultados, pedidos_objetos, pedidos_dicts,
-        capacidad_default, client_config
+        capacidad_default, client_config, fase
     )
 
 
@@ -445,19 +446,10 @@ def _optimizar_grupos_vcu_cascada_con_camiones(
                 camiones = res.get("camiones", [])
                 
                 if nuevos and camiones:
-                    # Reclasificar y etiquetar camiones
-                    for cam in camiones:
-                        tipo_optimo = _reclasificar_camion_nestle(cam, client_config)
-                        
-                        # Asignar el tipo - siempre es un objeto Camion aquí
-                        cam.tipo_camion = TipoCamion(tipo_optimo)
-                        
-                        # También actualizar en todos los pedidos del camión
-                        for pedido in cam.pedidos:
-                            pedido.tipo_camion = tipo_optimo
                     
                     pedidos_asignados_global.update(nuevos)
                     resultados.append(res)
+                    
                     print(f"[VCU] ✓ MULTI_CE_PRIORIDAD Nestlé: {len(nuevos)}/{n_pedidos} pedidos en {len(camiones)} camiones")
                 else:
                     print(f"[VCU] ⚠️ MULTI_CE_PRIORIDAD Nestlé: {res.get('status')} pero 0 pedidos/camiones")
@@ -467,10 +459,25 @@ def _optimizar_grupos_vcu_cascada_con_camiones(
         # Actualizar pedidos disponibles
         pedidos_disponibles = [p for p in pedidos_disponibles if p.pedido not in pedidos_asignados_global]
     
+    # 0.5 Separar pedidos de rutas solo-backhaul (se procesan en Fase 2)
+    from utils.config_helpers import es_ruta_solo_backhaul
+    
+    pedidos_solo_bh = []
+    pedidos_para_nestle = []
+    
+    for p in pedidos_disponibles:
+        if es_ruta_solo_backhaul(client_config, p.cd, p.ce, "normal"):
+            pedidos_solo_bh.append(p)
+        else:
+            pedidos_para_nestle.append(p)
+    
+    if pedidos_solo_bh:
+        print(f"[VCU] Separados {len(pedidos_solo_bh)} pedidos de rutas solo-backhaul (irán a Fase 2)")
+    
+    pedidos_disponibles = pedidos_para_nestle
+
     # 1. Rutas NORMALES en PARALELO
-    print("armando grupos normales")
     grupos_normal = _generar_grupos_para_tipo(pedidos_disponibles, client_config, "normal")
-    print("previo a grupos normales")
     
     if grupos_normal:
         # ORDENAR grupos por complejidad (más pedidos primero)
@@ -525,17 +532,6 @@ def _optimizar_grupos_vcu_cascada_con_camiones(
                     camiones = res.get("camiones", [])
                     
                     if nuevos and camiones:
-                        # Reclasificar cada camión individualmente
-                        for cam in camiones:
-                            tipo_optimo = _reclasificar_camion_nestle(cam, client_config)
-                            
-                            # Asignar el tipo - siempre es un objeto Camion aquí
-                            cam.tipo_camion = TipoCamion(tipo_optimo)
-                            
-                            # También actualizar en todos los pedidos del camión
-                            for pedido in cam.pedidos:
-                                pedido.tipo_camion = tipo_optimo
-                        
                         pedidos_asignados_global.update(nuevos)
                         resultados.append(res)
         
@@ -600,17 +596,6 @@ def _optimizar_grupos_vcu_cascada_con_camiones(
                 camiones = res.get("camiones", [])
                 
                 if nuevos and camiones:
-                    # Reclasificar y etiquetar camiones
-                    for cam in camiones:
-                        tipo_optimo = _reclasificar_camion_nestle(cam, client_config)
-                        
-                        # Asignar el tipo - siempre es un objeto Camion aquí
-                        cam.tipo_camion = TipoCamion(tipo_optimo)
-                        
-                        # También actualizar en todos los pedidos del camión
-                        for pedido in cam.pedidos:
-                            pedido.tipo_camion = tipo_optimo
-                    
                     pedidos_asignados_global.update(nuevos)
                     resultados.append(res)
                     print(f"[VCU] ✓ {tipo_ruta.upper()} Nestlé: {len(nuevos)}/{n_pedidos} pedidos en {len(camiones)} camiones")
@@ -628,6 +613,11 @@ def _optimizar_grupos_vcu_cascada_con_camiones(
     print("\n" + "="*80)
     print("FASE 2: OPTIMIZACIÓN CON CAMIONES BACKHAUL")
     print("="*80)
+
+    # Agregar pedidos de rutas solo-BH que separamos al inicio
+    if pedidos_solo_bh:
+        pedidos_disponibles = pedidos_disponibles + pedidos_solo_bh
+        print(f"[VCU] Agregando {len(pedidos_solo_bh)} pedidos de rutas solo-backhaul")
     
     # Definir el orden: multi_ce_prioridad, normal, multi_ce, multi_cd
     orden_tipos_ruta_bh = ["multi_ce_prioridad", "normal", "multi_ce", "multi_cd"]
@@ -745,15 +735,7 @@ def _optimizar_grupos_binpacking(
             
             # Etiquetar camiones - son objetos Camion
             for cam in camiones:
-                # Si es Nestlé, reclasificar
-                if tipo_camion.es_nestle:
-                    tipo_optimo = _reclasificar_camion_nestle(cam, client_config)
-                    cam.tipo_camion = TipoCamion(tipo_optimo)
-                    
-                    # Actualizar en todos los pedidos
-                    for pedido in cam.pedidos:
-                        pedido.tipo_camion = tipo_optimo
-                else:
+                if not tipo_camion.es_nestle:
                     # Si es backhaul, asignar directamente
                     cam.tipo_camion = tipo_camion
                     
@@ -774,7 +756,8 @@ def _consolidar_resultados(
     pedidos_originales: List[Pedido],
     pedidos_dicts: List[Dict[str, Any]],
     capacidad_default: TruckCapacity,
-    client_config 
+    client_config,
+    modo: str = "vcu"
 ) -> Dict[str, Any]:
     """
     Consolida resultados de todos los grupos en una respuesta única.
@@ -786,9 +769,40 @@ def _consolidar_resultados(
     for res in resultados:
         all_camiones.extend(res.get("camiones", []))
 
-    # Validación masiva de altura
+    # 1. Validación masiva de altura
     all_camiones = _validar_altura_camiones_paralelo(all_camiones, client_config)
-    
+
+    # 2. Ajustar camiones inválidos removiendo pedidos
+    pedidos_removidos = []
+    all_camiones = _ajustar_camiones_invalidos(all_camiones, client_config, pedidos_removidos, modo)
+
+    # 3. Recuperar pedidos removidos en backhaul
+    if pedidos_removidos:
+        camiones_recuperados = _recuperar_pedidos_en_backhaul(
+            pedidos_removidos, client_config, capacidad_default
+        )
+        if camiones_recuperados:
+            # Validar los camiones recuperados
+            camiones_recuperados = _validar_altura_camiones_paralelo(camiones_recuperados, client_config)
+            
+            # Ajustar si es necesario (pedidos que fallen van a no incluidos)
+            pedidos_sin_recuperar = []
+            camiones_recuperados = _ajustar_camiones_invalidos(
+                camiones_recuperados, client_config, pedidos_sin_recuperar, modo
+            )
+            
+            all_camiones.extend(camiones_recuperados)
+            print(f"[RECUPERACIÓN] {len(camiones_recuperados)} camiones BH creados, {len(pedidos_sin_recuperar)} pedidos sin recuperar")
+
+    # 4. Aplicar adherencia backhaul si está configurada
+    adherencia_bh = getattr(client_config, 'ADHERENCIA_BACKHAUL', None)
+    if adherencia_bh is not None and adherencia_bh > 0:
+        all_camiones = _aplicar_adherencia_backhaul(all_camiones, client_config, adherencia_bh)
+
+    # 5. Reclasificación Nestlé basada en validación REAL
+    _reclasificar_nestle_post_validacion(all_camiones, client_config)
+
+    # 6. Actualizar opciones de tipo de camión
     for camion in all_camiones:
         _actualizar_opciones_tipo_camion(camion, client_config)
     
@@ -851,7 +865,7 @@ def _validar_altura_camiones_paralelo(
         if not camiones_a_validar:
             if DEBUG_VALIDATION:
                 print(f"[{operacion.upper()}] No hay camiones con SKUs para validar")
-            return
+            return camiones
         
         with print_lock:
             print(f"\n{'='*80}")
@@ -865,19 +879,10 @@ def _validar_altura_camiones_paralelo(
             print(f"Threads paralelos: {max_workers}")
             print(f"{'='*80}\n")
         
-        # Crear validador
-        altura_maxima = 270
-        if hasattr(config, 'TRUCK_TYPES') and 'paquetera' in config.TRUCK_TYPES:
-            altura_maxima = config.TRUCK_TYPES['paquetera'].get('altura_cm', 270)
         
         permite_consolidacion = getattr(config, 'PERMITE_CONSOLIDACION', False)
         max_skus_por_pallet = getattr(config, 'MAX_SKUS_POR_PALLET', 3)
         
-        validator = HeightValidator(
-            altura_maxima_cm=altura_maxima,
-            permite_consolidacion=permite_consolidacion,
-            max_skus_por_pallet=max_skus_por_pallet
-        )
         
         # Función worker con logging ordenado
         def validar_camion_worker(cam: Camion, cam_idx: int) -> Tuple[str, bool, float, Optional[str]]:
@@ -890,38 +895,32 @@ def _validar_altura_camiones_paralelo(
             error_msg = None
             
             with print_lock:
-                print(f"\n{'─'*80}")
-                print(f"🔍 VALIDANDO CAMIÓN [{cam_idx}/{len(camiones_a_validar)}]: {cam.id}")
-                print(f"   Pedidos: {len(cam.pedidos)} | Pallets: {cam.pallets_conf:.1f}")
-                print(f"{'─'*80}")
+                print(f"🔍 VALIDANDO CAMIÓN [{cam_idx}/{len(camiones_a_validar)}]: {cam.id}, Pedidos: {len(cam.pedidos)} | Pallets: {cam.pallets_conf:.1f}")
             
             try:
-                es_valido, errores, layout = validator.validar_camion_rapido(cam)
+                
+                validator = HeightValidator(
+                    altura_maxima_cm=cam.capacidad.altura_cm,
+                    permite_consolidacion=permite_consolidacion,
+                    max_skus_por_pallet=max_skus_por_pallet
+        )
+                es_valido, errores, layout, debug_info = validator.validar_camion_rapido(cam)
                 
                 # 🔍 DEBUG: Imprimir qué retornó la validación
-                with print_lock:
-                    print(f"[DEBUG] Retorno validación:")
-                    print(f"  es_valido: {es_valido} (type: {type(es_valido)})")
-                    print(f"  errores: {errores} (type: {type(errores)})")
-                    print(f"  layout: {layout} (type: {type(layout)})")
+                #with print_lock:
+                #    print(f"[DEBUG] Retorno validación:")
+                #    print(f"  es_valido: {es_valido} (type: {type(es_valido)})")
+                #    print(f"  errores: {errores} (type: {type(errores)})")
+                #    print(f"  layout: {layout} (type: {type(layout)})")
                 
                 # Normalizar errores con validación exhaustiva
                 errores_limpios = []
                 
                 if errores is None:
-                    with print_lock:
-                        print(f"[DEBUG] errores es None, usando lista vacía")
                     errores_limpios = []
                 elif not isinstance(errores, (list, tuple)):
-                    with print_lock:
-                        print(f"[DEBUG] errores NO es lista/tupla, convirtiendo a string")
                     errores_limpios = [str(errores)]
-                else:
-                    with print_lock:
-                        print(f"[DEBUG] errores es lista con {len(errores)} elementos")
-                        for i, e in enumerate(errores):
-                            print(f"    [{i}]: {repr(e)} (type: {type(e)})")
-                    
+                else:                    
                     # Filtrar elementos válidos
                     for e in errores:
                         if e is not None and e is not Ellipsis and e != "":
@@ -933,9 +932,6 @@ def _validar_altura_camiones_paralelo(
 
                 error_msg = "; ".join(errores_limpios) if errores_limpios else None
 
-                with print_lock:
-                    print(f"[DEBUG] errores_limpios final: {errores_limpios}")
-
                 elapsed_ms = (time.time() - start) * 1000
 
 
@@ -943,6 +939,8 @@ def _validar_altura_camiones_paralelo(
                 layout_info = {
                     'altura_validada': bool(es_valido),
                     'errores_validacion': errores_limpios,
+                    'fragmentos_fallidos': debug_info.get('fragmentos_fallidos', []) if debug_info else [],
+                    'fragmentos_totales': debug_info.get('fragmentos_totales', 0) if debug_info else 0,
                 }
                 
                 if layout is not None:
@@ -990,6 +988,9 @@ def _validar_altura_camiones_paralelo(
                     # Si no hay layout válido pero pasó validación
                     if es_valido:
                         layout_info['posiciones_usadas'] = 0
+                    else:
+                        # Layout inválido - mantener estimación anterior o resetear
+                        layout_info['posiciones_usadas'] = cam.pos_total
                 
                 # ✅ GUARDAR EN METADATA
                 cam.metadata['layout_info'] = layout_info
@@ -1089,6 +1090,383 @@ def _validar_altura_camiones_paralelo(
         return camiones
 
 
+def _ajustar_camiones_invalidos(
+    camiones: List[Camion],
+    client_config,
+    pedidos_removidos_global: List[Pedido],
+    modo: str = "vcu"
+) -> List[Camion]:
+    """
+    Ajusta camiones inválidos removiendo pedidos hasta que validen.
+    
+    Estrategia:
+    1. Identifica camiones inválidos (altura_validada == False)
+    2. Para cada uno, calcula N = cantidad de fragmentos fallidos
+    3. Busca pedido(s) cuya suma de fragmentos ≈ N (ordenados de menor a mayor)
+    4. Verifica que VCU sin esos pedidos >= target
+    5. Remueve pedidos y re-valida
+    6. Repite hasta válido o máx 3 iteraciones
+    """
+    from optimization.validation.height_validator import HeightValidator
+    
+    MAX_ITERACIONES = 3
+    
+    # Identificar camiones inválidos
+    camiones_invalidos = [
+        cam for cam in camiones
+        if cam.metadata.get('layout_info', {}).get('altura_validada') == False
+    ]
+    
+    if not camiones_invalidos:
+        print(f"\n[AJUSTE] ✅ Todos los camiones son válidos, no se requiere ajuste")
+        return camiones
+    
+    print(f"\n{'='*80}")
+    print(f"AJUSTE POST-VALIDACIÓN")
+    print(f"{'='*80}")
+    print(f"Camiones inválidos: {len(camiones_invalidos)}")
+    
+    permite_consolidacion = getattr(client_config, 'PERMITE_CONSOLIDACION', False)
+    max_skus_por_pallet = getattr(client_config, 'MAX_SKUS_POR_PALLET', 3)
+    
+    for cam in camiones_invalidos:
+        layout_info = cam.metadata.get('layout_info', {})
+        fragmentos_fallidos = layout_info.get('fragmentos_fallidos', [])
+        n_fallidos = len(fragmentos_fallidos)
+        
+        if n_fallidos == 0:
+            print(f"\n[AJUSTE] ⚠️ Camión {cam.id}: inválido pero sin fragmentos_fallidos registrados")
+            continue
+        
+        print(f"\n[AJUSTE] 🔧 Camión {cam.id}: {n_fallidos} fragmentos fallidos")
+        
+        for iteracion in range(MAX_ITERACIONES):
+            print(f"\n   --- Iteración {iteracion + 1}/{MAX_ITERACIONES} ---")
+            
+            # Obtener fragmentos fallidos actuales
+            layout_info = cam.metadata.get('layout_info', {})
+            fragmentos_fallidos = layout_info.get('fragmentos_fallidos', [])
+            n_fallidos = len(fragmentos_fallidos)
+            
+            if n_fallidos == 0:
+                print(f"   ✅ Camión ahora es válido")
+                break
+            
+            # Buscar pedidos a remover
+            pedidos_a_remover = _seleccionar_pedidos_a_remover(
+                cam, n_fallidos, fragmentos_fallidos, client_config
+            )
+            
+            if not pedidos_a_remover:
+                if modo == "binpacking":
+                    # En binpacking, forzar remoción aunque VCU baje
+                    print(f"   ⚠️ No se puede mantener VCU, forzando remoción (binpacking)")
+                    pedidos_a_remover = _seleccionar_pedidos_a_remover(
+                        cam, n_fallidos, fragmentos_fallidos, client_config, forzar_remocion=True
+                    )
+                    if not pedidos_a_remover:
+                        print(f"   ❌ No se pudo forzar remoción")
+                        break
+                else:
+                    print(f"   ⚠️ No se encontraron pedidos para remover manteniendo VCU")
+                    break
+            
+            # Remover pedidos
+            pedidos_ids_remover = {p.pedido for p in pedidos_a_remover}
+            fragmentos_removidos = sum(p.cantidad_fragmentos for p in pedidos_a_remover)
+            
+            print(f"   Removiendo {len(pedidos_a_remover)} pedido(s) ({fragmentos_removidos} fragmentos) para liberar ~{n_fallidos}")
+            for p in pedidos_a_remover:
+                print(f"      - Pedido {p.pedido}: {p.cantidad_fragmentos} fragmentos, {p.pallets:.1f} pallets")
+            
+            # Guardar pedidos removidos
+            pedidos_removidos_global.extend(pedidos_a_remover)
+            
+            # Actualizar camión
+            cam.pedidos = [p for p in cam.pedidos if p.pedido not in pedidos_ids_remover]
+            cam._invalidar_cache()
+            
+            # Re-validar
+            validator = HeightValidator(
+                altura_maxima_cm=cam.capacidad.altura_cm,
+                permite_consolidacion=permite_consolidacion,
+                max_skus_por_pallet=max_skus_por_pallet
+            )
+            
+            es_valido, errores, layout, debug_info = validator.validar_camion_rapido(cam)
+            
+            # Actualizar layout_info
+            nuevo_layout_info = {
+                'altura_validada': bool(es_valido),
+                'errores_validacion': errores if errores else [],
+                'fragmentos_fallidos': debug_info.get('fragmentos_fallidos', []) if debug_info else [],
+                'fragmentos_totales': debug_info.get('fragmentos_totales', 0) if debug_info else 0,
+            }
+            
+            if layout is not None:
+                cam.pos_total = layout.posiciones_usadas
+                nuevo_layout_info.update({
+                    'posiciones_usadas': layout.posiciones_usadas,
+                    'posiciones_disponibles': layout.posiciones_disponibles,
+                    'altura_maxima_cm': layout.altura_maxima_cm,
+                    'total_pallets_fisicos': layout.total_pallets,
+                    'altura_maxima_usada_cm': round(layout.altura_maxima_usada, 1),
+                    'altura_promedio_usada': round(layout.altura_promedio_usada, 1),
+                    'aprovechamiento_altura': round(layout.aprovechamiento_altura * 100, 1),
+                    'aprovechamiento_posiciones': round(layout.aprovechamiento_posiciones * 100, 1),
+                    'posiciones': [
+                        {
+                            'id': pos.id,
+                            'altura_usada_cm': pos.altura_usada_cm,
+                            'altura_disponible_cm': pos.espacio_disponible_cm,
+                            'num_pallets': pos.num_pallets,
+                            'pallets': [
+                                {
+                                    'id': pallet.id,
+                                    'nivel': pallet.nivel,
+                                    'altura_cm': pallet.altura_total_cm,
+                                    'skus': [
+                                        {
+                                            'sku_id': frag.sku_id,
+                                            'pedido_id': frag.pedido_id,
+                                            'altura_cm': frag.altura_cm,
+                                            'categoria': frag.categoria.value,
+                                            'es_picking': frag.es_picking
+                                        }
+                                        for frag in pallet.fragmentos
+                                    ]
+                                }
+                                for pallet in pos.pallets_apilados
+                            ]
+                        }
+                        for pos in layout.posiciones
+                        if not pos.esta_vacia
+                    ]
+                })
+            
+            cam.metadata['layout_info'] = nuevo_layout_info
+            
+            nuevos_fallidos = len(nuevo_layout_info.get('fragmentos_fallidos', []))
+            print(f"   Re-validación: {'✅ VÁLIDO' if es_valido else f'❌ {nuevos_fallidos} fragmentos fallidos'}")
+            
+            if es_valido:
+                break
+        
+        # Resumen del camión
+        es_valido_final = cam.metadata.get('layout_info', {}).get('altura_validada', False)
+        if es_valido_final:
+            print(f"\n   🎉 Camión {cam.id}: AJUSTADO EXITOSAMENTE")
+        else:
+            fallidos_final = len(cam.metadata.get('layout_info', {}).get('fragmentos_fallidos', []))
+            print(f"\n   ⚠️ Camión {cam.id}: Aún inválido ({fallidos_final} fragmentos fallidos)")
+    
+    # Resumen final
+    camiones_aun_invalidos = [
+        cam for cam in camiones
+        if cam.metadata.get('layout_info', {}).get('altura_validada') == False
+    ]
+    
+    print(f"\n{'='*80}")
+    print(f"RESUMEN AJUSTE POST-VALIDACIÓN")
+    print(f"{'='*80}")
+    print(f"Camiones ajustados: {len(camiones_invalidos) - len(camiones_aun_invalidos)}")
+    print(f"Camiones aún inválidos: {len(camiones_aun_invalidos)}")
+    print(f"Total pedidos removidos: {len(pedidos_removidos_global)}")
+    print(f"{'='*80}\n")
+    
+    # Filtrar: solo retornar camiones válidos, desarmar los inválidos
+    camiones_validos = []
+    for cam in camiones:
+        if cam.metadata.get('layout_info', {}).get('altura_validada') == True:
+            camiones_validos.append(cam)
+        else:
+            # Desarmar: todos los pedidos van al pool
+            print(f"[AJUSTE] 🔴 Desarmando camión {cam.id} - {len(cam.pedidos)} pedidos van al pool")
+            pedidos_removidos_global.extend(cam.pedidos)
+
+    # En binpacking, crear camiones nuevos con pedidos removidos
+    if modo == "binpacking" and pedidos_removidos_global:
+        print(f"\n[AJUSTE BP] Creando camiones adicionales con {len(pedidos_removidos_global)} pedidos removidos")
+        camiones_adicionales = _crear_camiones_para_pedidos_removidos(
+            list(pedidos_removidos_global), client_config
+        )
+        camiones_validos.extend(camiones_adicionales)
+        pedidos_removidos_global.clear()
+    
+    return camiones_validos
+
+
+def _seleccionar_pedidos_a_remover(
+    camion: Camion,
+    n_fragmentos_fallidos: int,
+    fragmentos_fallidos: List[Dict],
+    client_config,
+    forzar_remocion: bool = False
+) -> List[Pedido]:
+    from itertools import combinations
+    
+    pedidos = camion.pedidos
+    if not pedidos:
+        return []
+
+    # --- UTILIDAD ---
+    def impacto(p):
+        return p.volumen if camion.vcu_vol >= camion.vcu_peso else p.peso
+
+    # =====================================================
+    # PASO 1: Buscar pedido único exacto
+    # =====================================================
+    unicos = [p for p in pedidos if p.cantidad_fragmentos == n_fragmentos_fallidos]
+    if unicos:
+        elegido = min(unicos, key=impacto)
+        if _vcu_sigue_valido(camion, [elegido], forzar_remocion):
+            return [elegido]
+
+    # =====================================================
+    # PASO 2: Buscar combinaciones EXACTAS (máx 4 pedidos)
+    # =====================================================
+    data = [(p, p.cantidad_fragmentos, impacto(p)) for p in pedidos]
+    n = len(data)
+    MAX_COMBO_SIZE = min(4, n)  # Limitar para performance
+    
+    exactas = []
+    for r in range(2, MAX_COMBO_SIZE + 1):  # Empezar en 2 (el 1 ya se probó arriba)
+        for combo in combinations(data, r):
+            frag_sum = sum(x[1] for x in combo)
+            if frag_sum == n_fragmentos_fallidos:
+                costo = sum(x[2] for x in combo)
+                exactas.append((combo, costo))
+
+    if exactas:
+        combo, _ = min(exactas, key=lambda x: x[1])
+        seleccion = [x[0] for x in combo]
+        if _vcu_sigue_valido(camion, seleccion, forzar_remocion):
+            return seleccion
+
+    # =====================================================
+    # PASO 3: Buscar alternativa más cercana (máx 4 pedidos)
+    # =====================================================
+    mejores = []
+    target = n_fragmentos_fallidos
+
+    for r in range(1, MAX_COMBO_SIZE + 1):
+        for combo in combinations(data, r):
+            frag_sum = sum(x[1] for x in combo)
+            diff = abs(frag_sum - target)
+            impacto_total = sum(x[2] for x in combo)
+            mejores.append((combo, diff, impacto_total, frag_sum))
+
+    if not mejores:
+        return []
+
+    # Ordenar por: 1) menor diferencia, 2) menor impacto
+    mejores.sort(key=lambda x: (x[1], x[2]))
+
+    for combo, diff, imp, frag_sum in mejores:
+        seleccion = [x[0] for x in combo]
+        if _vcu_sigue_valido(camion, seleccion, forzar_remocion):
+            return seleccion
+
+    # =====================================================
+    # PASO 4: No existe combinación válida
+    # =====================================================
+    print(f"[AJUSTE] ⚠️ No se encontró combinación válida para {n_fragmentos_fallidos} fragmentos")
+    return []
+
+
+def _vcu_sigue_valido(camion: Camion, pedidos_a_remover: List[Pedido], forzar_remocion: bool = False) -> bool:
+    """Verifica si el camión mantiene VCU >= target sin ciertos pedidos."""
+    ids = {p.pedido for p in pedidos_a_remover}
+    
+    # Verificar que no quede vacío
+    pedidos_restantes = len(camion.pedidos) - len(pedidos_a_remover)
+    if pedidos_restantes <= 0:
+        return False
+    
+    # En modo forzado, solo verificar que no quede vacío
+    if forzar_remocion:
+        return True
+    
+    peso_rest = sum(p.peso for p in camion.pedidos if p.pedido not in ids)
+    vol_rest = sum(p.volumen for p in camion.pedidos if p.pedido not in ids)
+    
+    cap = camion.capacidad
+    vcu_peso = peso_rest / cap.cap_weight if cap.cap_weight > 0 else 0
+    vcu_vol = vol_rest / cap.cap_volume if cap.cap_volume > 0 else 0
+    
+    return max(vcu_peso, vcu_vol) >= cap.vcu_min
+
+
+def _recuperar_pedidos_en_backhaul(
+    pedidos: List[Pedido],
+    client_config,
+    capacidad_default: TruckCapacity
+) -> List[Camion]:
+    """
+    Intenta recuperar pedidos removidos optimizándolos en camiones backhaul.
+    Solo procesa pedidos cuyas rutas permiten backhaul.
+    """
+    from utils.config_helpers import es_ruta_solo_backhaul, get_camiones_permitidos_para_ruta, get_capacity_for_type
+    from models.enums import TipoCamion
+    from optimization.solvers.vcu import optimizar_grupo_vcu
+    from optimization.groups import generar_grupos_optimizacion
+    
+    if not pedidos:
+        return []
+    
+    print(f"\n[RECUPERACIÓN BH] Intentando recuperar {len(pedidos)} pedidos en backhaul")
+    
+    # Filtrar pedidos cuyas rutas permiten backhaul
+    pedidos_para_bh = []
+    pedidos_sin_opcion = []
+    
+    for p in pedidos:
+        camiones_permitidos = get_camiones_permitidos_para_ruta(
+            client_config, [p.cd], [p.ce], "normal"
+        )
+        if TipoCamion.BACKHAUL in camiones_permitidos:
+            pedidos_para_bh.append(p)
+        else:
+            pedidos_sin_opcion.append(p)
+    
+    if pedidos_sin_opcion:
+        print(f"[RECUPERACIÓN BH] {len(pedidos_sin_opcion)} pedidos no permiten backhaul en su ruta")
+    
+    if not pedidos_para_bh:
+        print(f"[RECUPERACIÓN BH] No hay pedidos para recuperar en backhaul")
+        return []
+    
+    print(f"[RECUPERACIÓN BH] {len(pedidos_para_bh)} pedidos pueden ir en backhaul")
+    
+    # Obtener capacidad backhaul
+    cap_backhaul = get_capacity_for_type(client_config, TipoCamion.BACKHAUL)
+    
+    # Generar grupos para optimización
+    grupos = generar_grupos_optimizacion(pedidos_para_bh, client_config, "vcu")
+    
+    camiones_resultado = []
+    
+    for cfg, pedidos_grupo in grupos:
+        if not pedidos_grupo:
+            continue
+        
+        resultado = optimizar_grupo_vcu(
+            pedidos_grupo, cfg, client_config, cap_backhaul, 30
+        )
+        
+        if resultado.get("status") in ("OPTIMAL", "FEASIBLE"):
+            camiones = resultado.get("camiones", [])
+            
+            for cam in camiones:
+                cam.tipo_camion = TipoCamion.BACKHAUL
+                for pedido in cam.pedidos:
+                    pedido.tipo_camion = "backhaul"
+            
+            camiones_resultado.extend(camiones)
+    
+    print(f"[RECUPERACIÓN BH] Creados {len(camiones_resultado)} camiones backhaul")
+    
+    return camiones_resultado
 
 
 def _compute_stats_from_objects(
@@ -1149,6 +1527,7 @@ def _compute_stats_from_objects(
         "cantidad_camiones_bh": cantidad_backhaul,
     }
 
+
 def _aplicar_overrides_vcu(config, vcuTarget: Any, vcuTargetBH: Any):
     """
     Aplica overrides de VCU mínimo desde el frontend.
@@ -1170,16 +1549,98 @@ def _aplicar_overrides_vcu(config, vcuTarget: Any, vcuTargetBH: Any):
     return config
 
 
-def _reclasificar_camion_nestle(camion, client_config) -> str:
+def _reclasificar_nestle_post_validacion(
+    camiones: List[Camion],
+    client_config
+) -> None:
     """
-    Determina el tipo de camión Nestlé óptimo para un camión ya optimizado.
+    Reclasifica camiones Nestlé DESPUÉS de validación de altura.
+    Usa los datos reales del layout para decidir si downgrade a rampla.
+    
+    Modifica camiones in-place.
+    """
+    from utils.config_helpers import get_capacity_for_type
+    
+    total_reclasificados = 0
+    
+    for cam in camiones:
+        # Solo reclasificar camiones paquetera
+        if cam.tipo_camion != TipoCamion.PAQUETERA:
+            continue
+
+        # ⚠️ Solo reclasificar si el camión está validado
+        layout_info = cam.metadata.get('layout_info', {})
+        if not layout_info.get('altura_validada', False):
+            continue
+        
+        tipo_optimo = _reclasificar_camion_nestle(cam, client_config)
+        tipo_optimo_enum = TipoCamion(tipo_optimo)
+        
+        # Si cambió a rampla_directa
+        if tipo_optimo_enum == TipoCamion.RAMPLA_DIRECTA:
+            nueva_capacidad = get_capacity_for_type(client_config, tipo_optimo_enum)
+            cam.cambiar_tipo(tipo_optimo_enum, nueva_capacidad)
+
+            from optimization.utils.helpers import calcular_posiciones_apilabilidad
+
+            # Recalcular posiciones con nueva capacidad
+            cam.pos_total = calcular_posiciones_apilabilidad(
+                cam.pedidos,
+                nueva_capacidad.max_positions
+            )
+            
+            # Actualizar en todos los pedidos
+            for pedido in cam.pedidos:
+                pedido.tipo_camion = tipo_optimo
+
+            # ✅ ACTUALIZAR altura_maxima_cm en layout_info para reflejar nueva capacidad
+            if 'layout_info' in cam.metadata:
+                layout_info = cam.metadata['layout_info']
+                
+                # Actualizar altura máxima del camión
+                altura_anterior = layout_info.get('altura_maxima_cm', 0)
+                layout_info['altura_maxima_cm'] = nueva_capacidad.altura_cm
+                
+                # Recalcular aprovechamiento de altura con nueva referencia
+                altura_usada = layout_info.get('altura_maxima_usada_cm', 0)
+                if nueva_capacidad.altura_cm > 0:
+                    nuevo_aprovechamiento = (altura_usada / nueva_capacidad.altura_cm) * 100
+                    layout_info['aprovechamiento_altura'] = round(nuevo_aprovechamiento, 1)
+                
+                # Actualizar posiciones disponibles si cambiaron
+                layout_info['posiciones_disponibles'] = nueva_capacidad.max_positions
+                
+                # Recalcular aprovechamiento de posiciones
+                posiciones_usadas = layout_info.get('posiciones_usadas', 0)
+                if nueva_capacidad.max_positions > 0:
+                    nuevo_aprov_pos = (posiciones_usadas / nueva_capacidad.max_positions) * 100
+                    layout_info['aprovechamiento_posiciones'] = round(nuevo_aprov_pos, 1)
+                
+                print(f"   Layout actualizado: {altura_anterior:.0f}cm → {nueva_capacidad.altura_cm:.0f}cm")
+                print(f"   Aprovechamiento altura: {layout_info['aprovechamiento_altura']:.1f}%")
+            
+            
+            total_reclasificados += 1
+            
+            # El layout se calculó con paquetera pero cabe en rampla, así que es válido
+    
+    if total_reclasificados > 0:
+        print(f"\n[RECLASIFICACIÓN] ✅ {total_reclasificados} camiones: paquetera → rampla_directa")
+
+
+def _reclasificar_camion_nestle(
+    camion: Camion,
+    client_config
+) -> str:
+    """
+    Determina el tipo de camión Nestlé óptimo basándose en la validación de altura REAL.
     
     Lógica:
-    - Se optimiza inicialmente con PAQUETERA (más posiciones)
-    - Si el resultado cabe en RAMPLA_DIRECTA, se reclasifica
+    - Se optimiza inicialmente con PAQUETERA (más posiciones, 270cm altura)
+    - Después de validar altura, si el layout real cabe en RAMPLA_DIRECTA (220cm), se reclasifica
     
     Args:
-        camion: Objeto Camion o dict con datos del camión
+        camion: Objeto Camion con metadata de validación ya ejecutada
         client_config: Configuración del cliente
     
     Returns:
@@ -1194,26 +1655,50 @@ def _reclasificar_camion_nestle(camion, client_config) -> str:
     # Si tienen las mismas capacidades, no hay diferencia
     if (cap_paquetera.max_positions == cap_rampla.max_positions and
         cap_paquetera.cap_weight == cap_rampla.cap_weight and
-        cap_paquetera.cap_volume == cap_rampla.cap_volume):
+        cap_paquetera.cap_volume == cap_rampla.cap_volume and
+        cap_paquetera.altura_cm == cap_rampla.altura_cm):
         return "paquetera"  # Por defecto
     
-    # Extraer métricas del camión (soporta objeto o dict)
-    if hasattr(camion, 'pedidos'):
-        # Es un objeto Camion
-        num_pedidos = len(camion.pedidos)
+    # ✅ NUEVA LÓGICA: Usar datos REALES de validación de altura
+    layout_info = camion.metadata.get('layout_info', {})
+    
+    # Si no hay layout_info o no está validado, usar lógica conservadora
+    if not layout_info or not layout_info.get('altura_validada'):
+        # Fallback a lógica anterior (sin altura)
         peso_total = sum(p.peso for p in camion.pedidos)
         volumen_total = sum(p.volumen for p in camion.pedidos)
         pallets_total = camion.pallets_capacidad
-    else:
-        # Es un dict
-        num_pedidos = len(camion.get("pedidos", []))
-        peso_total = camion.get("peso_total", 0)
-        volumen_total = camion.get("volumen_total", 0)
-        pallets_total = camion.get("pallets_total", 0)
+        
+        cabe_en_rampla = (
+            len(camion.pedidos) <= cap_rampla.max_positions and
+            peso_total <= cap_rampla.cap_weight and
+            volumen_total <= cap_rampla.cap_volume and
+            pallets_total <= cap_rampla.max_pallets
+        )
+        
+        if cabe_en_rampla:
+            vcu_peso_rampla = peso_total / cap_rampla.cap_weight if cap_rampla.cap_weight > 0 else 0
+            vcu_vol_rampla = volumen_total / cap_rampla.cap_volume if cap_rampla.cap_volume > 0 else 0
+            vcu_max_rampla = max(vcu_peso_rampla, vcu_vol_rampla)
+            
+            if vcu_max_rampla >= cap_rampla.vcu_min:
+                return "rampla_directa"
+        
+        return "paquetera"
     
-    # Verificar si cabe en rampla directa
+    # ✅ USAR DATOS REALES DEL LAYOUT
+    altura_maxima_usada = layout_info.get('altura_maxima_usada_cm', 0)
+    posiciones_usadas = layout_info.get('posiciones_usadas', len(camion.pedidos))
+    
+    # Verificar dimensiones básicas (peso, volumen, pallets)
+    peso_total = sum(p.peso for p in camion.pedidos)
+    volumen_total = sum(p.volumen for p in camion.pedidos)
+    pallets_total = camion.pallets_capacidad
+    
+    # ✅ VERIFICACIÓN COMPLETA: altura real + dimensiones + posiciones
     cabe_en_rampla = (
-        num_pedidos <= cap_rampla.max_positions and
+        altura_maxima_usada <= cap_rampla.altura_cm and  # ⭐ Lo más importante
+        posiciones_usadas <= cap_rampla.max_positions and
         peso_total <= cap_rampla.cap_weight and
         volumen_total <= cap_rampla.cap_volume and
         pallets_total <= cap_rampla.max_pallets
@@ -1227,50 +1712,224 @@ def _reclasificar_camion_nestle(camion, client_config) -> str:
         
         # Verificar si cumple el target de VCU
         if vcu_max_rampla >= cap_rampla.vcu_min:
+            # ✅ Log para debugging
+            print(f"[RECLASIFICACIÓN] Camión {camion.id}: paquetera → rampla_directa")
+            print(f"   Altura usada: {altura_maxima_usada:.1f}cm <= {cap_rampla.altura_cm:.1f}cm")
+            print(f"   Posiciones: {posiciones_usadas}/{cap_rampla.max_positions}")
+            print(f"   VCU: {vcu_max_rampla*100:.1f}% >= {cap_rampla.vcu_min*100:.1f}%")
             return "rampla_directa"
     
-    # Si no cabe o no cumple VCU target, usar paquetera
+    # Si no cabe o no cumple VCU target, mantener paquetera
     return "paquetera"
 
 
-def _aplicar_reclasificacion_nestle(
-    resultados: List[Tuple[Dict[str, Any], TipoCamion]], 
-    client_config
-) -> List[Tuple[Dict[str, Any], TipoCamion]]:
+def _aplicar_adherencia_backhaul(
+    camiones: List[Camion],
+    client_config,
+    adherencia_target: float
+) -> List[Camion]:
     """
-    Aplica reclasificación de camiones Nestlé a resultados de optimización.
+    Convierte camiones Nestlé a Backhaul para cumplir adherencia mínima.
     
-    Args:
-        resultados: Lista de tuplas (resultado_optimizacion, tipo_camion)
-        client_config: Configuración del cliente
-    
-    Returns:
-        Lista de tuplas con tipos de camión reclasificados
+    Estrategia:
+    1. Calcular déficit de BH
+    2. Ordenar camiones Nestlé por VCU (menor primero)
+    3. Convertir los de menor VCU a BH si su ruta lo permite
+    4. Re-validar los convertidos
     """
-    resultados_reclasificados = []
+    from utils.config_helpers import get_camiones_permitidos_para_ruta, get_capacity_for_type
+    from models.enums import TipoCamion
+    from optimization.validation.height_validator import HeightValidator
     
-    total_reclasificados = 0
+    n_total = len(camiones)
+    if n_total == 0:
+        return camiones
     
-    for res, tipo_camion_original in resultados:
-        # Solo reclasificar si es camión Nestlé
-        if tipo_camion_original not in (TipoCamion.PAQUETERA, TipoCamion.RAMPLA_DIRECTA):
-            resultados_reclasificados.append((res, tipo_camion_original))
+    # Contar camiones actuales por tipo
+    camiones_bh = [c for c in camiones if c.tipo_camion == TipoCamion.BACKHAUL]
+    camiones_nestle = [c for c in camiones if c.tipo_camion != TipoCamion.BACKHAUL]
+    
+    n_bh_actual = len(camiones_bh)
+    n_bh_requerido = int(n_total * adherencia_target)
+    deficit = n_bh_requerido - n_bh_actual
+    
+    print(f"\n[ADHERENCIA BH] Total: {n_total}, BH actual: {n_bh_actual}, Requerido: {n_bh_requerido}, Déficit: {deficit}")
+    
+    if deficit <= 0:
+        print(f"[ADHERENCIA BH] ✅ Ya se cumple adherencia ({n_bh_actual}/{n_total} = {n_bh_actual/n_total*100:.1f}%)")
+        return camiones
+    
+    # Ordenar Nestlé por VCU (menor primero = candidatos a convertir)
+    camiones_nestle_ordenados = sorted(camiones_nestle, key=lambda c: c.vcu_max)
+    
+    # Obtener capacidad BH
+    cap_backhaul = get_capacity_for_type(client_config, TipoCamion.BACKHAUL)
+    permite_consolidacion = getattr(client_config, 'PERMITE_CONSOLIDACION', False)
+    max_skus_por_pallet = getattr(client_config, 'MAX_SKUS_POR_PALLET', 3)
+    
+    convertidos = 0
+    
+    for cam in camiones_nestle_ordenados:
+        if convertidos >= deficit:
+            break
+        
+        # Verificar si la ruta permite BH
+        cam_cd = [cam.cd] if isinstance(cam.cd, str) else cam.cd
+        cam_ce = [cam.ce] if isinstance(cam.ce, str) else cam.ce
+        tipo_ruta_str = cam.tipo_ruta.value if hasattr(cam.tipo_ruta, 'value') else str(cam.tipo_ruta)
+        
+        camiones_permitidos = get_camiones_permitidos_para_ruta(
+            client_config, cam_cd, cam_ce, tipo_ruta_str
+        )
+        
+        if TipoCamion.BACKHAUL not in camiones_permitidos:
             continue
         
-        camiones = res.get("camiones", [])
+        # Calcular peso y volumen del camión
+        peso_camion = sum(p.peso for p in cam.pedidos)
+        volumen_camion = sum(p.volumen for p in cam.pedidos)
         
-        for camion in camiones:
-            # Reclasificar cada camión
-            tipo_optimo = _reclasificar_camion_nestle(camion, client_config)
-            
-            if tipo_optimo != tipo_camion_original.value:
-                total_reclasificados += 1
-            
-            # Actualizar tipo en el camión (se hará después en el flujo principal)
+        # Verificar si cabe en capacidad BH
+        if peso_camion > cap_backhaul.cap_weight or volumen_camion > cap_backhaul.cap_volume:
+            print(f"[ADHERENCIA BH] ⚠️ Camión {cam.id} no cabe en BH (peso/vol)")
+            continue
         
-        resultados_reclasificados.append((res, tipo_camion_original))
+        # Guardar tipo original por si hay que revertir
+        tipo_original = cam.tipo_camion
+        capacidad_original = cam.capacidad
+        
+        # Convertir a BH
+        cam.tipo_camion = TipoCamion.BACKHAUL
+        cam.capacidad = cap_backhaul
+        cam._invalidar_cache()
+        for p in cam.pedidos:
+            p.tipo_camion = "backhaul"
+        
+        # Re-validar altura (BH tiene altura menor)
+        validator = HeightValidator(
+            altura_maxima_cm=cap_backhaul.altura_cm,
+            permite_consolidacion=permite_consolidacion,
+            max_skus_por_pallet=max_skus_por_pallet
+        )
+        
+        es_valido, errores, layout, debug_info = validator.validar_camion_rapido(cam)
+        
+        if es_valido:
+            convertidos += 1
+            print(f"[ADHERENCIA BH] ✓ Convertido camión {cam.id} (VCU: {cam.vcu_max:.1%})")
+            
+            # Actualizar layout_info
+            if layout is not None:
+                cam.metadata['layout_info'] = {
+                    'altura_validada': True,
+                    'errores_validacion': [],
+                    'fragmentos_fallidos': [],
+                    'posiciones_usadas': layout.posiciones_usadas,
+                    'altura_maxima_cm': layout.altura_maxima_cm,
+                    'posiciones': [
+                        {
+                            'id': pos.id,
+                            'altura_usada_cm': pos.altura_usada_cm,
+                            'altura_disponible_cm': pos.espacio_disponible_cm,
+                            'num_pallets': pos.num_pallets,
+                            'pallets': [
+                                {
+                                    'id': pallet.id,
+                                    'nivel': pallet.nivel,
+                                    'altura_cm': pallet.altura_total_cm,
+                                    'skus': [
+                                        {
+                                            'sku_id': frag.sku_id,
+                                            'pedido_id': frag.pedido_id,
+                                            'altura_cm': frag.altura_cm,
+                                            'categoria': frag.categoria.value,
+                                            'es_picking': frag.es_picking
+                                        }
+                                        for frag in pallet.fragmentos
+                                    ]
+                                }
+                                for pallet in pos.pallets_apilados
+                            ]
+                        }
+                        for pos in layout.posiciones
+                        if not pos.esta_vacia
+                    ]
+                }
+        else:
+            # Revertir conversión
+            cam.tipo_camion = tipo_original
+            cam.capacidad = capacidad_original
+            cam._invalidar_cache()
+            for p in cam.pedidos:
+                p.tipo_camion = tipo_original.value
+            print(f"[ADHERENCIA BH] ✗ Camión {cam.id} no valida como BH, revertido")
     
-    if total_reclasificados > 0:
-        print(f"[VCU] Reclasificados {total_reclasificados} camiones de paquetera a rampla_directa")
+    # Resumen
+    n_bh_final = len([c for c in camiones if c.tipo_camion == TipoCamion.BACKHAUL])
+    print(f"[ADHERENCIA BH] Resultado: {n_bh_final}/{n_total} = {n_bh_final/n_total*100:.1f}% (target: {adherencia_target*100:.0f}%)")
     
-    return resultados_reclasificados
+    return camiones
+
+
+def _crear_camiones_para_pedidos_removidos(
+    pedidos: List[Pedido],
+    client_config
+) -> List[Camion]:
+    """
+    Crea camiones para pedidos removidos en modo binpacking.
+    Usa backhaul si la ruta lo permite, sino Nestlé.
+    """
+    from utils.config_helpers import get_camiones_permitidos_para_ruta, get_capacity_for_type
+    from models.enums import TipoCamion
+    from optimization.solvers.binpacking import optimizar_grupo_binpacking
+    from optimization.groups import generar_grupos_optimizacion
+    
+    if not pedidos:
+        return []
+    
+    print(f"[AJUSTE BP] Intentando empaquetar {len(pedidos)} pedidos removidos")
+    
+    # Generar grupos
+    grupos = generar_grupos_optimizacion(pedidos, client_config, "binpacking")
+    
+    camiones_resultado = []
+    
+    for cfg, pedidos_grupo in grupos:
+        if not pedidos_grupo:
+            continue
+        
+        # Determinar tipo de camión (preferir backhaul por VCU bajo)
+        camiones_permitidos = get_camiones_permitidos_para_ruta(
+            client_config, cfg.cd, cfg.ce, cfg.tipo.value
+        )
+        
+        if TipoCamion.BACKHAUL in camiones_permitidos:
+            tipo_camion = TipoCamion.BACKHAUL
+        elif camiones_permitidos:
+            tipo_camion = camiones_permitidos[0]
+        else:
+            tipo_camion = TipoCamion.PAQUETERA
+        
+        cap = get_capacity_for_type(client_config, tipo_camion)
+        
+        resultado = optimizar_grupo_binpacking(
+            pedidos_grupo, cfg, client_config, cap, 30
+        )
+        
+        if resultado.get("status") in ("OPTIMAL", "FEASIBLE"):
+            camiones = resultado.get("camiones", [])
+            
+            for cam in camiones:
+                cam.tipo_camion = tipo_camion
+                for p in cam.pedidos:
+                    p.tipo_camion = tipo_camion.value
+            
+            camiones_resultado.extend(camiones)
+    
+    # Validar los camiones creados
+    if camiones_resultado:
+        camiones_resultado = _validar_altura_camiones_paralelo(camiones_resultado, client_config)
+    
+    print(f"[AJUSTE BP] Creados {len(camiones_resultado)} camiones adicionales")
+    
+    return camiones_resultado

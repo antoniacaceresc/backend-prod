@@ -193,6 +193,10 @@ async def api_update_truck_type(
         # Errores de negocio (no cabe / no permitido / regla del cliente, etc.)
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        import traceback
+        error_detail = traceback.format_exc()
+        print(f"\n❌ ERROR EN UPDATE_TRUCK_TYPE:")
+        print(error_detail)
         raise HTTPException(status_code=500, detail=f"Error interno: {e}")
     finally:
         semaphore.release()
