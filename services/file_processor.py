@@ -285,7 +285,8 @@ def _limpiar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
     
     # Chocolates (especial: SI/NO -> 1/0 para MAX, luego volver a SI/NO)
     if "CHOCOLATES" in df.columns:
-        df["CHOCOLATES_FLAG"] = (df["CHOCOLATES"].astype(str).str.upper() == "SI").astype(int)
+        chocolates_str = df["CHOCOLATES"].astype(str).str.upper().str.strip()
+        df["CHOCOLATES_FLAG"] = chocolates_str.isin(["SI", "SÍ", "1", "X", "TRUE", "YES"]).astype(int)
     else:
         df["CHOCOLATES_FLAG"] = 0
     
