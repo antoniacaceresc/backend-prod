@@ -34,11 +34,7 @@ MAX_TIEMPO_POR_GRUPO = int(os.getenv("MAX_TIEMPO_POR_GRUPO", "30"))
 THREAD_WORKERS_NORMAL = int(os.getenv("THREAD_WORKERS_NORMAL", str(min(8, (os.cpu_count() or 4)))))
 
 # Flag para activar/desactivar prints de debug
-DEBUG_VALIDATION = True  # ✅ CAMBIAR A True TEMPORALMENTE
-
-# ============================================================================
-# API PÚBLICA
-# ============================================================================
+DEBUG_VALIDATION = False 
 
 def procesar(
     content: bytes,
@@ -286,9 +282,16 @@ def _ejecutar_optimizacion_completa(
     
     if fase == "vcu":
         # Usar nueva función de cascada con tipos de camión
-        resultados = _optimizar_grupos_vcu_cascada_con_camiones(
+        # Retorna camiones ya validados y set de pedidos asignados
+        camiones_vcu, pedidos_asignados_vcu = _optimizar_grupos_vcu_cascada_con_camiones(
             pedidos_objetos, client_config, capacidades,
-            tpg, request_timeout, start_total
+            tpg, request_timeout, start_total, capacidad_default
+        )
+        
+        # Consolidar resultados (camiones ya validados)
+        return _consolidar_resultados(
+            camiones_vcu, pedidos_objetos, pedidos_dicts,
+            capacidad_default, client_config, fase
         )
     else:  # binpacking
         grupos = generar_grupos_optimizacion(pedidos_objetos, client_config, "binpacking")
@@ -296,12 +299,14 @@ def _ejecutar_optimizacion_completa(
             grupos, client_config, capacidades,
             tpg, request_timeout, start_total
         )
-    
-    # Consolidar resultados
-    return _consolidar_resultados(
-        resultados, pedidos_objetos, pedidos_dicts,
-        capacidad_default, client_config, fase
-    )
+        
+        # Consolidar resultados (necesita validación)
+        return _consolidar_resultados(
+            resultados, pedidos_objetos, pedidos_dicts,
+            capacidad_default, client_config, fase
+        )
+
+
 
 
 def _optimizar_grupos_paralelo_nestle(
@@ -371,8 +376,9 @@ def _optimizar_grupos_vcu_cascada_con_camiones(
     capacidades: Dict[TipoCamion, TruckCapacity],
     tpg: int,
     request_timeout: int,
-    start_total: float
-) -> List[Dict[str, Any]]:
+    start_total: float,
+    capacidad_default: TruckCapacity
+) -> Tuple[List[Camion], set]:
     """
     Optimización VCU en cascada considerando tipos de camión.
     
@@ -388,8 +394,111 @@ def _optimizar_grupos_vcu_cascada_con_camiones(
     from utils.config_helpers import get_camiones_permitidos_para_ruta, get_capacity_for_type
     
     resultados = []
+    all_camiones = []
     pedidos_asignados_global = set()
     pedidos_disponibles = pedidos_originales.copy()
+
+    
+    # ========================================================================
+    # FASE 0: OPTIMIZACIÓN BH PRIMERO (solo si hay adherencia configurada)
+    # ========================================================================
+    adherencia_bh = getattr(client_config, 'ADHERENCIA_BACKHAUL', None)
+    n_bh_creados = 0
+    n_bh_target = 0
+    
+    if adherencia_bh:
+        # Estimar camiones totales necesarios
+        cap_ref = capacidades.get(TipoCamion.PAQUETERA) or list(capacidades.values())[0]
+        total_peso = sum(p.peso for p in pedidos_disponibles)
+        total_vol = sum(p.volumen for p in pedidos_disponibles)
+        
+        cam_por_peso = total_peso / cap_ref.cap_weight
+        cam_por_vol = total_vol / cap_ref.cap_volume
+        n_camiones_estimado = max(cam_por_peso, cam_por_vol)
+        n_camiones_estimado = max(1, int(n_camiones_estimado) + 2)  # Margen
+        
+        n_bh_target = int(n_camiones_estimado * adherencia_bh)
+        n_bh_target = max(1, n_bh_target)
+        
+        print(f"\n[ADHERENCIA] Estimación: {n_camiones_estimado} camiones, BH target: {n_bh_target}")
+        print("="*80)
+        print("FASE 0: OPTIMIZACIÓN BH PRIMERO (ADHERENCIA)")
+        print("="*80)
+        
+        cap_backhaul = get_capacity_for_type(client_config, TipoCamion.BACKHAUL)
+        
+        # Filtrar pedidos que permiten BH
+        from utils.config_helpers import es_ruta_solo_backhaul
+        
+        pedidos_permiten_bh = []
+        for p in pedidos_disponibles:
+            camiones_permitidos = get_camiones_permitidos_para_ruta(
+                client_config, [p.cd], [p.ce], "normal"
+            )
+            if TipoCamion.BACKHAUL in camiones_permitidos:
+                pedidos_permiten_bh.append(p)
+        
+        if pedidos_permiten_bh:
+            print(f"[ADHERENCIA] {len(pedidos_permiten_bh)} pedidos permiten BH")
+            
+            # Generar grupos para BH
+            grupos_bh = _generar_grupos_para_tipo(pedidos_permiten_bh, client_config, "normal")
+            
+            for cfg, pedidos_grupo in grupos_bh:
+                if n_bh_creados >= n_bh_target:
+                    print(f"[ADHERENCIA] ✓ Alcanzado target de {n_bh_target} camiones BH")
+                    break
+                
+                if time.time() - start_total > (request_timeout - 2):
+                    break
+                
+                pedidos_no_asignados = [p for p in pedidos_grupo if p.pedido not in pedidos_asignados_global]
+                if not pedidos_no_asignados:
+                    continue
+                
+                n_pedidos = len(pedidos_no_asignados)
+                tiempo_grupo = ajustar_tiempo_grupo(tpg, n_pedidos, "normal")
+                
+                print(f"[BH ADHER] Optimizando {cfg.id}: {n_pedidos} pedidos, {tiempo_grupo}s")
+                
+                res = optimizar_grupo_vcu(
+                    pedidos_no_asignados, cfg, client_config, cap_backhaul, tiempo_grupo
+                )
+                
+                if res.get("status") in ("OPTIMAL", "FEASIBLE"):
+                    nuevos = res.get("pedidos_asignados_ids", [])
+                    camiones = res.get("camiones", [])
+                    
+                    if nuevos and camiones:
+                        # Marcar como backhaul
+                        for cam in camiones:
+                            cam.tipo_camion = TipoCamion.BACKHAUL
+                            for pedido in cam.pedidos:
+                                pedido.tipo_camion = "backhaul"
+                        
+                        pedidos_asignados_global.update(nuevos)
+                        resultados.append(res)
+                        n_bh_creados += len(camiones)
+                        print(f"[BH ADHER] ✓ {len(nuevos)}/{n_pedidos} pedidos en {len(camiones)} camiones BH (total BH: {n_bh_creados}/{n_bh_target})")
+            
+            # Extraer camiones de resultados de FASE 0
+            camiones_fase0 = []
+            for res in resultados:
+                camiones_fase0.extend(res.get("camiones", []))
+            
+            # Validar, ajustar y recuperar FASE 0
+            if camiones_fase0:
+                camiones_fase0 = _validar_ajustar_recuperar(
+                    camiones_fase0, client_config, capacidad_default,
+                    pedidos_asignados_global, "FASE 0 BH"
+                )
+                all_camiones.extend(camiones_fase0)
+                resultados = []  # Limpiar resultados ya procesados
+            
+            # Actualizar pedidos disponibles
+            pedidos_disponibles = [p for p in pedidos_disponibles if p.pedido not in pedidos_asignados_global]
+            print(f"[ADHERENCIA] Pedidos restantes: {len(pedidos_disponibles)}")
+    
     
     # ========================================================================
     # FASE 1: OPTIMIZACIÓN CON CAMIONES NESTLÉ
@@ -607,6 +716,22 @@ def _optimizar_grupos_vcu_cascada_con_camiones(
         # Actualizar pedidos disponibles
         pedidos_disponibles = [p for p in pedidos_disponibles if p.pedido not in pedidos_asignados_global]
     
+    # Validar, ajustar y recuperar FASE 1
+    camiones_fase1 = []
+    for res in resultados:
+        camiones_fase1.extend(res.get("camiones", []))
+    
+    if camiones_fase1:
+        camiones_fase1 = _validar_ajustar_recuperar(
+            camiones_fase1, client_config, capacidad_default,
+            pedidos_asignados_global, "FASE 1 NESTLÉ"
+        )
+        all_camiones.extend(camiones_fase1)
+        resultados = []  # Limpiar resultados ya procesados
+    
+    # Actualizar pedidos disponibles para FASE 2
+    pedidos_disponibles = [p for p in pedidos_originales if p.pedido not in pedidos_asignados_global]
+    
     # ========================================================================
     # FASE 2: OPTIMIZACIÓN CON CAMIONES BACKHAUL
     # ========================================================================
@@ -689,9 +814,22 @@ def _optimizar_grupos_vcu_cascada_con_camiones(
         # Actualizar pedidos disponibles para siguiente tipo de ruta
         pedidos_disponibles = [p for p in pedidos_disponibles if p.pedido not in pedidos_asignados_global]
     
-    print(f"\n[VCU] Optimización completa: {len(resultados)} grupos, {len(pedidos_asignados_global)} pedidos asignados")
+    # Validar, ajustar y recuperar FASE 2
+    camiones_fase2 = []
+    for res in resultados:
+        camiones_fase2.extend(res.get("camiones", []))
     
-    return resultados
+    if camiones_fase2:
+        camiones_fase2 = _validar_ajustar_recuperar(
+            camiones_fase2, client_config, capacidad_default,
+            pedidos_asignados_global, "FASE 2 BH"
+        )
+        all_camiones.extend(camiones_fase2)
+    
+    print(f"\n[VCU] Optimización completa: {len(all_camiones)} camiones, {len(pedidos_asignados_global)} pedidos asignados")
+    
+    return all_camiones, pedidos_asignados_global
+
 
 
 def _optimizar_grupos_binpacking(
@@ -764,35 +902,48 @@ def _consolidar_resultados(
     """
     from services.postprocess import _actualizar_opciones_tipo_camion 
     
-    # Consolidar camiones
-    all_camiones = []
-    for res in resultados:
-        all_camiones.extend(res.get("camiones", []))
+    if modo == "vcu":
+        # VCU: ya vienen como List[Camion] validados
+        all_camiones = resultados
+    else:
+        # BinPacking: vienen como List[Dict], necesitan validación
+        all_camiones = []
+        for res in resultados:
+            all_camiones.extend(res.get("camiones", []))
+        
+        # 1. Validación masiva de altura
+        all_camiones = _validar_altura_camiones_paralelo(all_camiones, client_config)
 
-    # 1. Validación masiva de altura
-    all_camiones = _validar_altura_camiones_paralelo(all_camiones, client_config)
+        # 2. Ajustar camiones inválidos removiendo pedidos
+        pedidos_removidos = []
+        all_camiones = _ajustar_camiones_invalidos(all_camiones, client_config, pedidos_removidos, modo)
 
-    # 2. Ajustar camiones inválidos removiendo pedidos
-    pedidos_removidos = []
-    all_camiones = _ajustar_camiones_invalidos(all_camiones, client_config, pedidos_removidos, modo)
-
-    # 3. Recuperar pedidos removidos en backhaul
-    if pedidos_removidos:
-        camiones_recuperados = _recuperar_pedidos_en_backhaul(
-            pedidos_removidos, client_config, capacidad_default
-        )
-        if camiones_recuperados:
-            # Validar los camiones recuperados
+        # 3. Recuperar pedidos removidos (loop hasta 3 intentos)
+        max_intentos = 3
+        intento = 0
+        
+        while pedidos_removidos and intento < max_intentos:
+            intento += 1
+            print(f"[RECUPERACIÓN] Intento {intento}: {len(pedidos_removidos)} pedidos")
+            
+            camiones_recuperados = _recuperar_pedidos_sobrantes(
+                pedidos_removidos, client_config, capacidad_default
+            )
+            
+            if not camiones_recuperados:
+                break
+            
             camiones_recuperados = _validar_altura_camiones_paralelo(camiones_recuperados, client_config)
             
-            # Ajustar si es necesario (pedidos que fallen van a no incluidos)
-            pedidos_sin_recuperar = []
+            pedidos_removidos = []
             camiones_recuperados = _ajustar_camiones_invalidos(
-                camiones_recuperados, client_config, pedidos_sin_recuperar, modo
+                camiones_recuperados, client_config, pedidos_removidos, modo
             )
             
             all_camiones.extend(camiones_recuperados)
-            print(f"[RECUPERACIÓN] {len(camiones_recuperados)} camiones BH creados, {len(pedidos_sin_recuperar)} pedidos sin recuperar")
+        
+        if pedidos_removidos:
+            print(f"[RECUPERACIÓN] ⚠️ {len(pedidos_removidos)} pedidos sin recuperar")
 
     # 4. Aplicar adherencia backhaul si está configurada
     adherencia_bh = getattr(client_config, 'ADHERENCIA_BACKHAUL', None)
@@ -813,6 +964,60 @@ def _consolidar_resultados(
     
     # Pedidos no incluidos
     pedidos_map = {p["PEDIDO"]: p for p in pedidos_dicts}
+
+
+    # DEBUG: Analizar pedidos que quedaron fuera
+    pedidos_no_asignados = [p for p in pedidos_originales if p.pedido not in pedidos_asignados_ids]
+    
+    if pedidos_no_asignados:
+        print(f"\n{'='*80}")
+        print(f"DEBUG: ANÁLISIS DE {len(pedidos_no_asignados)} PEDIDOS NO ASIGNADOS")
+        print(f"{'='*80}")
+        
+        from utils.config_helpers import get_camiones_permitidos_para_ruta, get_capacity_for_type
+        
+        # Agrupar por CD/CE
+        grupos_debug = {}
+        for p in pedidos_no_asignados:
+            key = f"{p.cd}__{p.ce}"
+            if key not in grupos_debug:
+                grupos_debug[key] = []
+            grupos_debug[key].append(p)
+        
+        for key, pedidos_grupo in grupos_debug.items():
+            print(f"\n[DEBUG] Grupo {key}: {len(pedidos_grupo)} pedidos")
+            
+            # Calcular totales
+            total_peso = sum(p.peso for p in pedidos_grupo)
+            total_vol = sum(p.volumen for p in pedidos_grupo)
+            total_pallets = sum(p.pallets_capacidad for p in pedidos_grupo)
+            
+            # Verificar qué camiones permite esta ruta
+            p0 = pedidos_grupo[0]
+            camiones_permitidos = get_camiones_permitidos_para_ruta(
+                client_config, [p0.cd], [p0.ce], "normal"
+            )
+            
+            print(f"   Camiones permitidos: {[c.value for c in camiones_permitidos]}")
+            print(f"   Total peso: {total_peso:.0f}, vol: {total_vol:.0f}, pallets: {total_pallets:.1f}")
+            
+            # Calcular VCU potencial con cada tipo de camión
+            for tipo in camiones_permitidos:
+                cap = get_capacity_for_type(client_config, tipo)
+                vcu_peso = total_peso / cap.cap_weight
+                vcu_vol = total_vol / cap.cap_volume
+                vcu_max = max(vcu_peso, vcu_vol)
+                
+                puede_cumplir = "✓" if vcu_max >= cap.vcu_min else "✗"
+                print(f"   {tipo.value}: VCU={vcu_max:.1%} vs min={cap.vcu_min:.0%} {puede_cumplir}")
+            
+            # Listar pedidos
+            for p in pedidos_grupo:
+                print(f"      - {p.pedido}: peso={p.peso:.0f}, vol={p.volumen:.0f}, pallets={p.pallets_capacidad:.1f}")
+
+
+
+
     pedidos_no_incluidos = []
     
     for pedido_obj in pedidos_originales:
@@ -894,9 +1099,6 @@ def _validar_altura_camiones_paralelo(
             elapsed_ms = 0 
             error_msg = None
             
-            with print_lock:
-                print(f"🔍 VALIDANDO CAMIÓN [{cam_idx}/{len(camiones_a_validar)}]: {cam.id}, Pedidos: {len(cam.pedidos)} | Pallets: {cam.pallets_conf:.1f}")
-            
             try:
                 
                 validator = HeightValidator(
@@ -906,12 +1108,6 @@ def _validar_altura_camiones_paralelo(
         )
                 es_valido, errores, layout, debug_info = validator.validar_camion_rapido(cam)
                 
-                # 🔍 DEBUG: Imprimir qué retornó la validación
-                #with print_lock:
-                #    print(f"[DEBUG] Retorno validación:")
-                #    print(f"  es_valido: {es_valido} (type: {type(es_valido)})")
-                #    print(f"  errores: {errores} (type: {type(errores)})")
-                #    print(f"  layout: {layout} (type: {type(layout)})")
                 
                 # Normalizar errores con validación exhaustiva
                 errores_limpios = []
@@ -995,18 +1191,6 @@ def _validar_altura_camiones_paralelo(
                 # ✅ GUARDAR EN METADATA
                 cam.metadata['layout_info'] = layout_info
                 
-                # Print de resultado
-                with print_lock:
-                    if es_valido:
-                        print(f"✅ Camión {cam.id}: VÁLIDO ({elapsed_ms:.0f}ms)")
-                    else:
-                        print(f"{'='*80}")
-                        print(f"❌ Camión {cam.id}: INVÁLIDO ({elapsed_ms:.0f}ms)")
-                        if errores_limpios:
-                            for err in errores_limpios:
-                                print(f"   • {err}")
-                        print(f"{'='*80}")
-                
                 return (cam.id, es_valido, elapsed_ms, error_msg)
 
 
@@ -1016,14 +1200,6 @@ def _validar_altura_camiones_paralelo(
                 
                 import traceback
                 error_detail = traceback.format_exc()
-                
-                with print_lock:
-                    print(f"❌❌❌ EXCEPCIÓN en camión {cam.id} ❌❌❌")
-                    print(f"Tipo: {type(e).__name__}")
-                    print(f"Mensaje: {str(e)}")
-                    print(f"Traceback:")
-                    print(error_detail)
-                    print(f"{'─'*80}")
                 
                 cam.metadata['layout_info'] = {
                     'altura_validada': False,
@@ -1069,17 +1245,6 @@ def _validar_altura_camiones_paralelo(
                         import traceback
                         traceback.print_exc()
         
-        # Reporte final
-        tiempo_promedio = sum(tiempos) / len(tiempos) if tiempos else 0
-        
-        with print_lock:
-            print(f"\n{'='*80}")
-            print(f"RESUMEN DE VALIDACIÓN - {operacion.upper()}")
-            print(f"{'='*80}")
-            print(f"✅ Válidos: {validos}")
-            print(f"❌ Inválidos: {invalidos}")
-            print(f"⏱️  Tiempo promedio: {tiempo_promedio:.0f}ms")
-            
             if errores_capturados:
                 print(f"\n🔴 CAMIONES CON ERRORES:")
                 for cam_id, error_msg in errores_capturados:
@@ -1135,13 +1300,9 @@ def _ajustar_camiones_invalidos(
         n_fallidos = len(fragmentos_fallidos)
         
         if n_fallidos == 0:
-            print(f"\n[AJUSTE] ⚠️ Camión {cam.id}: inválido pero sin fragmentos_fallidos registrados")
             continue
         
-        print(f"\n[AJUSTE] 🔧 Camión {cam.id}: {n_fallidos} fragmentos fallidos")
-        
         for iteracion in range(MAX_ITERACIONES):
-            print(f"\n   --- Iteración {iteracion + 1}/{MAX_ITERACIONES} ---")
             
             # Obtener fragmentos fallidos actuales
             layout_info = cam.metadata.get('layout_info', {})
@@ -1149,7 +1310,6 @@ def _ajustar_camiones_invalidos(
             n_fallidos = len(fragmentos_fallidos)
             
             if n_fallidos == 0:
-                print(f"   ✅ Camión ahora es válido")
                 break
             
             # Buscar pedidos a remover
@@ -1160,24 +1320,18 @@ def _ajustar_camiones_invalidos(
             if not pedidos_a_remover:
                 if modo == "binpacking":
                     # En binpacking, forzar remoción aunque VCU baje
-                    print(f"   ⚠️ No se puede mantener VCU, forzando remoción (binpacking)")
                     pedidos_a_remover = _seleccionar_pedidos_a_remover(
                         cam, n_fallidos, fragmentos_fallidos, client_config, forzar_remocion=True
                     )
                     if not pedidos_a_remover:
-                        print(f"   ❌ No se pudo forzar remoción")
                         break
                 else:
-                    print(f"   ⚠️ No se encontraron pedidos para remover manteniendo VCU")
                     break
             
             # Remover pedidos
             pedidos_ids_remover = {p.pedido for p in pedidos_a_remover}
             fragmentos_removidos = sum(p.cantidad_fragmentos for p in pedidos_a_remover)
             
-            print(f"   Removiendo {len(pedidos_a_remover)} pedido(s) ({fragmentos_removidos} fragmentos) para liberar ~{n_fallidos}")
-            for p in pedidos_a_remover:
-                print(f"      - Pedido {p.pedido}: {p.cantidad_fragmentos} fragmentos, {p.pallets:.1f} pallets")
             
             # Guardar pedidos removidos
             pedidos_removidos_global.extend(pedidos_a_remover)
@@ -1247,18 +1401,12 @@ def _ajustar_camiones_invalidos(
             cam.metadata['layout_info'] = nuevo_layout_info
             
             nuevos_fallidos = len(nuevo_layout_info.get('fragmentos_fallidos', []))
-            print(f"   Re-validación: {'✅ VÁLIDO' if es_valido else f'❌ {nuevos_fallidos} fragmentos fallidos'}")
             
             if es_valido:
                 break
         
         # Resumen del camión
         es_valido_final = cam.metadata.get('layout_info', {}).get('altura_validada', False)
-        if es_valido_final:
-            print(f"\n   🎉 Camión {cam.id}: AJUSTADO EXITOSAMENTE")
-        else:
-            fallidos_final = len(cam.metadata.get('layout_info', {}).get('fragmentos_fallidos', []))
-            print(f"\n   ⚠️ Camión {cam.id}: Aún inválido ({fallidos_final} fragmentos fallidos)")
     
     # Resumen final
     camiones_aun_invalidos = [
@@ -1286,7 +1434,6 @@ def _ajustar_camiones_invalidos(
 
     # En binpacking, crear camiones nuevos con pedidos removidos
     if modo == "binpacking" and pedidos_removidos_global:
-        print(f"\n[AJUSTE BP] Creando camiones adicionales con {len(pedidos_removidos_global)} pedidos removidos")
         camiones_adicionales = _crear_camiones_para_pedidos_removidos(
             list(pedidos_removidos_global), client_config
         )
@@ -1370,7 +1517,6 @@ def _seleccionar_pedidos_a_remover(
     # =====================================================
     # PASO 4: No existe combinación válida
     # =====================================================
-    print(f"[AJUSTE] ⚠️ No se encontró combinación válida para {n_fragmentos_fallidos} fragmentos")
     return []
 
 
@@ -1397,16 +1543,15 @@ def _vcu_sigue_valido(camion: Camion, pedidos_a_remover: List[Pedido], forzar_re
     return max(vcu_peso, vcu_vol) >= cap.vcu_min
 
 
-def _recuperar_pedidos_en_backhaul(
+def _recuperar_pedidos_sobrantes(
     pedidos: List[Pedido],
     client_config,
     capacidad_default: TruckCapacity
 ) -> List[Camion]:
     """
-    Intenta recuperar pedidos removidos optimizándolos en camiones backhaul.
-    Solo procesa pedidos cuyas rutas permiten backhaul.
+    Intenta recuperar pedidos removidos, probando primero Nestlé y luego BH.
     """
-    from utils.config_helpers import es_ruta_solo_backhaul, get_camiones_permitidos_para_ruta, get_capacity_for_type
+    from utils.config_helpers import get_camiones_permitidos_para_ruta, get_capacity_for_type
     from models.enums import TipoCamion
     from optimization.solvers.vcu import optimizar_grupo_vcu
     from optimization.groups import generar_grupos_optimizacion
@@ -1414,57 +1559,142 @@ def _recuperar_pedidos_en_backhaul(
     if not pedidos:
         return []
     
-    print(f"\n[RECUPERACIÓN BH] Intentando recuperar {len(pedidos)} pedidos en backhaul")
+    print(f"\n[RECUPERACIÓN] Intentando recuperar {len(pedidos)} pedidos")
     
-    # Filtrar pedidos cuyas rutas permiten backhaul
+    camiones_resultado = []
+    pedidos_restantes = pedidos.copy()
+    
+    # === PASO 1: Intentar con Nestlé ===
+    pedidos_para_nestle = []
+    for p in pedidos_restantes:
+        camiones_permitidos = get_camiones_permitidos_para_ruta(
+            client_config, [p.cd], [p.ce], "normal"
+        )
+        nestle_permitidos = [c for c in camiones_permitidos if c.es_nestle]
+        
+        # DEBUG para ruta específica
+        if "N641" in p.cd and p.ce == "0103":
+            print(f"   [DEBUG N641-0103] Pedido {p.pedido}: camiones_permitidos={[c.value for c in camiones_permitidos]}, nestle={[c.value for c in nestle_permitidos]}")
+        
+        if nestle_permitidos:
+            pedidos_para_nestle.append(p)
+    
+    if pedidos_para_nestle:
+        print(f"[RECUPERACIÓN] Intentando {len(pedidos_para_nestle)} pedidos con Nestlé")
+        
+        grupos = generar_grupos_optimizacion(pedidos_para_nestle, client_config, "vcu")
+        
+        # DEBUG: Mostrar grupos generados
+        for cfg, pedidos_grupo in grupos:
+            print(f"   [DEBUG] Grupo {cfg.id}: {len(pedidos_grupo)} pedidos")
+            
+            # DEBUG específico para N641-0103
+            if "N641" in cfg.id and "0103" in cfg.id:
+                print(f"   [DEBUG N641-0103] Procesando grupo con {len(pedidos_grupo)} pedidos")
+                for p in pedidos_grupo:
+                    print(f"      - {p.pedido}: peso={p.peso:.0f}, vol={p.volumen:.0f}, pallets={p.pallets_capacidad:.1f}")
+        
+        for cfg, pedidos_grupo in grupos:
+            if not pedidos_grupo:
+                continue
+            
+            camiones_permitidos = get_camiones_permitidos_para_ruta(
+                client_config, cfg.cd, cfg.ce, cfg.tipo.value
+            )
+            nestle_permitidos = [c for c in camiones_permitidos if c.es_nestle]
+            
+            if not nestle_permitidos:
+                print(f"   [DEBUG] Grupo {cfg.id}: No hay Nestlé permitido, saltando")
+                continue
+            
+            tipo_camion = nestle_permitidos[0]
+            cap = get_capacity_for_type(client_config, tipo_camion)
+            
+            # DEBUG específico para N641-0103
+            if "N641" in cfg.id and "0103" in cfg.id:
+                print(f"   [DEBUG N641-0103] Optimizando con {tipo_camion.value}")
+                print(f"   [DEBUG N641-0103] Capacidad: peso={cap.cap_weight}, vol={cap.cap_volume}, vcu_min={cap.vcu_min}")
+                
+                # Calcular VCU potencial del grupo
+                total_peso = sum(p.peso for p in pedidos_grupo)
+                total_vol = sum(p.volumen for p in pedidos_grupo)
+                vcu_peso = total_peso / cap.cap_weight
+                vcu_vol = total_vol / cap.cap_volume
+                print(f"   [DEBUG N641-0103] VCU potencial: peso={vcu_peso:.2%}, vol={vcu_vol:.2%}, max={max(vcu_peso, vcu_vol):.2%}")
+            
+            resultado = optimizar_grupo_vcu(
+                pedidos_grupo, cfg, client_config, cap, 30
+            )
+            
+            # DEBUG específico para N641-0103
+            if "N641" in cfg.id and "0103" in cfg.id:
+                print(f"   [DEBUG N641-0103] Resultado: status={resultado.get('status')}, asignados={len(resultado.get('pedidos_asignados_ids', []))}, camiones={len(resultado.get('camiones', []))}")
+            
+            if resultado.get("status") in ("OPTIMAL", "FEASIBLE"):
+                camiones = resultado.get("camiones", [])
+                asignados = resultado.get("pedidos_asignados_ids", [])
+                
+                for cam in camiones:
+                    cam.tipo_camion = tipo_camion
+                    for p in cam.pedidos:
+                        p.tipo_camion = tipo_camion.value
+                
+                camiones_resultado.extend(camiones)
+                pedidos_restantes = [p for p in pedidos_restantes if p.pedido not in asignados]
+                
+                if camiones:
+                    print(f"[RECUPERACIÓN] ✓ Nestlé: {len(asignados)} pedidos en {len(camiones)} camiones")
+    
+    # === PASO 2: Intentar restantes con BH ===
     pedidos_para_bh = []
-    pedidos_sin_opcion = []
-    
-    for p in pedidos:
+    for p in pedidos_restantes:
         camiones_permitidos = get_camiones_permitidos_para_ruta(
             client_config, [p.cd], [p.ce], "normal"
         )
         if TipoCamion.BACKHAUL in camiones_permitidos:
             pedidos_para_bh.append(p)
-        else:
-            pedidos_sin_opcion.append(p)
     
-    if pedidos_sin_opcion:
-        print(f"[RECUPERACIÓN BH] {len(pedidos_sin_opcion)} pedidos no permiten backhaul en su ruta")
-    
-    if not pedidos_para_bh:
-        print(f"[RECUPERACIÓN BH] No hay pedidos para recuperar en backhaul")
-        return []
-    
-    print(f"[RECUPERACIÓN BH] {len(pedidos_para_bh)} pedidos pueden ir en backhaul")
-    
-    # Obtener capacidad backhaul
-    cap_backhaul = get_capacity_for_type(client_config, TipoCamion.BACKHAUL)
-    
-    # Generar grupos para optimización
-    grupos = generar_grupos_optimizacion(pedidos_para_bh, client_config, "vcu")
-    
-    camiones_resultado = []
-    
-    for cfg, pedidos_grupo in grupos:
-        if not pedidos_grupo:
-            continue
+    if pedidos_para_bh:
+        print(f"[RECUPERACIÓN] Intentando {len(pedidos_para_bh)} pedidos restantes con BH")
         
-        resultado = optimizar_grupo_vcu(
-            pedidos_grupo, cfg, client_config, cap_backhaul, 30
-        )
+        # DEBUG para N641-0103
+        for p in pedidos_para_bh:
+            if "N641" in p.cd and p.ce == "0103":
+                print(f"   [DEBUG N641-0103] Pedido {p.pedido} va a intento BH")
         
-        if resultado.get("status") in ("OPTIMAL", "FEASIBLE"):
-            camiones = resultado.get("camiones", [])
+        cap_backhaul = get_capacity_for_type(client_config, TipoCamion.BACKHAUL)
+        grupos = generar_grupos_optimizacion(pedidos_para_bh, client_config, "vcu")
+        
+        for cfg, pedidos_grupo in grupos:
+            if not pedidos_grupo:
+                continue
             
-            for cam in camiones:
-                cam.tipo_camion = TipoCamion.BACKHAUL
-                for pedido in cam.pedidos:
-                    pedido.tipo_camion = "backhaul"
+            resultado = optimizar_grupo_vcu(
+                pedidos_grupo, cfg, client_config, cap_backhaul, 30
+            )
             
-            camiones_resultado.extend(camiones)
+            if resultado.get("status") in ("OPTIMAL", "FEASIBLE"):
+                camiones = resultado.get("camiones", [])
+                asignados = resultado.get("pedidos_asignados_ids", [])
+                
+                for cam in camiones:
+                    cam.tipo_camion = TipoCamion.BACKHAUL
+                    for p in cam.pedidos:
+                        p.tipo_camion = "backhaul"
+                
+                camiones_resultado.extend(camiones)
+                pedidos_restantes = [p for p in pedidos_restantes if p.pedido not in asignados]
+                
+                if camiones:
+                    print(f"[RECUPERACIÓN] ✓ BH: {len(asignados)} pedidos en {len(camiones)} camiones")
     
-    print(f"[RECUPERACIÓN BH] Creados {len(camiones_resultado)} camiones backhaul")
+    # DEBUG: Pedidos que quedaron sin recuperar
+    if pedidos_restantes:
+        print(f"[RECUPERACIÓN] ⚠️ {len(pedidos_restantes)} pedidos sin recuperar:")
+        for p in pedidos_restantes:
+            print(f"   - {p.pedido}: CD={p.cd}, CE={p.ce}")
+    
+    print(f"[RECUPERACIÓN] Total: {len(camiones_resultado)} camiones")
     
     return camiones_resultado
 
@@ -1615,9 +1845,6 @@ def _reclasificar_nestle_post_validacion(
                 if nueva_capacidad.max_positions > 0:
                     nuevo_aprov_pos = (posiciones_usadas / nueva_capacidad.max_positions) * 100
                     layout_info['aprovechamiento_posiciones'] = round(nuevo_aprov_pos, 1)
-                
-                print(f"   Layout actualizado: {altura_anterior:.0f}cm → {nueva_capacidad.altura_cm:.0f}cm")
-                print(f"   Aprovechamiento altura: {layout_info['aprovechamiento_altura']:.1f}%")
             
             
             total_reclasificados += 1
@@ -1712,11 +1939,6 @@ def _reclasificar_camion_nestle(
         
         # Verificar si cumple el target de VCU
         if vcu_max_rampla >= cap_rampla.vcu_min:
-            # ✅ Log para debugging
-            print(f"[RECLASIFICACIÓN] Camión {camion.id}: paquetera → rampla_directa")
-            print(f"   Altura usada: {altura_maxima_usada:.1f}cm <= {cap_rampla.altura_cm:.1f}cm")
-            print(f"   Posiciones: {posiciones_usadas}/{cap_rampla.max_positions}")
-            print(f"   VCU: {vcu_max_rampla*100:.1f}% >= {cap_rampla.vcu_min*100:.1f}%")
             return "rampla_directa"
     
     # Si no cabe o no cumple VCU target, mantener paquetera
@@ -1756,7 +1978,6 @@ def _aplicar_adherencia_backhaul(
     print(f"\n[ADHERENCIA BH] Total: {n_total}, BH actual: {n_bh_actual}, Requerido: {n_bh_requerido}, Déficit: {deficit}")
     
     if deficit <= 0:
-        print(f"[ADHERENCIA BH] ✅ Ya se cumple adherencia ({n_bh_actual}/{n_total} = {n_bh_actual/n_total*100:.1f}%)")
         return camiones
     
     # Ordenar Nestlé por VCU (menor primero = candidatos a convertir)
@@ -1791,7 +2012,6 @@ def _aplicar_adherencia_backhaul(
         
         # Verificar si cabe en capacidad BH
         if peso_camion > cap_backhaul.cap_weight or volumen_camion > cap_backhaul.cap_volume:
-            print(f"[ADHERENCIA BH] ⚠️ Camión {cam.id} no cabe en BH (peso/vol)")
             continue
         
         # Guardar tipo original por si hay que revertir
@@ -1816,7 +2036,6 @@ def _aplicar_adherencia_backhaul(
         
         if es_valido:
             convertidos += 1
-            print(f"[ADHERENCIA BH] ✓ Convertido camión {cam.id} (VCU: {cam.vcu_max:.1%})")
             
             # Actualizar layout_info
             if layout is not None:
@@ -1862,7 +2081,6 @@ def _aplicar_adherencia_backhaul(
             cam._invalidar_cache()
             for p in cam.pedidos:
                 p.tipo_camion = tipo_original.value
-            print(f"[ADHERENCIA BH] ✗ Camión {cam.id} no valida como BH, revertido")
     
     # Resumen
     n_bh_final = len([c for c in camiones if c.tipo_camion == TipoCamion.BACKHAUL])
@@ -1886,8 +2104,6 @@ def _crear_camiones_para_pedidos_removidos(
     
     if not pedidos:
         return []
-    
-    print(f"[AJUSTE BP] Intentando empaquetar {len(pedidos)} pedidos removidos")
     
     # Generar grupos
     grupos = generar_grupos_optimizacion(pedidos, client_config, "binpacking")
@@ -1933,3 +2149,64 @@ def _crear_camiones_para_pedidos_removidos(
     print(f"[AJUSTE BP] Creados {len(camiones_resultado)} camiones adicionales")
     
     return camiones_resultado
+
+
+def _validar_ajustar_recuperar(
+    camiones: List[Camion],
+    client_config,
+    capacidad_default: TruckCapacity,
+    pedidos_asignados_global: set,
+    fase: str
+) -> List[Camion]:
+    """
+    Ejecuta el ciclo completo de validación, ajuste y recuperación para una fase.
+    Retorna los camiones válidos y actualiza pedidos_asignados_global.
+    """
+    if not camiones:
+        return []
+    
+    print(f"\n[{fase}] Validando {len(camiones)} camiones...")
+    
+    # 1. Validar altura
+    camiones = _validar_altura_camiones_paralelo(camiones, client_config)
+    
+    # 2. Ajustar inválidos
+    pedidos_removidos = []
+    camiones = _ajustar_camiones_invalidos(camiones, client_config, pedidos_removidos, "vcu")
+    
+    # 3. Recuperar pedidos removidos (loop hasta 3 intentos)
+    max_intentos = 3
+    intento = 0
+    
+    while pedidos_removidos and intento < max_intentos:
+        intento += 1
+        print(f"[{fase}] Recuperación intento {intento}: {len(pedidos_removidos)} pedidos")
+        
+        camiones_recuperados = _recuperar_pedidos_sobrantes(
+            pedidos_removidos, client_config, capacidad_default
+        )
+        
+        if not camiones_recuperados:
+            break
+        
+        # Validar recuperados
+        camiones_recuperados = _validar_altura_camiones_paralelo(camiones_recuperados, client_config)
+        
+        # Ajustar recuperados
+        pedidos_removidos = []
+        camiones_recuperados = _ajustar_camiones_invalidos(
+            camiones_recuperados, client_config, pedidos_removidos, "vcu"
+        )
+        
+        camiones.extend(camiones_recuperados)
+    
+    if pedidos_removidos:
+        print(f"[{fase}] ⚠️ {len(pedidos_removidos)} pedidos no recuperados")
+    
+    # Actualizar pedidos asignados
+    for cam in camiones:
+        pedidos_asignados_global.update(p.pedido for p in cam.pedidos)
+    
+    print(f"[{fase}] ✓ {len(camiones)} camiones válidos")
+    
+    return camiones

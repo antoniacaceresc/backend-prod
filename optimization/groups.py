@@ -395,7 +395,6 @@ def calcular_tiempo_por_grupo(
     if proporcion_grandes > 0.3:
         factor = 1.2 if proporcion_grandes > 0.5 else 1.1
         tpg_base = min(int(tpg_base * factor), max_por_grupo)
-        print(f"[TIMING] Ajuste por grupos grandes: {proporcion_grandes:.1%} → factor {factor}x")
     
     # Si hay pocos grupos totales, dar más tiempo
     if num_grupos <= 5:
@@ -404,8 +403,6 @@ def calcular_tiempo_por_grupo(
     # Si hay muchos grupos pequeños, el tiempo base está bien
     if num_grupos > 50 and distribucion.get('pequeños', 0) > 30:
         tpg_base = max(2, int(tpg_base * 0.9))
-    
-    print(f"[TIMING] Grupos: {num_grupos}, Base: {tpg_base}s, Dist: {distribucion}")
     
     return tpg_base
 

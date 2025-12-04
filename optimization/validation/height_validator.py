@@ -114,13 +114,6 @@ class HeightValidator:
             
             errores.append(f"Excepción: {type(e).__name__}: {str(e)}")
             
-            print(f"\n❌❌❌ EXCEPCIÓN EN validar_camion_rapido ❌❌❌")
-            print(f"Camión: {camion.id}")
-            print(f"Excepción: {type(e).__name__}")
-            print(f"Mensaje: {str(e)}")
-            print(f"Traceback:")
-            print(tb)
-            print(f"{'─'*80}\n")
             
             self._reportar_fallas_detallado(camion, debug_info, [], errores)
             
@@ -258,7 +251,6 @@ class HeightValidator:
                     frag = self._pedido_a_fragmento_legacy(pedido)
                     fragmentos.append(frag)
                 except Exception as e:
-                    print(f"[ERROR] ❌ Error procesando pedido legacy {pedido.pedido}: {e}")
                     continue
         
         # ✅ LOG FINAL

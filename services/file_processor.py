@@ -81,8 +81,6 @@ def read_file(
         available_cols = [c for c in wanted_cols if c in header_only.columns]
         missing_cols = [c for c in wanted_cols if c not in header_only.columns]
         
-        if missing_cols:
-            print(f"[WARN] Columnas ausentes (se omiten): {missing_cols}")
 
         # Cache parquet (sin cambios)
         sig = _make_cache_sig(content, sheet_name, available_cols)
@@ -116,12 +114,9 @@ def read_file(
                 df.to_parquet(cpath, index=False)
             except Exception as e:
                 print(f"[WARN] No se pudo escribir cache parquet ({e}).")
-        
-        print(f"[FILE] ✓ Leído: {len(df)} filas")
         return df
 
     except Exception as e:
-        print(f"[ERROR] Al leer el Excel: {e}")
         raise
 
 
@@ -135,7 +130,6 @@ def build_column_mapping(client_config, venta: str) -> Dict[str, str]:
     
     NUEVO: Incluye columnas de SKU si existen en COLUMN_MAPPING.
     """
-    print("[FILE] Construyendo mapeo de columnas")
     
     col_map = client_config.COLUMN_MAPPING.get(venta, {})
     extra_map = getattr(client_config, 'EXTRA_MAPPING', {})
@@ -190,8 +184,8 @@ def process_dataframe(
     
     # Detectar modo
     modo = detectar_modo_excel(df_raw)
-    print(f"[FILE] Modo detectado: {modo}")
     
+
     if modo == "SKU_DETALLADO":
         return _process_dataframe_con_skus(df_raw, client_config, cliente, venta)
     else:
@@ -219,7 +213,6 @@ def _process_dataframe_con_skus(
     Returns:
         (df_pedidos_agregados, lista_pedidos_dicts)
     """
-    print("[FILE] Procesando datos con SKUs...")
     
     # 1. Limpieza y normalización a nivel SKU
     df_skus = _limpiar_datos_skus(df_raw)
@@ -243,8 +236,6 @@ def _process_dataframe_con_skus(
     # 5. Crear lista de dicts de pedidos (para metadata)
     pedidos_dicts = _crear_pedidos_dicts_con_skus(df_pedidos, df_skus_con_pedido)
     
-    print(f"[FILE] ✓ Procesados: {len(df_pedidos)} pedidos, {len(df_skus)} SKUs")
-    
     return df_pedidos, pedidos_dicts
 
 
@@ -254,8 +245,6 @@ def _limpiar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
     Similar a limpieza existente pero a nivel SKU.
     """
     df = df.copy()
-    
-    print("[FILE] Limpiando datos de SKUs")
     
     # CE padding
     if "CE" in df.columns:
@@ -310,6 +299,12 @@ def _limpiar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
     
     # Filtrar filas con pallets = 0
     df = df[df["PALLETS"] > 0].copy()
+
+    # Preservar campos extra numéricos
+    campos_extra_numericos = ["Cant. Sol.", "CJ Conf.", "%NS", "Suma de Sol (Pallet)", "Suma de Conf (Pallet)"]
+    for col in campos_extra_numericos:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
     
     return df
 
@@ -353,7 +348,6 @@ def _optimizar_apilabilidad_skus(df: pd.DataFrame, altura_maxima_cm: float = 260
         
         # REGLA 2: Si 2 × altura > altura_max → intentar BASE/SUPERIOR
         if 2 * altura > altura_maxima_cm:
-            print("ALTURAS:", altura, altura_maxima_cm)
             puede_ser_base = df.at[idx, 'BASE'] > 0 or _tiene_columna_base(df, idx)
             puede_ser_superior = df.at[idx, 'SUPERIOR'] > 0 or _tiene_columna_superior(df, idx)
             
@@ -381,12 +375,6 @@ def _optimizar_apilabilidad_skus(df: pd.DataFrame, altura_maxima_cm: float = 260
                 df.at[idx, 'SUPERIOR'] += 1
                 df.at[idx, 'SI_MISMO'] -= 1
                 cambios['impares_ajustados'] += 1
-    
-    # Log de cambios
-    print(f"[OPTIMIZACIÓN APILABILIDAD]")
-    print(f"  - SI_MISMO → NO_APILABLE (altura > 200cm): {cambios['si_mismo_a_no_apilable']}")
-    print(f"  - SI_MISMO → BASE/SUPERIOR (2×altura > max): {cambios['si_mismo_a_base_superior']}")
-    print(f"  - Impares ajustados: {cambios['impares_ajustados']}")
     
     return df
 
@@ -417,8 +405,6 @@ def _validar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
     
     ACTUALIZADO: Permite altura = 0 y categorías decimales < 1
     """
-    print("[FILE] Validando datos de SKUs")
-    
     errores = []
     
     # ✅ CAMBIO: Validar altura - puede ser 0 si es picking vacío
@@ -432,9 +418,6 @@ def _validar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
     
     # ✅ CAMBIO: Advertir (no error) si altura = 0
     skus_altura_cero = df[df["ALTURA_FULL_PALLET"] == 0]
-    if len(skus_altura_cero) > 0:
-        print(f"[WARN] {len(skus_altura_cero)} SKUs con altura = 0 (picking vacío?). "
-              f"Ejemplos: {skus_altura_cero['SKU'].head(3).tolist()}")
     
     # Validar que cada SKU tenga al menos una categoría de apilabilidad
     df["SUMA_APILABILIDAD"] = (
@@ -454,11 +437,7 @@ def _validar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
     skus_exceden = df[df["EXCEDE_PALLETS"]]
     
     if len(skus_exceden) > 0:
-        print(f"[WARN] {len(skus_exceden)} SKUs donde suma de categorías excede pallets:")
-        for _, row in skus_exceden.head(5).iterrows():
-            print(f"  - SKU {row['SKU']}: suma={row['SUMA_APILABILIDAD']:.2f}, pallets={row['PALLETS']:.2f}")
         
-        # ✅ NUEVO: Ajustar automáticamente proporcionalmente
         for idx in skus_exceden.index:
             pallets = df.at[idx, 'PALLETS']
             suma = df.at[idx, 'SUMA_APILABILIDAD']
@@ -471,7 +450,6 @@ def _validar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
             df.at[idx, 'NO_APILABLE'] *= factor
             df.at[idx, 'SI_MISMO'] *= factor
             
-            print(f"  → Ajustado SKU {df.at[idx, 'SKU']} con factor {factor:.3f}")
     
     df = df.drop(columns=["SUMA_APILABILIDAD", "EXCEDE_PALLETS"])
     
@@ -496,9 +474,6 @@ def _agregar_skus_a_pedidos(
     Returns:
         (df_pedidos_agregados, df_skus_con_info_pedido)
     """
-    print("[FILE] Agregando SKUs por pedido")
-    print(f"[DEBUG] Agregando SKUs: {len(df_skus)} filas")
-    print(f"[DEBUG] Pedidos únicos en SKUs: {df_skus['PEDIDO'].nunique()}")
 
     # Campos que se suman
     campos_suma = [
@@ -517,9 +492,28 @@ def _agregar_skus_a_pedidos(
     # Agregar OC si existe
     if "OC" in df_skus.columns:
         campos_identidad.append("OC")
+
+    # Campos extra - identidad (primer valor)
+    campos_extra_first = ["Solic.", "Fecha preferente de entrega"]
+    for col in campos_extra_first:
+        if col in df_skus.columns:
+            campos_identidad.append(col)
     
     # Construir diccionario de agregación
     agg_rules = {}
+
+    # Campos extra - suma
+    campos_extra_suma = [
+        "Cant. Sol.", "CJ Conf.", "Suma de Sol (Pallet)", 
+        "Suma de Conf (Pallet)", "Suma de Valor neto CONF"
+    ]
+    for col in campos_extra_suma:
+        if col in df_skus.columns:
+            agg_rules[col] = "sum"
+    
+    # Campos extra - promedio
+    if "%NS" in df_skus.columns:
+        agg_rules["%NS"] = "mean"
     
     for col in campos_suma:
         if col in df_skus.columns:
@@ -544,8 +538,6 @@ def _agregar_skus_a_pedidos(
     if pedidos_perdidos:
         print(f"[ERROR] ❌ Se perdieron {len(pedidos_perdidos)} pedidos en agregación:")
         print(f"        Ejemplos: {list(pedidos_perdidos)[:5]}")
-    else:
-        print(f"[DEBUG] ✅ Todos los pedidos se preservaron")
     
     # Convertir CHOCOLATES_FLAG de vuelta a SI/NO
     if "CHOCOLATES_FLAG" in df_pedidos.columns:
@@ -567,7 +559,6 @@ def _validar_coherencia_identidad(df: pd.DataFrame, campos: List[str]):
     """
     Valida que los campos de identidad sean consistentes dentro de cada pedido.
     """
-    print("[FILE] Validando coherencia de campos de identidad")
     
     for campo in campos:
         if campo not in df.columns:
@@ -593,7 +584,6 @@ def _crear_pedidos_dicts_con_skus(
     Crea lista de diccionarios de pedidos con metadata completa.
     Incluye referencia a los SKUs que componen cada pedido.
     """
-    print("[FILE] Creando diccionarios de pedidos")
     
     pedidos_dicts = []
     
@@ -629,7 +619,6 @@ def _process_dataframe_legacy(
     Procesa Excel en formato legacy (sin SKUs).
     Mantiene comportamiento original.
     """
-    print("[FILE] Procesando datos en formato legacy (sin SKUs)")
     
     # Limpieza existente (mantener código actual)
     df = df_raw.copy()
@@ -696,8 +685,6 @@ def _process_dataframe_legacy(
                 pedido_dict[col] = row[col]
         pedidos_dicts.append(pedido_dict)
     
-    print(f"[FILE] ✓ Procesados {len(df)} pedidos (legacy)")
-    
     return df, pedidos_dicts
 
 
@@ -723,6 +710,4 @@ def _cache_path(sig: str) -> str:
 def warn_missing_columns(df: pd.DataFrame, mapping: Dict[str, str]) -> List[str]:
     """Advierte sobre columnas faltantes"""
     missing = [excel_name for excel_name in mapping.values() if excel_name not in df.columns]
-    if missing:
-        print(f"[WARN] Columnas en Excel no encontradas (se omiten): {missing}")
     return missing

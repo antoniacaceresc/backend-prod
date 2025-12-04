@@ -13,8 +13,6 @@ Estrategia:
 from __future__ import annotations
 from typing import List, Dict, Any, Optional, Tuple
 import uuid
-from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from models.domain import Pedido, Camion, TruckCapacity, TipoCamion, TipoRuta, SKU
 from utils.config_helpers import extract_truck_capacities
@@ -28,7 +26,7 @@ from optimization.validation.height_validator import HeightValidator
 # ============================================================================
 
 # Flag para activar/desactivar prints de debug
-DEBUG_VALIDATION = True  # Cambiar a True para ver prints detallados
+DEBUG_VALIDATION = False  # Cambiar a True para ver prints detallados
 
 
 # ============================================================================
@@ -168,6 +166,18 @@ def _pedido_from_dict(p_dict: Dict[str, Any]) -> Pedido:
             )
             skus.append(sku)
     
+    # Campos conocidos que no van en metadata
+    campos_conocidos = {
+        "PEDIDO", "CD", "CE", "PO", "PESO", "VOL", "PALLETS", "VALOR",
+        "VALOR_CAFE", "PALLETS_REAL", "OC", "CHOCOLATES", "VALIOSO", "PDQ",
+        "BAJA_VU", "LOTE_DIR", "BASE", "SUPERIOR", "FLEXIBLE", "NO_APILABLE",
+        "SI_MISMO", "SKUS", "VCU_VOL", "VCU_PESO", "CAMION", "GRUPO",
+        "TIPO_RUTA", "TIPO_CAMION"
+    }
+    
+    # Extraer metadata (campos extra)
+    metadata = {k: v for k, v in p_dict.items() if k not in campos_conocidos}
+    
     return Pedido(
         pedido=str(p_dict["PEDIDO"]),
         cd=str(p_dict["CD"]),
@@ -191,7 +201,7 @@ def _pedido_from_dict(p_dict: Dict[str, Any]) -> Pedido:
         no_apilable=float(p_dict.get("NO_APILABLE", 0)),
         si_mismo=float(p_dict.get("SI_MISMO", 0)),
         skus=skus,
-        metadata={}
+        metadata=metadata
     )
 
 
@@ -731,8 +741,6 @@ def _validar_altura_no_bloqueante(camion: Camion, config, cliente: str) -> None:
     pedidos_con_skus = [p for p in camion.pedidos if p.tiene_skus]
     
     if not pedidos_con_skus:
-        if DEBUG_VALIDATION:
-            print(f"[VALIDATION] Sin SKUs detallados (datos legacy)")
         camion.metadata['altura_validada'] = None
         return
     
@@ -750,7 +758,6 @@ def _validar_altura_no_bloqueante(camion: Camion, config, cliente: str) -> None:
         
         # Ejecutar validación
         es_valido, errores, layout = validator.validar_camion_rapido(camion)
-        print("Imprimiento errores desde postprocess, vlaidar altura no bloqueante:", errores)
         # Normalizar errores - MANEJAR None explícitamente
         if errores is None:
             errores_limpios = []

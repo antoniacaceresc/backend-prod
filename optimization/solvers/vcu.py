@@ -108,8 +108,6 @@ def optimizar_grupo_vcu(
     
     n_cam = min(len(pedidos), n_cam_heur + 1, MAX_CAMIONES_CP_SAT)
     
-    print(f"[VCU] 📦 Grupo {grupo_cfg.id}: usando {n_cam} camiones")
-    
     # Construir modelo CP-SAT
     model = cp_model.CpModel()
     
@@ -192,7 +190,6 @@ def optimizar_grupo_vcu(
     else:
 
         print(f"\n[VCU] ❌ NO_SOLUTION: {grupo_cfg.id}")
-        print(f"      Pedidos: {len(pedidos)}, Camiones: {n_cam}, Tiempo: {tiempo_max_seg}s")
 
         # ✅ Diagnóstico detallado
         total_peso = sum(p.peso for p in pedidos)
