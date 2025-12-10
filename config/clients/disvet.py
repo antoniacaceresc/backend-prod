@@ -63,8 +63,8 @@ class DisvetConfig:
 
     # Tipos de camiones
     TRUCK_TYPES = {
-        'normal': {'cap_weight':23000,'cap_volume':70000, 'max_positions':29.5,'levels':2,'vcu_min':0.90,'max_pallets':59},
-        'bh':     {'cap_weight':23000,'cap_volume':70000, 'max_positions':28,'levels':2,'vcu_min':0.55,'max_pallets':55}
+        'normal': {'cap_weight':22500,'cap_volume':70000, 'max_positions':29.5,'levels':2,'vcu_min':0.90,'max_pallets':59},
+        'bh':     {'cap_weight':22500,'cap_volume':70000, 'max_positions':28,'levels':2,'vcu_min':0.55,'max_pallets':55}
     }
 
     # Configuración agrupamiento especial
