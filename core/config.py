@@ -10,13 +10,14 @@ from typing import Dict, Any
 from clients.walmart import WalmartConfig
 from clients.cencosud import CencosudConfig
 from clients.disvet import DisvetConfig
-
+from clients.smu import SmuConfig
 
 # Registro de clientes
 _CLIENT_REGISTRY: Dict[str, Any] = {
     "walmart": WalmartConfig,
     "cencosud": CencosudConfig,
     "disvet": DisvetConfig,
+    "smu": SmuConfig,
 }
 
 

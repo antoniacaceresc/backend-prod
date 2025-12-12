@@ -177,7 +177,7 @@ def _pedido_from_dict(p_dict: Dict[str, Any]) -> Pedido:
     
     # Extraer metadata (campos extra)
     metadata = {k: v for k, v in p_dict.items() if k not in campos_conocidos}
-    
+
     return Pedido(
         pedido=str(p_dict["PEDIDO"]),
         cd=str(p_dict["CD"]),
@@ -510,16 +510,11 @@ def apply_truck_type_change(
                     nuevo_aprov_pos = (posiciones_usadas / nueva_capacidad.max_positions) * 100
                     layout_info['aprovechamiento_posiciones'] = round(nuevo_aprov_pos, 1)
                 
-                # ✅ ACTUALIZAR pos_total del camión con valor real del layout
+                # ACTUALIZAR pos_total del camión con valor real del layout
                 camion.pos_total = posiciones_usadas
-                
-                print(f"[CHANGE_TYPE] ✅ Layout válido: {capacidad_anterior.altura_cm:.0f}cm → {nueva_capacidad.altura_cm:.0f}cm")
-                print(f"              Altura usada: {altura_usada:.1f}cm (aprovechamiento: {layout_info['aprovechamiento_altura']:.1f}%)")
-            
+
             # CASO 2: Layout NO es válido con nueva altura (excede límite)
             else:
-                print(f"[CHANGE_TYPE] ⚠️ Layout INVÁLIDO: altura usada {altura_usada:.1f}cm > nueva max {nueva_capacidad.altura_cm:.0f}cm")
-                print(f"              Revalidando camión {camion.id}...")
                 debe_revalidar_completo = True
         else:
             # Layout no estaba validado previamente
@@ -531,7 +526,6 @@ def apply_truck_type_change(
     # Revalidar solo si es necesario
     if debe_revalidar_completo:
         if getattr(config, 'VALIDAR_ALTURA', False) and any(p.tiene_skus for p in camion.pedidos):
-            print(f"[CHANGE_TYPE] Revalidando altura del camión {camion.id}...")
             _revalidar_altura_camiones([camion], config, cliente, operacion="change_truck_type")
     
     # 9) Actualizar opciones para todos los camiones
@@ -676,10 +670,7 @@ def _revalidar_altura_camiones(
     
     # Reusar la función de validación del orchestrator
     from optimization.orchestrator import _validar_altura_camiones_paralelo
-    
-    if DEBUG_VALIDATION:
-        print(f"\n[{operacion.upper()}] Revalidando camiones...")
-    
+
     _validar_altura_camiones_paralelo(camiones, config)
                                       
 
@@ -722,8 +713,6 @@ def _validar_altura_no_bloqueante(camion: Camion, config, cliente: str) -> None:
         config: Configuración del cliente
         cliente: Nombre del cliente
     """
-    if DEBUG_VALIDATION:
-        print(f"\n[VALIDATION] Validando camión {camion.id}")
     
     # Verificar si está habilitada la validación para este cliente
     validar_altura = getattr(config, 'VALIDAR_ALTURA', False)
@@ -831,11 +820,6 @@ def _validar_altura_no_bloqueante(camion: Camion, config, cliente: str) -> None:
             )
             
             camion.metadata['layout_info'] = layout_info
-
-        if DEBUG_VALIDATION and errores_limpios:
-            print(f"[VALIDATION] Errores: {len(errores_limpios)}")
-            for i, error in enumerate(errores_limpios[:3], 1):
-                print(f"[VALIDATION]   {i}. {error}")
             
     except Exception as e:
         if DEBUG_VALIDATION:

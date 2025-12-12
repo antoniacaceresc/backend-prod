@@ -64,20 +64,11 @@ def optimizar_grupo_vcu(
         
         if excede_peso or excede_vol or excede_pallets:
             pedidos_inviables.append(p)
-            razones = []
-            if excede_peso:
-                razones.append(f"Peso:{p.peso:.0f}>{capacidad.cap_weight}")
-            if excede_vol:
-                razones.append(f"Vol:{p.volumen:.0f}>{capacidad.cap_volume}")
-            if excede_pallets:
-                razones.append(f"Pallets:{p.pallets_capacidad:.1f}>{capacidad.max_pallets}")
-            print(f"[VCU] ⚠️ Pedido inviable {p.pedido}: {', '.join(razones)}")
         else:
             pedidos_validos.append(p)
     
     # Si TODOS son inviables, retornar inmediatamente
     if not pedidos_validos:
-        print(f"[VCU] ❌ Grupo {grupo_cfg.id}: TODOS inviables ({len(pedidos_inviables)})")
         return {
             'status': 'NO_SOLUTION',
             'pedidos_asignados_ids': [],
@@ -85,11 +76,6 @@ def optimizar_grupo_vcu(
             'pedidos_excluidos': [_pedido_a_dict_excluido(p, capacidad) for p in pedidos_inviables],
             'camiones': []
         }
-    
-    # Si algunos son inviables, advertir
-    if pedidos_inviables:
-        print(f"[VCU] ⚠️ Grupo {grupo_cfg.id}: {len(pedidos_inviables)} inviables, "
-              f"continuando con {len(pedidos_validos)}")
     
     # Continuar SOLO con válidos
     pedidos = pedidos_validos
@@ -173,8 +159,6 @@ def optimizar_grupo_vcu(
     status_map = {cp_model.OPTIMAL: 'OPTIMAL', cp_model.FEASIBLE: 'FEASIBLE'}
     estado = status_map.get(resultado, 'NO_SOLUTION')
     
-    print(f"[TIMING] CP-SAT (VCU) grupo {grupo_cfg.id}: {t1 - t0:.3f}s (límite: {tiempo_max_seg}s), estado: {estado}")
-    
     # Construir salida
     if estado in ('OPTIMAL', 'FEASIBLE'):
         resultado = construir_camiones_desde_solver(
@@ -188,32 +172,6 @@ def optimizar_grupo_vcu(
         
         return resultado
     else:
-
-        print(f"\n[VCU] ❌ NO_SOLUTION: {grupo_cfg.id}")
-
-        # ✅ Diagnóstico detallado
-        total_peso = sum(p.peso for p in pedidos)
-        total_vol = sum(p.volumen for p in pedidos)
-        total_pallets = sum(p.pallets_capacidad for p in pedidos)
-        
-        cam_necesarios_peso = total_peso / capacidad.cap_weight
-        cam_necesarios_vol = total_vol / capacidad.cap_volume
-        cam_necesarios_pallets = total_pallets / capacidad.max_pallets
-        cam_necesario = max(cam_necesarios_peso, cam_necesarios_vol, cam_necesarios_pallets)
-        
-        print(f"      Camiones necesarios (estimado):")
-        print(f"        Por peso: {cam_necesarios_peso:.2f}")
-        print(f"        Por volumen: {cam_necesarios_vol:.2f}")
-        print(f"        Por pallets: {cam_necesarios_pallets:.2f}")
-        print(f"        → Mínimo necesario: {cam_necesario:.2f}, Disponibles: {n_cam}")
-        print(f"      VCU mín requerido: {capacidad.vcu_min*100:.0f}%")
-        
-        # Verificar si algún pedido casi llena un camión solo
-        for p in pedidos:
-            vcu_p = max(p.peso/capacidad.cap_weight, p.volumen/capacidad.cap_volume)
-            if vcu_p > 0.8:
-                print(f"      ⚠️ {p.pedido}: VCU individual={vcu_p*100:.0f}% (dificulta combinación)")
-        
         
         # Incluir tanto los que no se asignaron como los inviables
         todos_excluidos = [_pedido_a_dict_excluido(p, capacidad) for p in pedidos]

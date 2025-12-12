@@ -13,11 +13,14 @@ class TipoCamion(str, Enum):
     PAQUETERA = "paquetera"
     RAMPLA_DIRECTA = "rampla_directa"
     BACKHAUL = "backhaul"
+    MEDIANO = "mediano"
+    PEQUEÑO = "pequeño" 
 
     @property
     def es_nestle(self) -> bool:
         """Indica si es camión de Nestlé (paquetera o rampla)"""
-        return self in (TipoCamion.PAQUETERA, TipoCamion.RAMPLA_DIRECTA)
+        return self in (TipoCamion.PAQUETERA, TipoCamion.RAMPLA_DIRECTA,
+                        TipoCamion.MEDIANO, TipoCamion.PEQUEÑO)
     
     @property
     def es_backhaul(self) -> bool:
