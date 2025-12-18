@@ -23,7 +23,7 @@ from services.postprocess import move_orders, add_truck, delete_truck, compute_s
 # ----------------------------------------------------------------------------
 app = FastAPI(title="Truck Optimizer API", version=os.getenv("APP_VERSION", "1.0"))
 
-origins = [os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")]
+origins = [os.getenv("FRONTEND_ORIGIN", "http://localhost:5173"), "http://127.0.0.1:5173"]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -102,6 +102,16 @@ async def optimizar(
     - Gestiona errores HTTP coherentes.
     """
     global executor
+
+    # ===== NUEVO: Logging de inicio =====
+    from datetime import datetime
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    now = datetime.now()
+    timestamp = now.strftime("%d-%m-%Y %H:%M")
+    
+    logger.info(f"""Cliente: {cliente}, Archivo: {file.filename}, Fecha y Hora: {timestamp}""")
 
     if vcuTarget is not None:
         vcuTarget = max(1, min(100, int(vcuTarget)))

@@ -145,14 +145,33 @@ def procesar(content, filename, client, venta, REQUEST_TIMEOUT, vcuTarget, vcuTa
             try:
                 vcuTarget = int(vcuTarget)
                 vcuTarget = max(1, min(100, vcuTarget))
+                # Modificar el config para que afecte tanto VCU como TRUCK_TYPES
                 config.VCU_MIN = float(vcuTarget) / 100.0
+                # También actualizar en TRUCK_TYPES si existe
+                if isinstance(config.TRUCK_TYPES, dict):
+                    if 'normal' in config.TRUCK_TYPES:
+                        config.TRUCK_TYPES['normal']['vcu_min'] = float(vcuTarget) / 100.0
+                else:
+                    for t in config.TRUCK_TYPES:
+                        if t.get('type') == 'normal':
+                            t['vcu_min'] = float(vcuTarget) / 100.0
             except Exception:
                 pass
+                
         if vcuTargetBH is not None:
             try:
                 vcuTargetBH = int(vcuTargetBH)
                 vcuTargetBH = max(1, min(100, vcuTargetBH))
+                # Modificar el config para que afecte BH
                 config.BH_VCU_MIN = float(vcuTargetBH) / 100.0
+                # También actualizar en TRUCK_TYPES si existe
+                if isinstance(config.TRUCK_TYPES, dict):
+                    if 'bh' in config.TRUCK_TYPES:
+                        config.TRUCK_TYPES['bh']['vcu_min'] = float(vcuTargetBH) / 100.0
+                else:
+                    for t in config.TRUCK_TYPES:
+                        if t.get('type') == 'bh':
+                            t['vcu_min'] = float(vcuTargetBH) / 100.0
             except Exception:
                 pass
 
@@ -825,7 +844,6 @@ def optimizar_vcu( df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg,
     t1 = time.time()
     status_map = {cp_model.OPTIMAL: 'OPTIMAL', cp_model.FEASIBLE: 'FEASIBLE'}
     estado     = status_map.get(resultado, 'NO_SOLUTION')
-    print(f"[TIMING] CP-SAT (VCU) grupo {grupo_cfg['id']}: {t1 - t0:.3f} s (límite: {tiempo_max_seg}s), estado: {estado}")
  
  
     # 9) Reconstruir salida
@@ -836,11 +854,6 @@ def optimizar_vcu( df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg,
         tt = 'bh'
     else:
         tt = 'normal'
-
-    for j, ts_var in total_stack_vars.items():
-        # Sólo imprime si el camión j está usado (opcional)
-        if solver.Value(y_truck[j]):
-            print(f"Camión {j} → total_stack = {solver.Value(ts_var)}")
     
     for j in range(n_cam):
         if solver.Value(y_truck[j]) < 1:
@@ -1203,7 +1216,6 @@ def optimizar_bin(df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg, v
 
     status_map = {cp_model.OPTIMAL: 'OPTIMAL', cp_model.FEASIBLE: 'FEASIBLE'}
     estado = status_map.get(resultado, 'NO_SOLUTION')
-    print(f"[TIMING] CP-SAT (Bin) grupo {grupo_cfg['id']}: {t1 - t0:.3f} s (límite: {tiempo_max_seg}s), estado: {estado}")
  
 
     # ---------------------------------------------
@@ -1212,11 +1224,6 @@ def optimizar_bin(df_g, raw_pedidos, grupo_cfg, client_config, tiempo_max_seg, v
     datos_asig = []
     camiones = []
     idx_cam = 1
-
-    for j, ts_var in total_stack_vars.items():
-        # Sólo imprime si el camión j está usado (opcional)
-        if solver.Value(y[j]):
-            print(f"Camión {j} → total_stack = {solver.Value(ts_var)}")
     
     for j in range(n_cam):
         if solver.Value(y[j]) < 1:

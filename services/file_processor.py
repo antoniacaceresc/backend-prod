@@ -44,8 +44,6 @@ def read_file(content: bytes, filename: str, client_config, venta: str) -> pd.Da
 
         available_cols = [c for c in wanted_cols if c in header_only.columns]
         missing_cols = [c for c in wanted_cols if c not in header_only.columns]
-        if missing_cols:
-            print(f"[WARN] Columnas ausentes (se omiten): {missing_cols}")
 
         # Cache parquet por archivo-hoja-columnas
         sig = _make_cache_sig(content, sheet_name, available_cols)
@@ -54,7 +52,7 @@ def read_file(content: bytes, filename: str, client_config, venta: str) -> pd.Da
             try:
                 return pd.read_parquet(cpath)
             except Exception as e:
-                print(f"[WARN] Falló leer cache parquet ({e}); releyendo Excel…")
+                raise ValueError(f"[WARN] Falló leer caché ({e}); releyendo Excel…")
 
         # Tipos para evitar inferencia costosa
         text_internals = {"PEDIDO", "CD", "CE", "OC"}
@@ -75,13 +73,12 @@ def read_file(content: bytes, filename: str, client_config, venta: str) -> pd.Da
             try:
                 df.to_parquet(cpath, index=False)
             except Exception as e:
-                print(f"[WARN] No se pudo escribir cache parquet ({e}).")
+                raise ValueError(f"[WARN] No se pudo escribir cache ({e}).")
 
         return df
 
     except Exception as e:
-        print(f"[ERROR] Al leer el Excel: {e}")
-        raise
+        raise ValueError(f"[ERROR] Al leer el Excel: {e}")
 
 
 # === Transformaciones ===
@@ -95,7 +92,7 @@ def build_column_mapping(client_config, venta: str) -> Dict[str, str]:
 def warn_missing_columns(df: pd.DataFrame, mapping: Dict[str, str]) -> List[str]:
     missing = [excel_name for excel_name in mapping.values() if excel_name not in df.columns]
     if missing:
-        print(f"[WARN] Columnas en Excel no encontradas (se omiten): {missing}")
+        raise ValueError(f"[WARN] Columnas en Excel no encontradas (se omiten): {missing}")
     return missing
 
 
