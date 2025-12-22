@@ -930,6 +930,18 @@ class Camion:
         
         return result
 
+    def sin_apilamiento(self) -> TruckCapacity:
+        """Retorna copia con max_pallets = max_positions (1 nivel)"""
+        return TruckCapacity(
+            cap_weight=self.cap_weight,
+            cap_volume=self.cap_volume,
+            max_positions=self.max_positions,
+            max_pallets=self.max_positions,  # Solo 1 nivel
+            levels=1,
+            vcu_min=self.vcu_min,
+            altura_cm=self.altura_cm
+        )
+
 
     def to_api_dict_fast(self) -> Dict[str, Any]:
         """

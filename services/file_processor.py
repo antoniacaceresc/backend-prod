@@ -13,30 +13,6 @@ from models.domain import Pedido, SKU
 
 
 # ============================================================================
-# DETECCIÓN DE MODO (SKU vs LEGACY)
-# ============================================================================
-
-def detectar_modo_excel(df: pd.DataFrame) -> str:
-    """
-    Detecta si el Excel tiene datos de SKU o es formato legacy.
-    
-    Args:
-        df: DataFrame leído del Excel
-    
-    Returns:
-        "SKU_DETALLADO" si tiene columnas de SKU
-        "PEDIDO_LEGACY" si es formato antiguo
-    """
-    columnas_sku_requeridas = {"SKU", "ALTURA_FULL_PALLET"}
-    columnas_disponibles = set(df.columns)
-    
-    if columnas_sku_requeridas.issubset(columnas_disponibles):
-        return "SKU_DETALLADO"
-    
-    return "PEDIDO_LEGACY"
-
-
-# ============================================================================
 # LECTURA DE EXCEL (ACTUALIZADA)
 # ============================================================================
 
@@ -48,8 +24,6 @@ def read_file(
 ) -> pd.DataFrame:
     """
     Lee archivo Excel y devuelve DataFrame crudo.
-    
-    CAMBIO: Ahora puede leer tanto formato SKU como legacy.
     El DataFrame retornado tiene las columnas originales del Excel.
     
     Args:
@@ -164,10 +138,6 @@ def process_dataframe(
     """
     Procesa DataFrame del Excel.
     
-    CAMBIO PRINCIPAL:
-    - Si tiene datos de SKU: agrupa SKUs por pedido
-    - Si es legacy: mantiene comportamiento original
-    
     Returns:
         (df_pedidos_agregados, lista_pedidos_dicts)
     """
@@ -180,15 +150,8 @@ def process_dataframe(
     
     warn_missing_columns(df_full, mapping)
     df_raw = df_full[list(rename_map.keys())].rename(columns=rename_map).copy()
-    
-    # Detectar modo
-    modo = detectar_modo_excel(df_raw)
-    
 
-    if modo == "SKU_DETALLADO":
-        return _process_dataframe_con_skus(df_raw, client_config, cliente, venta)
-    else:
-        return _process_dataframe_legacy(df_raw, client_config, cliente, venta)
+    return _process_dataframe_con_skus(df_raw, client_config, cliente, venta)
 
 
 # ============================================================================
@@ -487,7 +450,7 @@ def _agregar_skus_a_pedidos(
     ]
     
     # Campos de identidad (deben ser iguales, tomar el primero)
-    campos_identidad = ["CD", "CE", "PO"]
+    campos_identidad = ["CD", "CE", "PO", "SUBCLIENTE"]
     
     # Agregar OC si existe
     if "OC" in df_skus.columns:
@@ -529,6 +492,12 @@ def _agregar_skus_a_pedidos(
     
     # Agrupar por PEDIDO
     df_pedidos = df_skus.groupby("PEDIDO", as_index=False).agg(agg_rules)
+
+    # Normalizar SUBCLIENTE a "Alvi" o "Rendic"
+    if "SUBCLIENTE" in df_pedidos.columns:
+        df_pedidos["SUBCLIENTE"] = df_pedidos["SUBCLIENTE"].apply(
+            lambda x: "Alvi" if str(x).strip() == "Alvi" else "Rendic"
+        )
 
     # ✅ CRÍTICO: Verificar que no se perdieron pedidos
     pedidos_originales = set(df_skus["PEDIDO"].unique())
@@ -603,90 +572,6 @@ def _crear_pedidos_dicts_con_skus(
         pedidos_dicts.append(pedido_dict)
     
     return pedidos_dicts
-
-
-# ============================================================================
-# PROCESAMIENTO LEGACY (EXISTENTE, sin cambios mayores)
-# ============================================================================
-
-def _process_dataframe_legacy(
-    df_raw: pd.DataFrame,
-    client_config,
-    cliente: str,
-    venta: str
-) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
-    """
-    Procesa Excel en formato legacy (sin SKUs).
-    Mantiene comportamiento original.
-    """
-    
-    # Limpieza existente (mantener código actual)
-    df = df_raw.copy()
-    
-    # CE padding
-    if "CE" in df.columns:
-        df["CE"] = df["CE"].astype(str).str.zfill(4)
-    
-    # Numéricos
-    numeric_cols = ["PESO", "VOL", "PALLETS", "VALOR", "VALOR_CAFE"]
-    for col in numeric_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-    
-    if "PALLETS_REAL" in df.columns:
-        df["PALLETS_REAL"] = pd.to_numeric(df["PALLETS_REAL"], errors="coerce")
-    
-    # Apilabilidad
-    apilabilidad_cols = ["BASE", "SUPERIOR", "FLEXIBLE", "NO_APILABLE", "SI_MISMO"]
-    for col in apilabilidad_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-        else:
-            df[col] = 0.0
-    
-    # Flags
-    flag_cols = ["VALIOSO", "PDQ", "BAJA_VU", "LOTE_DIR"]
-    for col in flag_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int).clip(0, 1)
-        else:
-            df[col] = 0
-    
-    # Filtros
-    df = df[
-        (df["PEDIDO"] != "") & 
-        (df["PEDIDO"].notnull())
-    ].copy()
-    
-    df = df.drop_duplicates(subset="PEDIDO", keep=False)
-    df = df[df["PALLETS"] != 0].copy()
-    
-    # OC y PALLETS_REAL
-    if "OC" in df.columns:
-        df["OC"] = df["OC"].replace({"": None, "nan": None, "NaN": None, "none": None})
-    
-    if "PALLETS_REAL" in df.columns:
-        df.loc[df["PALLETS_REAL"].isna(), "PALLETS_REAL"] = None
-    
-    # Crear pedidos dicts (metadata)
-    standard_cols = {
-        "PEDIDO", "CD", "CE", "PO", "PESO", "VOL", "PALLETS", "PALLETS_REAL",
-        "VALOR", "VALOR_CAFE", "OC", "CHOCOLATES", "VALIOSO", "PDQ",
-        "BAJA_VU", "LOTE_DIR", "BASE", "SUPERIOR", "FLEXIBLE", 
-        "NO_APILABLE", "SI_MISMO"
-    }
-    metadata_cols = [c for c in df.columns if c not in standard_cols]
-    
-    pedidos_dicts = []
-    for _, row in df.iterrows():
-        pedido_dict = {"PEDIDO": str(row["PEDIDO"])}
-        for col in metadata_cols:
-            if col in row:
-                pedido_dict[col] = row[col]
-        pedidos_dicts.append(pedido_dict)
-    
-    return df, pedidos_dicts
-
 
 # ============================================================================
 # HELPERS DE CACHE (sin cambios)

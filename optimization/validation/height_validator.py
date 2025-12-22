@@ -36,7 +36,7 @@ class HeightValidator:
         self,
         altura_maxima_cm: float = 270,
         permite_consolidacion: bool = False,
-        max_skus_por_pallet: int = 3
+        max_skus_por_pallet: int = 3,
     ):
         """
         Args:
@@ -47,6 +47,7 @@ class HeightValidator:
         self.altura_maxima_cm = altura_maxima_cm
         self.permite_consolidacion = permite_consolidacion
         self.max_skus_por_pallet = max_skus_por_pallet
+        self.max_altura_picking_cm = None
     
     def validar_camion_rapido(
         self,

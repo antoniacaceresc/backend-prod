@@ -633,6 +633,12 @@ def _optimizar_grupos_vcu_cascada_con_camiones(
                 tipo_camion = camiones_nestle[0]
             
             cap = get_capacity_for_type(client_config, tipo_camion)
+
+            # Ajustar capacidad si no permite apilamiento
+            if hasattr(client_config, 'permite_apilamiento'):
+                cd_grupo = cfg.cd[0] if cfg.cd else ""
+                if not client_config.permite_apilamiento(cd_grupo):
+                    cap = cap.sin_apilamiento()
             
             grupos_con_capacidad.append((cfg, pedidos_no_asignados, cap, tipo_camion))
         
@@ -698,6 +704,12 @@ def _optimizar_grupos_vcu_cascada_con_camiones(
                 tipo_camion = camiones_nestle[0]
             
             cap = get_capacity_for_type(client_config, tipo_camion)
+            
+            # Ajustar capacidad si no permite apilamiento
+            if hasattr(client_config, 'permite_apilamiento'):
+                cd_grupo = cfg.cd[0] if cfg.cd else ""
+                if not client_config.permite_apilamiento(cd_grupo):
+                    cap = cap.sin_apilamiento()
                         
             res = optimizar_grupo_vcu(
                 pedidos_no_asignados, cfg, client_config, cap, tiempo_grupo
@@ -861,6 +873,12 @@ def _optimizar_grupos_binpacking(
         # Usar el primer tipo permitido (prioridad a Nestlé)
         tipo_camion = camiones_permitidos[0] if camiones_permitidos else TipoCamion.PAQUETERA
         cap = get_capacity_for_type(client_config, tipo_camion)
+
+        # Ajustar capacidad si no permite apilamiento
+        if hasattr(client_config, 'permite_apilamiento'):
+            cd_grupo = cfg.cd[0] if cfg.cd else ""
+            if not client_config.permite_apilamiento(cd_grupo):
+                cap = cap.sin_apilamiento()
         
         res = optimizar_grupo_binpacking(pedidos_grupo, cfg, client_config, cap, tiempo_grupo)
         
@@ -1044,12 +1062,16 @@ def _validar_altura_camiones_paralelo(
             error_msg = None
             
             try:
-                
+                if hasattr(config, 'get_altura_maxima'):
+                    subcliente = cam.pedidos[0].metadata.get("SUBCLIENTE", "")
+                    # En caso de ser Alvi, se debe restringir la altura máxima de llenado del camión
+                    altura_maxima = config.get_altura_maxima(subcliente, cam.capacidad.altura_cm)
+
                 validator = HeightValidator(
-                    altura_maxima_cm=cam.capacidad.altura_cm,
+                    altura_maxima_cm=altura_maxima,
                     permite_consolidacion=permite_consolidacion,
                     max_skus_por_pallet=max_skus_por_pallet
-        )
+                )
                 es_valido, errores, layout, debug_info = validator.validar_camion_rapido(cam)
                 
                 
@@ -1537,6 +1559,12 @@ def _recuperar_pedidos_sobrantes(
             
             tipo_camion = nestle_permitidos[0]
             cap = get_capacity_for_type(client_config, tipo_camion)
+
+            # Ajustar capacidad si no permite apilamiento
+            if hasattr(client_config, 'permite_apilamiento'):
+                cd_grupo = cfg.cd[0] if cfg.cd else ""
+                if not client_config.permite_apilamiento(cd_grupo):
+                    cap = cap.sin_apilamiento()
             
             
             resultado = optimizar_grupo_vcu(

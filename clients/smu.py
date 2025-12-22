@@ -2,10 +2,6 @@
 class SmuConfig:
     HEADER_ROW = 0
 
-    # ========== CONSTANTES DE SUBCLIENTE ==========
-    CDS_ALVI = ["Alvi Aeroparque 2", "Alvi Canastas"]
-    CDS_RENDIC = ["Bodega Coquimbo 2", "Bodega Puerto Montt", "Bodega Concepción", "Bodega Lo Aguirre", "Bodega Noviciado", "Bodega Antofagasta 2"]
-
     # ========== RESTRICCIONES COMUNES SMU ==========
     ALTURA_MAX_PICKING_APILADO_CM = 180  # Máximo 1.8m de picking apilado
 
@@ -15,7 +11,13 @@ class SmuConfig:
     ALVI_FLUJOS_SEPARADOS = True  # INV y Flujo Continuo en camiones separados
     ALVI_FLUJO_CONTINUO_CAMIONES = ["mediano", "pequeño"]
     ALVI_FLUJO_CONTINUO_MAX_SKUS_PALLET = 5  # Solo flujo continuo puede consolidar
+
+    # CDs sin apilamiento permitido
+    CDS_SIN_APILAMIENTO = ["Bodega Noviciado"]
     
+    # Identificación de subcliente
+    COLUMNA_SUBCLIENTE = "CUSTHIERLEVEL5NAME"
+    VALOR_ALVI = "Alvi"  # Valor exacto en la columna
 
     # Configuraciones algoritmo
     USA_OC = True
@@ -28,7 +30,7 @@ class SmuConfig:
     # Configuración de validación altura
     VALIDAR_ALTURA = True
     PERMITE_CONSOLIDACION = True
-    MAX_SKUS_POR_PALLET = 1
+    MAX_SKUS_POR_PALLET = 5
 
     # Mapeo de columnas
     COLUMN_MAPPING = {
@@ -55,6 +57,7 @@ class SmuConfig:
             "ALTURA_FULL_PALLET": "Altura full Pallet",
             "APILABLE_BASE": "Apilable Base",
             "MONTADO": "Montado",  
+            "SUBCLIENTE": "CUSTHIERLEVEL5NAME",
 
         }
     }
@@ -72,8 +75,8 @@ class SmuConfig:
 
     # Tipos de camiones
     TRUCK_TYPES = {
-        'paquetera':        {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.8, 'max_pallets': 60, 'altura_cm': 260},
-        'rampla_directa':   {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.8, 'max_pallets': 56, 'altura_cm': 250},
+        'paquetera':        {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.8, 'max_pallets': 60, 'altura_cm': 280},
+        'rampla_directa':   {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.8, 'max_pallets': 56, 'altura_cm': 270},
         'backhaul':         {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.6, 'max_pallets': 56, 'altura_cm': 240},
         'mediano':          {'cap_weight': 10000, 'cap_volume': 18000, 'max_positions': 12, 'levels': 2, 'vcu_min': 0.6, 'max_pallets': 12, 'altura_cm': 230},
         'pequeño':          {'cap_weight':  5000, 'cap_volume': 13000, 'max_positions':  3, 'levels': 2, 'vcu_min': 0.6, 'max_pallets':  3, 'altura_cm': 230},
@@ -184,13 +187,26 @@ class SmuConfig:
         ],
     }
 
-
-    @classmethod
-    def es_alvi(cls, cd: str) -> bool:
-        return cd in cls.CDS_ALVI
     
     @classmethod
     def get_max_skus_pallet(cls, cd: str, oc: str) -> int:
         if cls.es_alvi(cd) and oc and oc.upper() == "CRR":
             return cls.ALVI_CRR_MAX_SKUS_PALLET
         return cls.MAX_SKUS_POR_PALLET
+
+    @classmethod
+    def es_alvi(cls, subcliente: str) -> bool:
+        """Verifica si el subcliente es Alvi"""
+        return subcliente == "Alvi"
+
+    @classmethod
+    def permite_apilamiento(cls, cd: str) -> bool:
+        """Verifica si el CD permite apilamiento"""
+        return cd not in cls.CDS_SIN_APILAMIENTO
+    
+    @classmethod
+    def get_altura_maxima(cls, subcliente: str, altura_default: float) -> float:
+        """Retorna altura máxima según subcliente"""
+        if cls.es_alvi(subcliente):
+            return cls.ALVI_ALTURA_MAX_CM
+        return altura_default

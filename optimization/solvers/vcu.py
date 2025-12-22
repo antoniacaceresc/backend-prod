@@ -245,11 +245,17 @@ def _agregar_restricciones_generales_vcu(
             max_ordenes = getattr(client_config, 'MAX_ORDENES', 10)
             model.Add(sum(x[(pid, j)] for pid in lista_i) <= max_ordenes * y_truck[j])
         
-        # Apilabilidad
-        agregar_restricciones_apilabilidad(
-            model, x, datos, lista_i, j, y_truck[j],
-            capacidad.max_positions, capacidad.levels, datos['PALLETS_SCALE']
-        )
+        # Apilabilidad - solo si permite apilamiento
+        permite_apilamiento = True
+        if hasattr(client_config, 'permite_apilamiento'):
+            cd_grupo = grupo_cfg.cd[0] if grupo_cfg.cd else ""
+            permite_apilamiento = client_config.permite_apilamiento(cd_grupo)
+        
+        if permite_apilamiento:
+            agregar_restricciones_apilabilidad(
+                model, x, datos, lista_i, j, y_truck[j],
+                capacidad.max_positions, capacidad.levels, datos['PALLETS_SCALE']
+            )
 
 
 def _definir_objetivo_vcu(

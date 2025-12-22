@@ -182,13 +182,19 @@ def _agregar_restricciones_generales_binpacking(
             max_ordenes = getattr(client_config, 'MAX_ORDENES', 10)
             model.Add(sum(x[(pid, j)] for pid in pedidos_ids) <= max_ordenes * y_truck[j])
         
-        # Apilabilidad
-        agregar_restricciones_apilabilidad(
-            model, x, datos, pedidos_ids, j, y_truck[j],
-            capacidad.max_positions, capacidad.levels, datos['PALLETS_SCALE']
-        )
+        # Apilabilidad - solo si permite apilamiento
+        permite_apilamiento = True
+        if hasattr(client_config, 'permite_apilamiento'):
+            cd_grupo = grupo_cfg.cd[0] if grupo_cfg.cd else ""
+            permite_apilamiento = client_config.permite_apilamiento(cd_grupo)
         
-        # MonotonÃ­a (opcional pero ayuda al solver)
+        if permite_apilamiento:
+            agregar_restricciones_apilabilidad(
+                model, x, datos, lista_i, j, y_truck[j],
+                capacidad.max_positions, capacidad.levels, datos['PALLETS_SCALE']
+            )
+        
+        # Monotoní­a (opcional pero ayuda al solver)
         if j >= 1:
             model.Add(y_truck[j] <= y_truck[j - 1])
 
