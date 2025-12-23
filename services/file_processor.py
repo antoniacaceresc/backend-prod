@@ -363,7 +363,7 @@ def _optimizar_apilabilidad_skus(df: pd.DataFrame, altura_maxima_cm: float = 260
             continue
         
         # REGLA 3: Cantidad impar → convertir 1 pallet a BASE/SUPERIOR
-        if si_mismo % 2 != 0:  # Impar
+        if si_mismo >= 1 and si_mismo % 2 != 0:  # Impar
             puede_ser_base = df.at[idx, 'BASE'] > 0 or _tiene_columna_base(df, idx)
             puede_ser_superior = df.at[idx, 'SUPERIOR'] > 0 or _tiene_columna_superior(df, idx)
             
