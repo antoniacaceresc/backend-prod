@@ -205,13 +205,17 @@ class PosicionCamion:
         """Indica si no hay pallets en esta posición"""
         return len(self.pallets_apilados) == 0
     
-    def puede_apilar(self, pallet: PalletFisico) -> tuple[bool, Optional[str]]:
+    def puede_apilar(self, pallet: PalletFisico, max_niveles: int = 2) -> tuple[bool, Optional[str]]:
         """
         Verifica si se puede apilar un pallet adicional.
         
         Returns:
             (puede_apilar, razon_si_no)
         """
+        # Si max_niveles es 1, no permitir apilamiento
+        if max_niveles <= 1 and len(self.pallets_apilados) >= 1:
+            return False, "Camión con 1 nivel no permite apilamiento"
+
         # 1. Validar espacio físico
         if pallet.altura_total_cm > self.espacio_disponible_cm:
             return False, (
@@ -339,7 +343,7 @@ class PosicionCamion:
             return CategoriaApilamiento.SI_MISMO
         return CategoriaApilamiento.FLEXIBLE
     
-    def apilar(self, pallet: PalletFisico) -> bool:
+    def apilar(self, pallet: PalletFisico, max_niveles: int = 2) -> bool:
         """
         Apila un pallet en esta posición si es posible.
         Actualiza nivel y posicion_id del pallet.
@@ -347,7 +351,7 @@ class PosicionCamion:
         Returns:
             True si se apiló exitosamente
         """
-        puede, razon = self.puede_apilar(pallet)
+        puede, razon = self.puede_apilar(pallet, max_niveles)
         if not puede:
             return False
         

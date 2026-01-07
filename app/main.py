@@ -151,7 +151,7 @@ async def api_move_orders(req: PostProcessRequest = Body(...)) -> Dict[str, Any]
         raise HTTPException(status_code=429, detail="Servicio ocupado: demasiadas operaciones en curso.")
 
     try:
-        return await asyncio.to_thread(move_orders, state, req.pedidos, req.target_truck_id, req.cliente)
+        return await asyncio.to_thread(move_orders, state, req.pedidos, req.target_truck_id, req.cliente, req.venta)
     except Exception as e:  # por validaciones de negocio
         raise HTTPException(status_code=400, detail=str(e))
     finally:
@@ -164,6 +164,7 @@ async def api_update_truck_type(
     cliente: str = Body(...),
     truck_id: str = Body(...),
     tipo_camion: str = Body(...),
+    venta: str = Body(default=None),
 ) -> Dict[str, Any]:
     """
     Cambia el tipo de un camión delegando toda la validación y el recálculo
@@ -186,6 +187,7 @@ async def api_update_truck_type(
             truck_id,
             (tipo_camion or "").lower(),
             cliente,
+            venta
         )
         return updated
 
@@ -210,7 +212,7 @@ async def api_add_truck(req: PostProcessRequest = Body(...)) -> Dict[str, Any]:
     except asyncio.TimeoutError:
         raise HTTPException(status_code=429, detail="Servicio ocupado: demasiadas operaciones en curso.")
     try:
-        return await asyncio.to_thread(add_truck, state, req.cd, req.ce, req.ruta, req.cliente)
+        return await asyncio.to_thread(add_truck, state, req.cd, req.ce, req.ruta, req.cliente, req.venta)
     finally:
         semaphore.release()
 
@@ -223,7 +225,7 @@ async def api_delete_truck(req: PostProcessRequest = Body(...)) -> Dict[str, Any
     except asyncio.TimeoutError:
         raise HTTPException(status_code=429, detail="Servicio ocupado: demasiadas operaciones en curso.")
     try:
-        return await asyncio.to_thread(delete_truck, state, req.target_truck_id, req.cliente)
+        return await asyncio.to_thread(delete_truck, state, req.target_truck_id, req.cliente, req.venta)
     finally:
         semaphore.release()
 
@@ -235,6 +237,6 @@ async def api_compute_stats(req: PostProcessRequest = Body(...)) -> Dict[str, An
     except asyncio.TimeoutError:
         raise HTTPException(status_code=429, detail="Servicio ocupado: demasiadas operaciones en curso.")
     try:
-        return await asyncio.to_thread(compute_stats, req.camiones, req.pedidos_no_incluidos, req.cliente)
+        return await asyncio.to_thread(compute_stats, req.camiones, req.pedidos_no_incluidos, req.cliente, req.venta)
     finally:
         semaphore.release()

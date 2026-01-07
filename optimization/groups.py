@@ -11,7 +11,7 @@ from core.constants import CD_LO_AGUIRRE
 
 def _generar_grupos_para_tipo(
     pedidos_disponibles: List[Pedido],
-    client_config,
+    effective_config: dict,
     tipo: str
 ) -> List[Tuple[ConfiguracionGrupo, List[Pedido]]]:
     """
@@ -19,7 +19,7 @@ def _generar_grupos_para_tipo(
     
     Args:
         pedidos_disponibles: Pedidos aún NO asignados
-        client_config: Configuración del cliente
+        effective_config: Configuración del cliente
         tipo: Tipo de ruta ("multi_ce", "multi_cd", etc.)
     
     Returns:
@@ -29,12 +29,12 @@ def _generar_grupos_para_tipo(
         return []
     
     # Obtener rutas del tipo solicitado
-    rutas = client_config.RUTAS_POSIBLES.get(tipo, [])
+    rutas = effective_config.get("RUTAS_POSIBLES", {}).get(tipo, [])
     if not rutas:
         return []
     
-    usa_oc = getattr(client_config, "USA_OC", False)
-    mix_grupos = getattr(client_config, "MIX_GRUPOS", [])
+    usa_oc = effective_config.get("USA_OC", False)
+    mix_grupos = effective_config.get("MIX_GRUPOS", [])
     
     grupos = []
     # Generar grupos según el tipo
@@ -52,7 +52,7 @@ def _generar_grupos_para_tipo(
 
 def generar_grupos_optimizacion(
     pedidos: List[Pedido],
-    client_config,
+    effective_config: dict,
     modo: str
 ) -> List[Tuple[ConfiguracionGrupo, List[Pedido]]]:
     """
@@ -60,32 +60,32 @@ def generar_grupos_optimizacion(
     
     Args:
         pedidos: Lista de pedidos disponibles
-        client_config: Configuración del cliente
+        effective_config: Configuración del cliente
         modo: "vcu", "binpacking", o "normal" (solo grupos normales)
     
     Returns:
         Lista de (ConfiguracionGrupo, pedidos)
     """
-    usa_oc = getattr(client_config, "USA_OC", False)
-    mix_grupos = getattr(client_config, "MIX_GRUPOS", [])
+    usa_oc = effective_config.get("USA_OC", False)
+    mix_grupos = effective_config.get("MIX_GRUPOS", [])
     
     # ✅ Caso especial: solo generar grupos normales
     if modo == "normal":
-        rutas_normal = client_config.RUTAS_POSIBLES.get("normal", [])
+        rutas_normal = effective_config.get("RUTAS_POSIBLES", {}).get("normal", [])
         if rutas_normal:
             grupos, _ = _build_normal_groups(pedidos, rutas_normal, mix_grupos, usa_oc)
             return grupos
         return []
-    
     # Determinar tipos de ruta según modo
     if modo == "binpacking":
-        tipos_ruta = getattr(client_config, "BINPACKING_TIPOS_RUTA", ["normal"]) or ["normal"]
-        rutas_func = lambda t: getattr(client_config, "RUTAS_BINPACKING", {}).get(
-            t, client_config.RUTAS_POSIBLES.get(t, [])
-        )
+        tipos_ruta = effective_config.get("BINPACKING_TIPOS_RUTA", ["normal"]) or ["normal"]
+        rutas_binpacking = effective_config.get("RUTAS_BINPACKING", {})
+        rutas_posibles = effective_config.get("RUTAS_POSIBLES", {})
+        rutas_func = lambda t: rutas_binpacking.get(t, rutas_posibles.get(t, []))
     else:  # VCU
         tipos_ruta = ["multi_ce_prioridad", "normal", "multi_ce", "multi_cd"]
-        rutas_func = lambda t: client_config.RUTAS_POSIBLES.get(t, [])
+        rutas_posibles = effective_config.get("RUTAS_POSIBLES", {})
+        rutas_func = lambda t: rutas_posibles.get(t, [])
     
     fases = [(t, rutas_func(t)) for t in tipos_ruta if rutas_func(t)]
     
@@ -140,12 +140,14 @@ def _build_normal_groups(
             ce=ces,
             oc=oc
         )
+        print(f"[DEBUG GROUPS] Creando grupo: cd={cds}, ce={ces}, oc={oc}")
         
         grupos.append((cfg, pedidos_grupo))
         asignados.update(p.pedido for p in pedidos_grupo)
     
     pedidos_restantes = [p for p in pedidos if p.pedido not in asignados]
     return grupos, pedidos_restantes
+
 
 def _build_other_groups(
     pedidos: List[Pedido],
@@ -200,6 +202,7 @@ def _build_other_groups(
     pedidos_restantes = [p for p in pedidos if p.pedido not in asignados]
     return grupos, pedidos_restantes
 
+
 def _generar_iterador_rutas(
     tipo: str,
     rutas,
@@ -224,22 +227,32 @@ def _iter_normal_routes(
     usa_oc: bool
 ) -> Iterator[Tuple[List[str], List[str], any]]:
     """Iterador para rutas normales - soporta formato dict y tuple"""
-    # Normalizar rutas a formato tuple
-    rutas_normalizadas = []
-    for ruta in rutas:
-        if isinstance(ruta, dict):
-            rutas_normalizadas.append((ruta['cds'], ruta['ces']))
-        elif isinstance(ruta, tuple):
-            rutas_normalizadas.append(ruta)
     
-    for cds, ces in rutas_normalizadas:
+    for ruta in rutas:
+        # Extraer campos según formato
+        if isinstance(ruta, dict):
+            cds = ruta['cds']
+            ces = ruta['ces']
+            ruta_ocs = ruta.get('ocs', [])  # OCs específicos de la ruta (ej: Alvi CRR/INV)
+        elif isinstance(ruta, tuple):
+            cds, ces = ruta
+            ruta_ocs = []
+        else:
+            continue
+        
         if cds == [CD_LO_AGUIRRE]:
             # Caso especial: Lo Aguirre por CE individual
             pedidos_cd = [p for p in pedidos if p.cd == CD_LO_AGUIRRE]
             for ce in ces:
                 pedidos_ce = [p for p in pedidos_cd if p.ce == ce]
                 
-                if usa_oc:
+                # Si la ruta tiene OCs específicos, filtrar por ellos
+                if ruta_ocs:
+                    for oc in ruta_ocs:
+                        pedidos_oc = [p for p in pedidos_ce if p.oc and p.oc.upper() == oc.upper()]
+                        if pedidos_oc:
+                            yield ([CD_LO_AGUIRRE], [ce], oc)
+                elif usa_oc:
                     oc_unique = list(set(p.oc for p in pedidos_ce if p.oc))
                     
                     # OCs individuales
@@ -262,7 +275,13 @@ def _iter_normal_routes(
             # Caso general
             pedidos_ruta = [p for p in pedidos if p.cd in cds and p.ce in ces]
             
-            if usa_oc:
+            # Si la ruta tiene OCs específicos, filtrar por ellos
+            if ruta_ocs:
+                for oc in ruta_ocs:
+                    pedidos_oc = [p for p in pedidos_ruta if p.oc and p.oc.upper() == oc.upper()]
+                    if pedidos_oc:
+                        yield (cds, ces, oc)
+            elif usa_oc:
                 # Agrupar por OC
                 oc_unique = list(set(p.oc for p in pedidos_ruta if p.oc))
                 
@@ -277,7 +296,6 @@ def _iter_normal_routes(
                 if pedidos_ruta:
                     yield (cds, ces, None)
 
-
 def _iter_multi_routes(
     rutas,  # Puede ser List[Dict] o List[Tuple]
     pedidos: List[Pedido],
@@ -285,21 +303,30 @@ def _iter_multi_routes(
 ) -> Iterator[Tuple[List[str], List[str], any]]:
     """Iterador para rutas multi (multi_ce, multi_cd) - soporta formato dict y tuple"""
     
-    # Normalizar rutas a formato tuple
-    rutas_normalizadas = []
     for ruta in rutas:
+        # Extraer campos según formato
         if isinstance(ruta, dict):
-            rutas_normalizadas.append((ruta['cds'], ruta['ces']))
+            cds = ruta['cds']
+            ces = ruta['ces']
+            ruta_ocs = ruta.get('ocs', [])
         elif isinstance(ruta, tuple):
-            rutas_normalizadas.append(ruta)
-    
-    for cds, ces in rutas_normalizadas:
+            cds, ces = ruta
+            ruta_ocs = []
+        else:
+            continue
+        
         pedidos_ruta = [p for p in pedidos if p.cd in cds and p.ce in ces]
         
         if not pedidos_ruta:
             continue
         
-        if usa_oc:
+        # Si la ruta tiene OCs específicos, filtrar por ellos
+        if ruta_ocs:
+            for oc in ruta_ocs:
+                pedidos_oc = [p for p in pedidos_ruta if p.oc and p.oc.upper() == oc.upper()]
+                if pedidos_oc:
+                    yield (cds, ces, oc)
+        elif usa_oc:
             # Agrupar por OC
             oc_unique = list(set(p.oc for p in pedidos_ruta if p.oc))
             
@@ -358,7 +385,7 @@ def _format_oc_str(oc: any) -> str:
 
 def calcular_tiempo_por_grupo(
     pedidos: List[Pedido],
-    client_config,
+    effective_config,
     total_timeout: int,
     max_por_grupo: int
 ) -> int:
@@ -369,14 +396,14 @@ def calcular_tiempo_por_grupo(
     
     Args:
         pedidos: Lista de pedidos
-        client_config: Configuración del cliente
+        effective_config: Configuración del cliente
         total_timeout: Timeout total disponible
         max_por_grupo: Máximo tiempo por grupo
     
     Returns:
         Tiempo BASE en segundos por grupo
     """
-    num_grupos, distribucion = _estimar_cantidad_grupos_mejorado(pedidos, client_config)
+    num_grupos, distribucion = _estimar_cantidad_grupos_mejorado(pedidos, effective_config)
     tiempo_disponible = max(total_timeout - 5, 1)
     
     if num_grupos == 0:
@@ -409,7 +436,7 @@ def calcular_tiempo_por_grupo(
 
 def _estimar_cantidad_grupos_mejorado(
     pedidos: List[Pedido], 
-    config
+    effective_config
 ) -> tuple:
     """
     Estima cantidad de grupos QUE SE GENERARÁN (incluyendo SIN_OC).
@@ -425,17 +452,18 @@ def _estimar_cantidad_grupos_mejorado(
         }
     """
     tipos_ruta = ["multi_ce_prioridad", "normal", "multi_ce", "multi_cd"]
+    rutas_posibles = effective_config.get("RUTAS_POSIBLES", {})
     fases = [
-        (tipo, config.RUTAS_POSIBLES.get(tipo, []))
+        (tipo, rutas_posibles.get(tipo, []))
         for tipo in tipos_ruta
-        if config.RUTAS_POSIBLES.get(tipo)
+        if rutas_posibles.get(tipo)
     ]
     
     total = 0
     distribucion = {'pequeños': 0, 'medianos': 0, 'grandes': 0}
     
-    usa_oc = getattr(config, "USA_OC", False)
-    mix_grupos = getattr(config, "MIX_GRUPOS", [])
+    usa_oc = effective_config.get("USA_OC", False)
+    mix_grupos = effective_config.get("MIX_GRUPOS", [])
     
     for tipo, rutas in fases:
         if tipo == "normal":

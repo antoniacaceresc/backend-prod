@@ -11,6 +11,7 @@ class PostProcessRequest(BaseModel):
     ce: Optional[List[str]] = Field(default_factory=list)
     ruta: Optional[str] = None
     cliente: str
+    venta: Optional[str] = None
 
 
 class PostProcessResponse(BaseModel):

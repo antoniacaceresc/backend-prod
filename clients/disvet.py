@@ -1,22 +1,7 @@
 
 class DisvetConfig:
     HEADER_ROW = 0
-
-    # Configuraciones algoritmo
-    USA_OC = False
-    AGRUPAR_POR_PO = False
-
-    # MIX Flujo
-    MIX_GRUPOS = []
-
-    ADHERENCIA_BACKHAUL = None
-    MODO_ADHERENCIA = None
-
-    # Configuración de validación altura
-    VALIDAR_ALTURA = True
-    PERMITE_CONSOLIDACION = True
-    MAX_SKUS_POR_PALLET = 5
-
+    
     # Mapeo de columnas 
     COLUMN_MAPPING = {
         "Secos": {   
@@ -55,90 +40,107 @@ class DisvetConfig:
         "Fecha preferente de entrega": "Fecha prefer/entrega", 
     }
 
-    # Tipos de camiones
-    TRUCK_TYPES = {
-        'paquetera':        {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.5, 'max_pallets': 60,'altura_cm': 280},
-        'rampla_directa':   {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.5, 'max_pallets': 56,'altura_cm': 270},
-        'backhaul':         {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.5, 'max_pallets': 56, 'altura_cm': 260}
+    # Configuración por canal de venta
+    CHANNEL_CONFIG = {
+        "Secos": {
+            "USA_OC": False,
+            "AGRUPAR_POR_PO": False,
+            "MIX_GRUPOS": [],
+            
+            "ADHERENCIA_BACKHAUL": None,
+            "MODO_ADHERENCIA": None,
+            
+            "VALIDAR_ALTURA": True,
+            "PERMITE_CONSOLIDACION": True,
+            "MAX_SKUS_POR_PALLET": 5,
+
+            "TRUCK_TYPES": {
+                'paquetera':        {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.5, 'max_pallets': 60, 'altura_cm': 280},
+                'rampla_directa':   {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.5, 'max_pallets': 56, 'altura_cm': 270},
+                'backhaul':         {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.5, 'max_pallets': 56, 'altura_cm': 260}
+            },
+
+            "RUTAS_POSIBLES": {
+                "normal": [
+                    # CDs que NO permiten backhaul - solo Nestlé
+                    {"cds": ["Bioñuble"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Bioñuble"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Bioñuble"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    
+                    {"cds": ["Comech"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Comech"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Comech"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    
+                    {"cds": ["Ferrbest"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Ferrbest"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Ferrbest"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+
+                    {"cds": ["Friex"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Friex"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Friex"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+
+                    {"cds": ["HN"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["HN"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["HN"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    
+                    {"cds": ["Jama"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Jama"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Jama"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+
+                    {"cds": ["Maxima"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Maxima"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Maxima"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+
+                    {"cds": ["Norkoshe"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Norkoshe"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Norkoshe"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    
+                    {"cds": ["Pan de Azucar"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Pan de Azucar"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Pan de Azucar"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+
+                    {"cds": ["Relun"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Relun"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Relun"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+
+                    {"cds": ["Vivancos SPA"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Vivancos SPA"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Vivancos SPA"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    
+                    # CDs que SOLO permiten backhaul
+                    {"cds": ["Cerro Grande"], "ces": ["0088"], "camiones_permitidos": ["backhaul"]},
+                    {"cds": ["Cerro Grande"], "ces": ["0097"], "camiones_permitidos": ["backhaul"]},
+                    {"cds": ["Cerro Grande"], "ces": ["0103"], "camiones_permitidos": ["backhaul"]},
+                    
+                    {"cds": ["Kameid"], "ces": ["0088"], "camiones_permitidos": ["backhaul"]},
+                    {"cds": ["Kameid"], "ces": ["0097"], "camiones_permitidos": ["backhaul"]},
+                    {"cds": ["Kameid"], "ces": ["0103"], "camiones_permitidos": ["backhaul"]},
+                ],
+
+                "multi_ce": [
+                    # Multi-CE SOLO con backhaul
+                    {"cds": ["Cerro Grande"], "ces": ["0088", "0103"], "camiones_permitidos": ["backhaul"]},
+                    {"cds": ["Kameid"], "ces": ["0088", "0103"], "camiones_permitidos": ["backhaul"]},
+                ],
+                
+                "multi_cd": [
+                    # Desde Quilicura - solo Nestlé
+                    {"cds": ["Bioñuble", "Relun"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Norkoshe", "HN"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Pan de Azucar", "Jama"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Ferrbest", "Comech"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+
+                    # Desde Maipú - solo Nestlé
+                    {"cds": ["Bioñuble", "Relun"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Norkoshe", "HN"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Pan de Azucar", "Jama"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Ferrbest", "Comech"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                ],
+            }
+        },
     }
 
-    # Configuración agrupamiento especial
-# Configuración agrupamiento especial
-    RUTAS_POSIBLES = {
-        "normal": [
-            # CDs que NO permiten backhaul - solo Nestlé
-            {"cds": ["Bioñuble"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["Bioñuble"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["Bioñuble"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            
-            {"cds": ["Comech"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["Comech"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["Comech"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            
-            {"cds": ["Ferrbest"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["Ferrbest"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["Ferrbest"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-
-            {"cds": ["Friex"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["Friex"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["Friex"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-
-            {"cds": ["HN"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["HN"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["HN"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            
-            {"cds": ["Jama"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["Jama"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["Jama"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-
-            {"cds": ["Maxima"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["Maxima"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["Maxima"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-
-            {"cds": ["Norkoshe"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["Norkoshe"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["Norkoshe"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            
-            {"cds": ["Pan de Azucar"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["Pan de Azucar"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["Pan de Azucar"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-
-            {"cds": ["Relun"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["Relun"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["Relun"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-
-            {"cds": ["Vivancos SPA"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["Vivancos SPA"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["Vivancos SPA"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            
-            # CDs que SOLO permiten backhaul
-            {"cds": ["Cerro Grande"], "ces": ["0088"], "camiones_permitidos": ["backhaul"]},
-            {"cds": ["Cerro Grande"], "ces": ["0097"], "camiones_permitidos": ["backhaul"]},
-            {"cds": ["Cerro Grande"], "ces": ["0103"], "camiones_permitidos": ["backhaul"]},
-            
-            {"cds": ["Kameid"], "ces": ["0088"], "camiones_permitidos": ["backhaul"]},
-            {"cds": ["Kameid"], "ces": ["0097"], "camiones_permitidos": ["backhaul"]},
-            {"cds": ["Kameid"], "ces": ["0103"], "camiones_permitidos": ["backhaul"]},
-        ],
-
-        "multi_ce": [
-            # Multi-CE SOLO con backhaul
-            {"cds": ["Cerro Grande"], "ces": ["0088", "0103"], "camiones_permitidos": ["backhaul"]},
-            {"cds": ["Kameid"], "ces": ["0088", "0103"], "camiones_permitidos": [ "backhaul"]},
-        ],
-        
-        "multi_cd": [
-            # Desde Quilicura - solo Nestlé
-            {"cds": ["Bioñuble","Relun"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["Norkoshe", "HN"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["Pan de Azucar", "Jama"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["Ferrbest", "Comech"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-
-            # Desde Maipú - solo Nestlé
-            {"cds": ["Bioñuble","Relun"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["Norkoshe", "HN"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["Pan de Azucar", "Jama"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["Ferrbest", "Comech"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-        ],
-    }
-
+    @classmethod
+    def get_channel_config(cls, venta: str) -> dict:
+        """Retorna configuración específica del canal, con fallback a Secos."""
+        return cls.CHANNEL_CONFIG.get(venta, cls.CHANNEL_CONFIG["Secos"])

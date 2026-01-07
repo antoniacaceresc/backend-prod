@@ -24,7 +24,7 @@ def construir_camiones_desde_solver(
     datos: Dict,
     n_cam: int,
     modo: str,
-    client_config=None
+    tipo_camion: TipoCamion = None
 ) -> Dict[str, Any]:
     """
     Construye lista de camiones desde la solución del solver.
@@ -48,8 +48,9 @@ def construir_camiones_desde_solver(
     pedidos_incluidos_ids = []
     camiones = []
     
-    # Determinar tipo de camión base
-    tipo_camion = TipoCamion.PAQUETERA
+    # Determinar tipo de camión
+    if tipo_camion is None:
+        tipo_camion = TipoCamion.PAQUETERA
     
     # Construir cada camión
     for j in range(n_cam):

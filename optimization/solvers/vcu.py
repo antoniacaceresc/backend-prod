@@ -15,16 +15,19 @@ from optimization.solvers.constraints import (
     agregar_restriccion_po_agrupado,                            
     agregar_restricciones_apilabilidad,
     agregar_restricciones_walmart_multicd,
-    agregar_restricciones_capacidad_dura)
+    agregar_restricciones_capacidad_dura,
+    agregar_restriccion_misma_po_diferente_camion,
+    agregar_restriccion_picking_sku_unico)
 from optimization.utils.helpers import preparar_datos_solver, heuristica_ffd
 from optimization.solvers.output import construir_camiones_desde_solver
 
 def optimizar_grupo_vcu(
     pedidos: List[Pedido],
     grupo_cfg: ConfiguracionGrupo,
-    client_config,
+    effective_config: dict,
     capacidad: TruckCapacity,
-    tiempo_max_seg: int
+    tiempo_max_seg: int,
+    tipo_camion: TipoCamion = None
 ) -> Dict[str, Any]:
     """
     Optimiza un grupo de pedidos usando CP-SAT en modo VCU.
@@ -37,7 +40,7 @@ def optimizar_grupo_vcu(
     Args:
         pedidos: Lista de pedidos del grupo
         grupo_cfg: Configuración del grupo
-        client_config: Configuración del cliente
+        effective_config: Configuración del cliente
         capacidad: Capacidad del camión
         tiempo_max_seg: Tiempo máximo de ejecución
     
@@ -105,7 +108,8 @@ def optimizar_grupo_vcu(
             x[(pid, j)] = model.NewBoolVar(f"x_vcu_{pid}_{j}")
 
     # Restricción: agrupar por PO si está habilitado
-    if getattr(client_config, 'AGRUPAR_POR_PO', False):
+    agrupar_por_po = effective_config.get("AGRUPAR_POR_PO", False)
+    if agrupar_por_po:
         po_map = {p.pedido: p.po for p in pedidos}
         agregar_restriccion_po_agrupado(model, x, pedidos_ids, po_map, n_cam)
     
@@ -141,7 +145,7 @@ def optimizar_grupo_vcu(
     # Restricciones generales
     _agregar_restricciones_generales_vcu(
         model, x, y_truck, vcu_max_int, pedidos_ids, datos,
-        n_cam, capacidad, client_config, grupo_cfg
+        n_cam, capacidad, effective_config, grupo_cfg
     )
     
     # Función objetivo
@@ -163,7 +167,7 @@ def optimizar_grupo_vcu(
     if estado in ('OPTIMAL', 'FEASIBLE'):
         resultado = construir_camiones_desde_solver(
             solver, x, y_truck, pedidos, pedidos_ids, grupo_cfg,
-            capacidad, datos, n_cam, 'vcu', client_config=client_config
+            capacidad, datos, n_cam, 'vcu', tipo_camion
         )
         # Agregar inviables a excluidos
         if pedidos_inviables:
@@ -196,7 +200,7 @@ def _agregar_restricciones_generales_vcu(
     datos: Dict,
     n_cam: int,
     capacidad: TruckCapacity,
-    client_config,
+    effective_config: dict,
     grupo_cfg: ConfiguracionGrupo
 ):
     """
@@ -236,26 +240,37 @@ def _agregar_restricciones_generales_vcu(
         )
         
         # Restricciones de Walmart multi_cd
-        if (grupo_cfg.tipo == TipoRuta.MULTI_CD 
-            and getattr(client_config, '__name__', '') == 'WalmartConfig'):
+        max_walmart = effective_config.get("MAX_ORDENES") is not None
+        if grupo_cfg.tipo == TipoRuta.MULTI_CD and max_walmart:
             cd_map = {pid: datos[pid]['cd'] for pid in lista_i}
             agregar_restricciones_walmart_multicd(model, x, lista_i, cd_map, j, y_truck[j])
-        elif getattr(client_config, '__name__', '') == 'WalmartConfig':
+        elif max_walmart:
             # Límite general de órdenes
-            max_ordenes = getattr(client_config, 'MAX_ORDENES', 10)
+            max_ordenes = effective_config.get("MAX_ORDENES")
             model.Add(sum(x[(pid, j)] for pid in lista_i) <= max_ordenes * y_truck[j])
         
         # Apilabilidad - solo si permite apilamiento
-        permite_apilamiento = True
-        if hasattr(client_config, 'permite_apilamiento'):
-            cd_grupo = grupo_cfg.cd[0] if grupo_cfg.cd else ""
-            permite_apilamiento = client_config.permite_apilamiento(cd_grupo)
+        permite_apilamiento = effective_config.get("PERMITE_APILAMIENTO", True)
         
         if permite_apilamiento:
             agregar_restricciones_apilabilidad(
                 model, x, datos, lista_i, j, y_truck[j],
                 capacidad.max_positions, capacidad.levels, datos['PALLETS_SCALE']
             )
+
+    # Restricción de pedidos divididos (misma PO) no van en el mismo camión
+    if effective_config.get("RESTRICT_PO_GROUP", False):
+        agregar_restriccion_misma_po_diferente_camion(
+            model, x, datos, pedidos_ids, n_cam
+        )
+        
+    # Restricción SMU: no permitir picking duplicado del mismo SKU
+    if effective_config.get("PROHIBIR_PICKING_DUPLICADO", False):
+        # Obtener objetos pedido desde datos
+        pedidos_objs = [datos[pid]['pedido_obj'] for pid in pedidos_ids if pid in datos]
+        agregar_restriccion_picking_sku_unico(
+            model, x, pedidos_objs, pedidos_ids, n_cam
+        )
 
 
 def _definir_objetivo_vcu(

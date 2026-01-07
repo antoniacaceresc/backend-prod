@@ -125,10 +125,7 @@ def build_column_mapping(client_config, venta: str) -> Dict[str, str]:
     return mapping
 
 
-# ============================================================================
-# PROCESAMIENTO (ACTUALIZADO para soportar SKUs)
-# ============================================================================
-
+# PROCESAMIENTO
 def process_dataframe(
     df_full: pd.DataFrame, 
     client_config, 
@@ -147,17 +144,13 @@ def process_dataframe(
         for internal, excel in mapping.items() 
         if excel in df_full.columns
     }
-    
     warn_missing_columns(df_full, mapping)
     df_raw = df_full[list(rename_map.keys())].rename(columns=rename_map).copy()
 
     return _process_dataframe_con_skus(df_raw, client_config, cliente, venta)
 
 
-# ============================================================================
-# PROCESAMIENTO CON SKUs (NUEVO)
-# ============================================================================
-
+# PROCESAMIENTO CON SKU
 def _process_dataframe_con_skus(
     df_raw: pd.DataFrame,
     client_config,
@@ -175,17 +168,15 @@ def _process_dataframe_con_skus(
     Returns:
         (df_pedidos_agregados, lista_pedidos_dicts)
     """
-    
     # 1. Limpieza y normalización a nivel SKU
     df_skus = _limpiar_datos_skus(df_raw)
-
     # 2. Optimizar apilabilidad ANTES de validar
     altura_maxima = 270  # Default, o extraer de client_config
-    if hasattr(client_config, 'TRUCK_TYPES'):
-        # Usar altura de paquetera como referencia
-        truck_types = client_config.TRUCK_TYPES
-        if 'paquetera' in truck_types:
-            altura_maxima = truck_types['paquetera'].get('altura_cm', 270)
+    from utils.config_helpers import get_effective_config
+    effective = get_effective_config(client_config, venta)
+    truck_types = effective.get("TRUCK_TYPES", {})
+    if 'paquetera' in truck_types:
+        altura_maxima = truck_types['paquetera'].get('altura_cm', 270)
     
     df_skus = _optimizar_apilabilidad_skus(df_skus, altura_maxima)
     
@@ -251,6 +242,9 @@ def _limpiar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
         df["CHOCOLATES_FLAG"] = chocolates_str.isin(["SI", "SÍ", "1", "X", "TRUE", "YES"]).astype(int)
     else:
         df["CHOCOLATES_FLAG"] = 0
+
+    
+    pedidos_antes = set(df["PEDIDO"].unique()) if "PEDIDO" in df.columns else set()
     
     # Filtros
     df = df[
@@ -268,7 +262,7 @@ def _limpiar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
     for col in campos_extra_numericos:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-    
+
     return df
 
 
@@ -326,7 +320,7 @@ def _optimizar_apilabilidad_skus(df: pd.DataFrame, altura_maxima_cm: float = 260
             continue
         
         # REGLA 3: Cantidad impar → convertir 1 pallet a BASE/SUPERIOR
-        if si_mismo % 2 != 0:  # Impar
+        if si_mismo >= 1 and si_mismo % 2 != 0:  # Impar
             puede_ser_base = df.at[idx, 'BASE'] > 0 or _tiene_columna_base(df, idx)
             puede_ser_superior = df.at[idx, 'SUPERIOR'] > 0 or _tiene_columna_superior(df, idx)
             
@@ -338,6 +332,9 @@ def _optimizar_apilabilidad_skus(df: pd.DataFrame, altura_maxima_cm: float = 260
                 df.at[idx, 'SUPERIOR'] += 1
                 df.at[idx, 'SI_MISMO'] -= 1
                 cambios['impares_ajustados'] += 1
+    
+    for col in ['BASE', 'SUPERIOR', 'FLEXIBLE', 'NO_APILABLE', 'SI_MISMO']:
+       df[col] = df[col].clip(lower=0)
     
     return df
 
@@ -498,15 +495,6 @@ def _agregar_skus_a_pedidos(
         df_pedidos["SUBCLIENTE"] = df_pedidos["SUBCLIENTE"].apply(
             lambda x: "Alvi" if str(x).strip() == "Alvi" else "Rendic"
         )
-
-    # ✅ CRÍTICO: Verificar que no se perdieron pedidos
-    pedidos_originales = set(df_skus["PEDIDO"].unique())
-    pedidos_resultantes = set(df_pedidos["PEDIDO"].unique())
-    pedidos_perdidos = pedidos_originales - pedidos_resultantes
-    
-    if pedidos_perdidos:
-        print(f"[ERROR] ❌ Se perdieron {len(pedidos_perdidos)} pedidos en agregación:")
-        print(f"        Ejemplos: {list(pedidos_perdidos)[:5]}")
     
     # Convertir CHOCOLATES_FLAG de vuelta a SI/NO
     if "CHOCOLATES_FLAG" in df_pedidos.columns:
@@ -514,6 +502,9 @@ def _agregar_skus_a_pedidos(
             lambda x: "SI" if x == 1 else "NO"
         )
         df_pedidos = df_pedidos.drop(columns=["CHOCOLATES_FLAG"])
+    
+    if "Fecha preferente de entrega" in df_pedidos.columns:
+        df_pedidos['Fecha preferente de entrega'] = pd.to_datetime(df_pedidos['Fecha preferente de entrega']).dt.strftime('%d-%m-%Y')
     
     # Validar coherencia de campos de identidad
     _validar_coherencia_identidad(df_skus, campos_identidad)

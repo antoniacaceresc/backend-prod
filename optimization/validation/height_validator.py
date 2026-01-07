@@ -438,7 +438,7 @@ class HeightValidator:
                     )
                     pallet_nuevo.agregar_fragmento(frag)
                     
-                    if posicion.apilar(pallet_nuevo):
+                    if posicion.apilar(pallet_nuevo, max_niveles=camion.capacidad.levels):
                         pallet_id_counter += 1
                         colocado = True
                         break
@@ -464,7 +464,7 @@ class HeightValidator:
             )
             pallet.agregar_fragmento(frag)
             
-            if not posicion_vacia.apilar(pallet):
+            if not posicion_vacia.apilar(pallet, max_niveles=camion.capacidad.levels):
                 return None
             
             pallet_id_counter += 1
@@ -487,7 +487,7 @@ class HeightValidator:
             - layout_parcial: LayoutCamion con lo que se pudo colocar
             - historia_colocacion: List[Dict] con cada paso
         """
-        
+
         layout = LayoutCamion(
             camion_id=camion.id,
             max_posiciones=camion.capacidad.max_positions,
@@ -565,7 +565,7 @@ class HeightValidator:
                     )
                     pallet_nuevo.agregar_fragmento(frag)
                     
-                    puede_apilar, razon = posicion.puede_apilar(pallet_nuevo)
+                    puede_apilar, razon = posicion.puede_apilar(pallet_nuevo, max_niveles=camion.capacidad.levels)
                     
                     intento_info['intentos'].append({
                         'tipo': 'nuevo_nivel',
@@ -575,7 +575,7 @@ class HeightValidator:
                         'razon': razon
                     })
                     
-                    if posicion.apilar(pallet_nuevo):
+                    if posicion.apilar(pallet_nuevo, max_niveles=camion.capacidad.levels):
                         pallet_id_counter += 1
                         colocado = True
                         intento_info['exito'] = True
@@ -616,7 +616,7 @@ class HeightValidator:
                 'posicion': posicion_vacia.id
             })
             
-            if not posicion_vacia.apilar(pallet):
+            if not posicion_vacia.apilar(pallet, camion.capacidad.levels):
                 intento_info['razon_fallo'] = 'no_puede_apilar_en_vacia'
                 intento_info['intentos'][-1]['resultado'] = 'fallo'
                 debug_info['fragmentos_fallidos'].append(intento_info)

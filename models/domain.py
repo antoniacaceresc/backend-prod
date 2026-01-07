@@ -40,6 +40,18 @@ class TruckCapacity:
         vcu_vol = volumen / self.cap_volume if self.cap_volume > 0 else 0.0
         vcu_max = max(vcu_peso, vcu_vol)
         return vcu_peso, vcu_vol, vcu_max
+    
+    def sin_apilamiento(self) -> 'TruckCapacity':
+        """Retorna capacidad sin apilamiento (1 nivel, la mitad de pallets)."""
+        return TruckCapacity(
+            cap_weight=self.cap_weight,
+            cap_volume=self.cap_volume,
+            max_positions=self.max_positions,
+            levels=1,  # Sin apilamiento = 1 nivel
+            vcu_min=self.vcu_min,
+            max_pallets=self.max_positions,  # Solo posiciones base
+            altura_cm=self.altura_cm
+        )
 
 
 @dataclass
@@ -562,8 +574,8 @@ class Camion:
     # Pedidos asignados (objetos Pedido, NO diccionarios)
     pedidos: List[Pedido] = field(default_factory=list)
     
-    # Opciones de cambio de tipo (calculadas por validators)
-    opciones_tipo_camion: List[str] = field(default_factory=lambda: ["normal"])
+    # Opciones de cambio de tipo
+    opciones_tipo_camion: List[str] = field(default_factory=list)
     
     # Cache de métricas (private, se invalida al modificar pedidos)
     _vcu_vol: Optional[float] = field(default=None, repr=False)
@@ -582,6 +594,8 @@ class Camion:
             self.tipo_ruta = TipoRuta(self.tipo_ruta)
         if isinstance(self.tipo_camion, str):
             self.tipo_camion = TipoCamion(self.tipo_camion)
+        if not self.opciones_tipo_camion:
+            self.opciones_tipo_camion = [self.tipo_camion.value]
         
         # Asignar info del camión a los pedidos
         self._actualizar_info_pedidos()
@@ -896,7 +910,6 @@ class Camion:
             "grupo": self.grupo,
             "tipo_ruta": self.tipo_ruta.value,
             "tipo_camion": self.tipo_camion.value,
-            "opciones_tipo_camion": self.opciones_tipo_camion,
             "cd": self.cd,
             "ce": self.ce,
             "pedidos": [p.to_api_dict(self.capacidad) for p in self.pedidos],

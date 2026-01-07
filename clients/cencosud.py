@@ -2,19 +2,6 @@
 class CencosudConfig:
     HEADER_ROW = 0
 
-    # Configuraciones algoritmo
-    USA_OC = False
-    AGRUPAR_POR_PO = True
-    MIX_GRUPOS = []
-
-    ADHERENCIA_BACKHAUL = 0.50
-    MODO_ADHERENCIA = "post_convert" 
-
-    # Configuración de validación altura
-    VALIDAR_ALTURA = True
-    PERMITE_CONSOLIDACION = False
-    MAX_SKUS_POR_PALLET = 5 # Verificar
-
     # Mapeo de columnas
     COLUMN_MAPPING = {
         "Secos": {   
@@ -41,15 +28,6 @@ class CencosudConfig:
             "ALTURA_FULL_PALLET": "Altura full Pallet",
             "APILABLE_BASE": "Apilable Base",
             "MONTADO": "Montado",  
-        },
-        "Purina": {
-            "CD": "CD",
-            "PO": "Número PO",
-            "PEDIDO": "N° Pedido",
-            "CE": "Ce.",
-            "PESO": "Peso Conf.",
-            "VOL": "Vol. Conf.",
-            "VALOR": "$$ Conf."
         }
     }
 
@@ -64,45 +42,69 @@ class CencosudConfig:
         "Fecha preferente de entrega": "Fecha prefer/entrega",
     }
 
-    # Tipos de camiones
-    TRUCK_TYPES = {
-        'paquetera':        {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.8, 'max_pallets': 60, 'altura_cm': 280},
-        'rampla_directa':   {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.8, 'max_pallets': 56, 'altura_cm': 270},
-        'backhaul':         {'cap_weight': 22000, 'cap_volume': 60000, 'max_positions': 26, 'levels': 2, 'vcu_min': 0.55, 'max_pallets': 26, 'altura_cm': 230}
+
+    # Configuración por canal de venta
+    CHANNEL_CONFIG = {
+        "Secos": {
+            "USA_OC": False,
+            "AGRUPAR_POR_PO": True,
+            "MIX_GRUPOS": [],
+            
+            "ADHERENCIA_BACKHAUL": 0.50,
+            "MODO_ADHERENCIA": "post_convert",
+            
+            "VALIDAR_ALTURA": True,
+            "PERMITE_CONSOLIDACION": False,
+            "MAX_SKUS_POR_PALLET": 5,
+
+            "TRUCK_TYPES": {
+                'paquetera':        {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.8, 'max_pallets': 60, 'altura_cm': 280},
+                'rampla_directa':   {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.8, 'max_pallets': 56, 'altura_cm': 270},
+                'backhaul':         {'cap_weight': 22000, 'cap_volume': 60000, 'max_positions': 26, 'levels': 2, 'vcu_min': 0.55, 'max_pallets': 26, 'altura_cm': 230}
+            },
+
+            "RUTAS_POSIBLES": {
+                "normal": [
+                    # N725 Bodega Noviciado
+                    {"cds": ["N725 Bodega Noviciado"], "ces": ["0079"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+                    {"cds": ["N725 Bodega Noviciado"], "ces": ["0080"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+                    {"cds": ["N725 Bodega Noviciado"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+                    {"cds": ["N725 Bodega Noviciado"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+                    {"cds": ["N725 Bodega Noviciado"], "ces": ["3598"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+                    {"cds": ["N725 Bodega Noviciado"], "ces": ["8150"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+
+                    # N641 Bodega Noviciado PYP
+                    {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["0079"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+                    {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["0080"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+                    {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+                    {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+                    {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["3598"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+                    {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["8150"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+
+                    # N794 Bodega Chillan - Solo Nestlé
+                    {"cds": ["N794 Bodega Chillan"], "ces": ["0079"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["N794 Bodega Chillan"], "ces": ["0080"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["N794 Bodega Chillan"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["N794 Bodega Chillan"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["N794 Bodega Chillan"], "ces": ["3598"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["N794 Bodega Chillan"], "ces": ["8150"], "camiones_permitidos": ["paquetera", "rampla_directa"]}
+                ],
+
+                "multi_ce": [
+                    # Solo Nestlé
+                    {"cds": ["N794 Bodega Chillan"], "ces": ["0088", "0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]}
+                ]
+            }
+        },
     }
 
+    @classmethod
+    def get_channel_config(cls, venta: str) -> dict:
+        """Retorna configuración específica del canal, con fallback a Secos."""
+        return cls.CHANNEL_CONFIG.get(venta, cls.CHANNEL_CONFIG["Secos"])
 
 
-    # Configuración de rutas posibles con tipos de camiones permitidos
-    RUTAS_POSIBLES = {
-        "normal": [
-            # N725 Bodega Noviciado
-            {"cds": ["N725 Bodega Noviciado"], "ces": ["0079"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
-            {"cds": ["N725 Bodega Noviciado"], "ces": ["0080"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
-            {"cds": ["N725 Bodega Noviciado"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
-            {"cds": ["N725 Bodega Noviciado"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
-            {"cds": ["N725 Bodega Noviciado"], "ces": ["3598"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
-            {"cds": ["N725 Bodega Noviciado"], "ces": ["8150"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
 
-            # N641 Bodega Noviciado PYP
-            {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["0079"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
-            {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["0080"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
-            {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
-            {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
-            {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["3598"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
-            {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["8150"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
 
-            # N794 Bodega Chillan - Solo Nestlé
-            {"cds": ["N794 Bodega Chillan"], "ces": ["0079"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["N794 Bodega Chillan"], "ces": ["0080"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["N794 Bodega Chillan"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["N794 Bodega Chillan"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["N794 Bodega Chillan"], "ces": ["3598"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
-            {"cds": ["N794 Bodega Chillan"], "ces": ["8150"], "camiones_permitidos": ["paquetera", "rampla_directa"]}
-        ],
 
-        "multi_ce": [
-            # Solo Nestlé
-            {"cds": ["N794 Bodega Chillan"], "ces": ["0088", "0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]}
-        ]
-    }
+

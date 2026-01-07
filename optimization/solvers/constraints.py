@@ -228,3 +228,116 @@ def agregar_restricciones_capacidad_dura(
         
         # VCU máximo tampoco puede superar
         model.Add(vcu_max_int[j] <= scale * y_truck[j])
+
+
+def agregar_restriccion_misma_po_diferente_camion(
+    model: cp_model.CpModel,
+    x: Dict,
+    datos: Dict[str, Any],
+    pedidos_ids: List[str],
+    n_cam: int
+) -> int:
+    """
+    Restricción: pedidos con mismo PO NO pueden ir en el mismo camión.
+    
+    Estrategia eficiente: para cada camión, máximo 1 pedido por PO.
+    Complejidad: O(n_cam × num_POs) en vez de O(pares × n_cam)
+    """
+    from collections import defaultdict
+    
+    # Agrupar pedidos por PO
+    pedidos_por_po: Dict[str, List[str]] = defaultdict(list)
+    
+    for pid in pedidos_ids:
+        if pid in datos and 'po' in datos[pid]:
+            po = datos[pid]['po']
+            if po:
+                pedidos_por_po[po].append(pid)
+    
+    # Filtrar solo POs con múltiples pedidos
+    pos_con_conflicto = {po: pids for po, pids in pedidos_por_po.items() if len(pids) > 1}
+    
+    if not pos_con_conflicto:
+        return 0
+    
+    restricciones_added = 0
+    
+    # Para cada camión, máximo 1 pedido de cada PO
+    for j in range(n_cam):
+        for po, pids in pos_con_conflicto.items():
+            vars_in_truck = [x[(pid, j)] for pid in pids if (pid, j) in x]
+            if len(vars_in_truck) > 1:
+                model.Add(sum(vars_in_truck) <= 1)
+                restricciones_added += 1
+    
+    print(f"[PO_INCOMPATIBLE] {len(pos_con_conflicto)} POs conflictivos, "
+          f"{restricciones_added} restricciones totales")
+    
+    return restricciones_added
+
+
+def agregar_restriccion_picking_sku_unico(
+    model: cp_model.CpModel,
+    x: Dict,
+    pedidos: List,  # Lista de objetos Pedido
+    pedidos_ids: List[str],
+    n_cam: int
+) -> int:
+    """
+    Restricción SMU: no puede haber picking de dos SKUs iguales de diferentes 
+    pedidos en el mismo camión.
+    
+    Ejemplo: Pedido A con 0.5 pallets del SKU 123 y Pedido B con 0.2 pallets 
+    del mismo SKU 123 NO pueden ir en el mismo camión.
+    
+    Args:
+        model: Modelo CP-SAT
+        x: Variables de asignación {(pedido_id, camion_idx): BoolVar}
+        pedidos: Lista de objetos Pedido (para acceder a SKUs)
+        pedidos_ids: Lista de IDs de pedidos
+        n_cam: Número de camiones
+    
+    Returns:
+        Número de restricciones agregadas
+    """
+    from collections import defaultdict
+    
+    # Mapear pedido_id -> objeto Pedido
+    pedido_map = {p.pedido: p for p in pedidos}
+    
+    # Identificar SKUs de picking por pedido
+    # {sku_id: [lista de pedido_ids que tienen picking de ese SKU]}
+    skus_picking: Dict[str, List[str]] = defaultdict(list)
+    
+    for pid in pedidos_ids:
+        pedido = pedido_map.get(pid)
+        if not pedido or not pedido.tiene_skus:
+            continue
+        
+        for sku in pedido.skus:
+            # Solo contar si es picking (cantidad < 1 pallet)
+            if sku.cantidad_pallets % 1 > 0.001:
+                skus_picking[sku.sku_id].append(pid)
+    
+    # Filtrar solo SKUs con picking en múltiples pedidos
+    skus_conflicto = {
+        sku_id: pids 
+        for sku_id, pids in skus_picking.items() 
+        if len(pids) > 1
+    }
+    print(f"[DEBUG PICKING] SKUs con conflicto: {skus_conflicto}")
+    
+    if not skus_conflicto:
+        return 0
+    
+    restricciones_added = 0
+    
+    # Para cada camión, máximo 1 pedido con picking del mismo SKU
+    for j in range(n_cam):
+        for sku_id, pids in skus_conflicto.items():
+            vars_in_truck = [x[(pid, j)] for pid in pids if (pid, j) in x]
+            if len(vars_in_truck) > 1:
+                model.Add(sum(vars_in_truck) <= 1)
+                restricciones_added += 1
+    
+    return restricciones_added
