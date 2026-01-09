@@ -55,10 +55,10 @@ class SmuConfig:
             "MODO_ADHERENCIA": None,
             
             "VALIDAR_ALTURA": True,
-            "PERMITE_CONSOLIDACION": True,
-            "MAX_SKUS_POR_PALLET": 5,
+            "PERMITE_CONSOLIDACION": False,
+            "MAX_SKUS_POR_PALLET": 1,
 
-            # Restricciones comunes SMU
+            # Restricciones comunes Picking
             "PROHIBIR_PICKING_DUPLICADO": True,
             "ALTURA_MAX_PICKING_APILADO_CM": 180,  # Máximo 1.8m de picking apilado
 
@@ -70,6 +70,25 @@ class SmuConfig:
 
             # CDs sin apilamiento permitido
             "CDS_SIN_APILAMIENTO": ["Bodega Noviciado"],
+
+            # Configuración por subcliente/flujo
+            "SUBCLIENTE_CONFIG": {
+                "Alvi": {
+                    "INV": {
+                        "PERMITE_CONSOLIDACION": False,
+                        "MAX_SKUS_POR_PALLET": 1,
+                    },
+                    "CRR": {
+                        "PERMITE_CONSOLIDACION": True,
+                        "MAX_SKUS_POR_PALLET": 5,
+                        "PASADAS_CAMIONES": ["pequeño", "mediano"],  # Primero pequeños, luego medianos
+                    },
+                },
+                "Rendic": {
+                    "PERMITE_CONSOLIDACION": False,
+                    "MAX_SKUS_POR_PALLET": 1,
+                },
+            },
 
             "TRUCK_TYPES": {
                 'paquetera':        {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.2, 'max_pallets': 60, 'altura_cm': 280},
@@ -216,3 +235,59 @@ class SmuConfig:
             return channel.get("ALVI_ALTURA_MAX_CM", 230)
         # Rendic u otros subclientes SMU
         return channel.get("RENDIC_ALTURA_MAX_CM", 240)
+
+    @classmethod
+    def get_config_por_subcliente(cls, subcliente: str, oc: str = None, venta: str = "Secos") -> dict:
+        """
+        Retorna configuración específica por subcliente y flujo.
+        
+        Args:
+            subcliente: "Alvi" o "Rendic"
+            oc: "INV" o "CRR" (solo aplica a Alvi)
+            venta: Canal de venta
+        
+        Returns:
+            Dict con PERMITE_CONSOLIDACION, MAX_SKUS_POR_PALLET
+        """
+        channel = cls.get_channel_config(venta)
+        subcliente_configs = channel.get("SUBCLIENTE_CONFIG", {})
+        
+        # Valores por defecto
+        config = {
+            "PERMITE_CONSOLIDACION": False,
+            "MAX_SKUS_POR_PALLET": 1,
+        }
+        
+        if subcliente in subcliente_configs:
+            sub_config = subcliente_configs[subcliente]
+            
+            # Si es Alvi y tiene flujo específico
+            if subcliente == "Alvi" and oc and oc.upper() in sub_config:
+                flujo_config = sub_config[oc.upper()]
+                config["PERMITE_CONSOLIDACION"] = flujo_config.get("PERMITE_CONSOLIDACION", False)
+                config["MAX_SKUS_POR_PALLET"] = flujo_config.get("MAX_SKUS_POR_PALLET", 1)
+            else:
+                # Config general del subcliente
+                config["PERMITE_CONSOLIDACION"] = sub_config.get("PERMITE_CONSOLIDACION", False)
+                config["MAX_SKUS_POR_PALLET"] = sub_config.get("MAX_SKUS_POR_PALLET", 1)
+        
+        return config
+
+    @classmethod
+    def get_pasadas_camiones(cls, subcliente: str, oc: str = None, venta: str = "Secos") -> list:
+        """
+        Retorna lista de tipos de camión para pasadas secuenciales.
+        Solo aplica a Alvi CRR por ahora.
+        
+        Returns:
+            Lista de tipos ["pequeño", "mediano"] o None si no hay pasadas especiales
+        """
+        channel = cls.get_channel_config(venta)
+        subcliente_configs = channel.get("SUBCLIENTE_CONFIG", {})
+        
+        if subcliente == "Alvi" and oc and oc.upper() == "CRR":
+            alvi_config = subcliente_configs.get("Alvi", {})
+            crr_config = alvi_config.get("CRR", {})
+            return crr_config.get("PASADAS_CAMIONES", None)
+        
+        return None

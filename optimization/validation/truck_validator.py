@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from models.domain import Camion, TruckCapacity
 from optimization.validation.height_validator import HeightValidator
+from utils.config_helpers import get_consolidacion_config
 
 
 # Flag para activar/desactivar prints de debug
@@ -61,12 +62,14 @@ class TruckValidator:
         # Se inicializarán con effective_config en validar_camiones
         self.permite_consolidacion = False
         self.max_skus_por_pallet = 1
+        self.venta = None
     
     def validar_camiones(
         self,
         camiones: List[Camion],
         operacion: str = "validacion",
-        effective_config: dict = None
+        effective_config: dict = None,
+        venta: str = None
     ) -> List[Camion]:
         """
         Valida altura de múltiples camiones EN PARALELO.
@@ -81,6 +84,7 @@ class TruckValidator:
         if effective_config:
             self.permite_consolidacion = effective_config.get('PERMITE_CONSOLIDACION', False)
             self.max_skus_por_pallet = effective_config.get('MAX_SKUS_POR_PALLET', 1)
+            self.venta = venta
 
         # Filtrar camiones que tienen pedidos con SKUs
         camiones_a_validar = [
@@ -159,12 +163,16 @@ class TruckValidator:
         try:
             # Obtener altura máxima según configuración
             altura_maxima = self._get_altura_maxima(cam)
+
+            # Obtener consolidación específica para este camión (SMU)
+            consolidacion = self._get_consolidacion_camion(cam)
             
             # Crear validador
             validator = HeightValidator(
                 altura_maxima_cm=altura_maxima,
-                permite_consolidacion=self.permite_consolidacion,
-                max_skus_por_pallet=self.max_skus_por_pallet
+                permite_consolidacion=consolidacion["PERMITE_CONSOLIDACION"],
+                max_skus_por_pallet=consolidacion["MAX_SKUS_POR_PALLET"],
+                max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM")
             )
             
             # Ejecutar validación
@@ -236,6 +244,44 @@ class TruckValidator:
             return self.config.get_altura_maxima(subcliente, altura_default)
         
         return altura_default
+
+    def _get_consolidacion_camion(self, cam: Camion) -> dict:
+        """
+        Obtiene configuración de consolidación específica para un camión.
+        Para SMU, depende del subcliente (Alvi/Rendic) y flujo (INV/CRR).
+        
+        Returns:
+            Dict con PERMITE_CONSOLIDACION y MAX_SKUS_POR_PALLET
+        """
+        # Default: usar configuración de clase
+        default = {
+            "PERMITE_CONSOLIDACION": self.permite_consolidacion,
+            "MAX_SKUS_POR_PALLET": self.max_skus_por_pallet
+        }
+        
+        if not cam.pedidos:
+            return default
+        
+        # Obtener subcliente y OC del primer pedido (asumimos homogéneo por camión)
+        primer_pedido = cam.pedidos[0]
+        subcliente = primer_pedido.metadata.get("SUBCLIENTE") if primer_pedido.metadata else None
+        oc = primer_pedido.oc
+        
+        # Si no hay subcliente, usar default
+        if not subcliente:
+            return default
+        
+        # Obtener venta del camión
+        venta = self.venta or (cam.metadata.get("venta") if cam.metadata else None)
+        
+        # Usar helper de config_helpers
+        return get_consolidacion_config(
+            self.config, 
+            subcliente=subcliente, 
+            oc=oc, 
+            venta=venta
+        )
+
     
     def _normalizar_errores(self, errores: Any) -> List[str]:
         """Normaliza lista de errores a strings limpios."""
@@ -326,13 +372,15 @@ class TruckValidator:
             if not pos.esta_vacia
         ]
 
+        
 
 # Función de conveniencia para uso directo (mantiene compatibilidad)
 def validar_altura_camiones_paralelo(
     camiones: List[Camion],
     client_config,
     operacion: str = "validacion",
-    effective_config: dict = None
+    effective_config: dict = None,
+    venta: str = None
 ) -> List[Camion]:
     """
     Función de conveniencia que mantiene la firma original.
@@ -346,4 +394,4 @@ def validar_altura_camiones_paralelo(
         Lista de camiones con metadata actualizada
     """
     validator = TruckValidator(client_config)
-    return validator.validar_camiones(camiones, operacion, effective_config)
+    return validator.validar_camiones(camiones, operacion, effective_config, venta)

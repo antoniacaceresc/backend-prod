@@ -460,7 +460,7 @@ class PedidoRecovery:
         pedidos_filtrados = []
         for p in pedidos:
             camiones_permitidos = get_camiones_permitidos_para_ruta(
-                self.config, [p.cd], [p.ce], "normal", self.venta
+                self.config, [p.cd], [p.ce], "normal", self.venta, p.oc
             )
             
             if tipo == "nestle":
@@ -491,7 +491,7 @@ class PedidoRecovery:
             # Obtener capacidad según tipo
             if tipo == "nestle":
                 camiones_permitidos = get_camiones_permitidos_para_ruta(
-                    self.config, cfg.cd, cfg.ce, cfg.tipo.value, self.venta
+                    self.config, cfg.cd, cfg.ce, cfg.tipo.value, self.venta, cfg.oc
                 )
                 nestle_permitidos = [c for c in camiones_permitidos if c.es_nestle]
                 if not nestle_permitidos:

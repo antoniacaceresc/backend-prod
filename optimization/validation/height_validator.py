@@ -37,6 +37,7 @@ class HeightValidator:
         altura_maxima_cm: float = 270,
         permite_consolidacion: bool = False,
         max_skus_por_pallet: int = 3,
+        max_altura_picking_apilado_cm: float = None,
     ):
         """
         Args:
@@ -47,7 +48,7 @@ class HeightValidator:
         self.altura_maxima_cm = altura_maxima_cm
         self.permite_consolidacion = permite_consolidacion
         self.max_skus_por_pallet = max_skus_por_pallet
-        self.max_altura_picking_cm = None
+        self.max_altura_picking_apilado_cm = max_altura_picking_apilado_cm
     
     def validar_camion_rapido(
         self,
@@ -549,12 +550,22 @@ class HeightValidator:
                             intento_info['exito'] = True
                             intento_info['ubicacion'] = f"posicion_{pos_idx}_consolidado"
                             intento_info['intentos'][-1]['resultado'] = 'exito'
-                            break
-                        else:
-                            # Rollback
-                            pallet_superior.fragmentos.remove(frag)
-                            intento_info['intentos'][-1]['resultado'] = 'excede_altura'
-                            intento_info['intentos'][-1]['altura_resultante'] = posicion.altura_usada_cm
+                            continue
+                        
+                        # Validar altura máxima de picking apilado (SMU)
+                        if self.max_altura_picking_apilado_cm:
+                            altura_picking_posicion = self._calcular_altura_picking_posicion(posicion)
+                            if altura_picking_posicion > self.max_altura_picking_apilado_cm:
+                                pallet_superior.fragmentos.remove(frag)
+                                intento_info['intentos'][-1]['resultado'] = 'excede_altura_picking'
+                                intento_info['intentos'][-1]['altura_picking'] = altura_picking_posicion
+                                continue
+                        
+                        colocado = True
+                        intento_info['exito'] = True
+                        intento_info['ubicacion'] = f"posicion_{pos_idx}_consolidado"
+                        intento_info['intentos'][-1]['resultado'] = 'exito'
+                        break
                 
                 # Intento 1b: Nuevo nivel en posición existente
                 if not colocado and len(posicion.pallets_apilados) < 2:
@@ -576,6 +587,16 @@ class HeightValidator:
                     })
                     
                     if posicion.apilar(pallet_nuevo, max_niveles=camion.capacidad.levels):
+                        # Validar altura máxima de picking apilado
+                        picking_valido, altura_picking = self._validar_altura_picking_posicion(posicion)
+                        if not picking_valido:
+                            # Rollback: remover el pallet apilado
+                            posicion.pallets_apilados.remove(pallet_nuevo)
+                            intento_info['intentos'][-1]['resultado'] = 'excede_altura_picking'
+                            intento_info['intentos'][-1]['altura_picking'] = altura_picking
+                            intento_info['intentos'][-1]['max_permitido'] = self.max_altura_picking_apilado_cm
+                            continue
+                        
                         pallet_id_counter += 1
                         colocado = True
                         intento_info['exito'] = True
@@ -619,6 +640,17 @@ class HeightValidator:
             if not posicion_vacia.apilar(pallet, camion.capacidad.levels):
                 intento_info['razon_fallo'] = 'no_puede_apilar_en_vacia'
                 intento_info['intentos'][-1]['resultado'] = 'fallo'
+                debug_info['fragmentos_fallidos'].append(intento_info)
+                continue
+            
+            # Validar altura máxima de picking apilado (aunque sea posición vacía, el fragmento puede ser picking)
+            picking_valido, altura_picking = self._validar_altura_picking_posicion(posicion_vacia)
+            if not picking_valido:
+                # Rollback
+                posicion_vacia.pallets_apilados.remove(pallet)
+                intento_info['razon_fallo'] = 'excede_altura_picking'
+                intento_info['intentos'][-1]['resultado'] = 'excede_altura_picking'
+                intento_info['intentos'][-1]['altura_picking'] = altura_picking
                 debug_info['fragmentos_fallidos'].append(intento_info)
                 continue
             
@@ -695,6 +727,25 @@ class HeightValidator:
             
             return True
 
+    def _validar_altura_picking_posicion(self, posicion: PosicionCamion) -> tuple[bool, float]:
+        """
+        Valida que la altura de picking en una posición no exceda el límite.
+        Solo aplica si max_altura_picking_apilado_cm está configurado.
+        
+        Returns:
+            (es_valido, altura_picking_actual)
+        """
+        if not self.max_altura_picking_apilado_cm:
+            return True, 0.0
+        
+        altura_picking = 0.0
+        for pallet in posicion.pallets_apilados:
+            for frag in pallet.fragmentos:
+                if frag.es_picking:
+                    altura_picking += frag.altura_cm
+        
+        return altura_picking <= self.max_altura_picking_apilado_cm, altura_picking
+
 
     def _prioridad_colocacion(self, frag: FragmentoSKU) -> int:
         """
@@ -715,6 +766,18 @@ class HeightValidator:
             CategoriaApilamiento.SUPERIOR: 4,
         }
         return prioridades[frag.categoria]
+
+    def _calcular_altura_picking_posicion(self, posicion: PosicionCamion) -> float:
+        """
+        Calcula la altura total de pickings apilados en una posición.
+        Solo cuenta fragmentos marcados como es_picking=True.
+        """
+        altura_picking = 0.0
+        for pallet in posicion.pallets_apilados:
+            for frag in pallet.fragmentos:
+                if frag.es_picking:
+                    altura_picking += frag.altura_cm
+        return altura_picking
     
 
     def _reportar_fallas_detallado(

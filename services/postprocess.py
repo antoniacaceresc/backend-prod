@@ -545,7 +545,7 @@ def _revalidar_altura_camiones(
     effective = get_effective_config(config, venta)
 
     validator = TruckValidator(config)
-    validator.validar_camiones(camiones, operacion=operacion, effective_config=effective)
+    validator.validar_camiones(camiones, operacion=operacion, effective_config=effective, venta=venta)
 
 
 

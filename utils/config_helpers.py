@@ -54,6 +54,9 @@ def get_effective_config(client_config, venta: str = None) -> dict:
             "ALVI_FLUJO_CONTINUO_CAMIONES": channel.get("ALVI_FLUJO_CONTINUO_CAMIONES", getattr(client_config, 'ALVI_FLUJO_CONTINUO_CAMIONES', [])),
             "ALVI_FLUJO_CONTINUO_MAX_SKUS_PALLET": channel.get("ALVI_FLUJO_CONTINUO_MAX_SKUS_PALLET", getattr(client_config, 'ALVI_FLUJO_CONTINUO_MAX_SKUS_PALLET', 5)),
             
+            # Configuración por subcliente (SMU)
+            "SUBCLIENTE_CONFIG": channel.get("SUBCLIENTE_CONFIG", {}),
+
             # Camiones y rutas
             "TRUCK_TYPES": channel.get("TRUCK_TYPES", getattr(client_config, 'TRUCK_TYPES', {})),
             "RUTAS_POSIBLES": channel.get("RUTAS_POSIBLES", getattr(client_config, 'RUTAS_POSIBLES', {})),
@@ -79,6 +82,7 @@ def get_effective_config(client_config, venta: str = None) -> dict:
         "ALVI_FLUJOS_SEPARADOS": getattr(client_config, 'ALVI_FLUJOS_SEPARADOS', False),
         "ALVI_FLUJO_CONTINUO_CAMIONES": getattr(client_config, 'ALVI_FLUJO_CONTINUO_CAMIONES', []),
         "ALVI_FLUJO_CONTINUO_MAX_SKUS_PALLET": getattr(client_config, 'ALVI_FLUJO_CONTINUO_MAX_SKUS_PALLET', 5),
+        "SUBCLIENTE_CONFIG": {},
         "TRUCK_TYPES": getattr(client_config, 'TRUCK_TYPES', {}),
         "RUTAS_POSIBLES": getattr(client_config, 'RUTAS_POSIBLES', {}),
     }
@@ -237,3 +241,49 @@ def permite_apilamiento_cd(client_config, cd: str, venta: str = None) -> bool:
     effective = get_effective_config(client_config, venta)
     cds_sin_apilamiento = effective.get("CDS_SIN_APILAMIENTO", [])
     return cd not in cds_sin_apilamiento
+
+def get_consolidacion_config(client_config, subcliente: str = None, oc: str = None, venta: str = None) -> dict:
+    """
+    Retorna configuración de consolidación específica para SMU según subcliente y flujo.
+    
+    Args:
+        client_config: Configuración del cliente
+        subcliente: "Alvi" o "Rendic" (None = usar default)
+        oc: "INV" o "CRR" (solo aplica a Alvi)
+        venta: Canal de venta
+    
+    Returns:
+        Dict con PERMITE_CONSOLIDACION y MAX_SKUS_POR_PALLET
+    """
+    print(f"[DEBUG CONSOLIDACION] subcliente={subcliente}, oc={oc}, venta={venta}")
+    effective = get_effective_config(client_config, venta)
+    
+    # Valores por defecto del canal
+    config = {
+        "PERMITE_CONSOLIDACION": effective.get("PERMITE_CONSOLIDACION", False),
+        "MAX_SKUS_POR_PALLET": effective.get("MAX_SKUS_POR_PALLET", 1),
+        "ALTURA_MAX_PICKING_APILADO_CM": effective.get("ALTURA_MAX_PICKING_APILADO_CM"),
+    }
+    
+    # Si no hay subcliente, retornar default
+    if not subcliente:
+        return config
+    
+    # Buscar SUBCLIENTE_CONFIG en el channel
+    if hasattr(client_config, 'CHANNEL_CONFIG'):
+        channel = client_config.CHANNEL_CONFIG.get(venta, {}) if venta else {}
+        subcliente_configs = channel.get("SUBCLIENTE_CONFIG", {})
+        
+        if subcliente in subcliente_configs:
+            sub_config = subcliente_configs[subcliente]
+            
+            # Si es Alvi y tiene flujo específico (INV o CRR)
+            if subcliente == "Alvi" and oc and oc.upper() in sub_config:
+                flujo_config = sub_config[oc.upper()]
+                config["PERMITE_CONSOLIDACION"] = flujo_config.get("PERMITE_CONSOLIDACION", False)
+                config["MAX_SKUS_POR_PALLET"] = flujo_config.get("MAX_SKUS_POR_PALLET", 1)
+            else:
+                # Config general del subcliente (Rendic o Alvi sin flujo)
+                config["PERMITE_CONSOLIDACION"] = sub_config.get("PERMITE_CONSOLIDACION", False)
+                config["MAX_SKUS_POR_PALLET"] = sub_config.get("MAX_SKUS_POR_PALLET", 1)
+    return config
