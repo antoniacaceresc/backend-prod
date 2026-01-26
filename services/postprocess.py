@@ -21,8 +21,6 @@ from utils.config_helpers import extract_truck_capacities
 from optimization.utils.helpers import calcular_posiciones_apilabilidad
 from core.config import get_client_config
 from optimization.validation.height_validator import HeightValidator
-
-# ✅ NUEVO: Importar desde módulo de validación refactorizado
 from optimization.validation import TruckValidator
 
 
@@ -258,6 +256,9 @@ def move_orders(
         
         # Validar reglas del cliente ANTES de agregar
         _validar_reglas_cliente_pre_agregar(cam_dest, pedidos_obj, config, cliente, venta)
+
+        # Validar altura ANTES de agregar (simula y valida)
+        _validar_altura_pre_agregar(cam_dest, pedidos_obj, config, cliente, venta)
         
         # Agregar pedidos (valida automáticamente capacidad básica)
         try:
@@ -283,6 +284,10 @@ def move_orders(
     # RECALCULAR opciones para TODOS los camiones
     for cam in camiones:
         _actualizar_opciones_tipo_camion(cam, config, venta)
+
+        # Actualizar alertas de picking para todos (SMU)
+        if cliente.lower() == 'smu':
+            _actualizar_alertas_picking_camion(cam, config, venta)
     
     # 4) Devolver respuesta
     return _to_response(camiones, pedidos_no_inc, cap_default)
@@ -318,14 +323,25 @@ def add_truck(
     except ValueError:
         tipo_ruta = TipoRuta.NORMAL
     
-    # 3) Crear camión nuevo
+    # 3) Obtener tipos de camión permitidos para esta ruta
+    cd_list = cd if isinstance(cd, list) else [cd]
+    ce_list = ce if isinstance(ce, list) else [ce]
+    
+    camiones_permitidos = _obtener_todos_tipos_para_ruta(
+        config, cd_list, ce_list, tipo_ruta.value, venta
+    )
+    
+    # Usar el primer tipo permitido, o PAQUETERA como fallback
+    tipo_inicial = camiones_permitidos[0] if camiones_permitidos else TipoCamion.PAQUETERA
+    
+    # 4) Crear camión nuevo
     nuevo_camion = Camion(
         id=uuid.uuid4().hex,
         tipo_ruta=tipo_ruta,
-        tipo_camion=TipoCamion.PAQUETERA,
-        cd=cd if isinstance(cd, list) else [cd],
-        ce=ce if isinstance(ce, list) else [ce],
-        grupo=f"manual__{'-'.join(cd)}__{'-'.join(map(str, ce))}",
+        tipo_camion=tipo_inicial,
+        cd=cd_list,
+        ce=ce_list,
+        grupo=f"manual__{'-'.join(cd_list)}__{'-'.join(map(str, ce_list))}",
         capacidad=cap_default,
         pedidos=[]
     )
@@ -341,6 +357,9 @@ def add_truck(
     # RECALCULAR opciones para TODOS los camiones
     for cam in camiones:
         _actualizar_opciones_tipo_camion(cam, config, venta)
+        if cliente.lower() == 'smu':
+                _actualizar_alertas_picking_camion(cam, config, venta)
+    
     
     # 5) Devolver respuesta
     return _to_response(camiones, pedidos_no_inc, cap_default)
@@ -390,6 +409,9 @@ def delete_truck(
     # RECALCULAR opciones para TODOS los camiones
     for cam in camiones:
         _actualizar_opciones_tipo_camion(cam, config, venta)
+        
+        if cliente.lower() == 'smu':
+                _actualizar_alertas_picking_camion(cam, config, venta)
     
     # 4) Devolver respuesta
     return _to_response(camiones, pedidos_no_inc, cap_default)
@@ -420,7 +442,7 @@ def apply_truck_type_change(
     # 1) Reconstruir estado
     camiones, pedidos_no_inc, config, cap_default = _rebuild_state(state, cliente, venta)
     
-    # ✅ CORREGIDO: Inferir venta correctamente
+    #  Inferir venta correctamente
     capacidades = extract_truck_capacities(config, venta)
     
     # 2) Buscar camión
@@ -489,6 +511,9 @@ def apply_truck_type_change(
     # RECALCULAR opciones para TODOS los camiones
     for cam in camiones:
         _actualizar_opciones_tipo_camion(cam, config, venta)
+        
+        if cliente.lower() == 'smu':
+                _actualizar_alertas_picking_camion(cam, config, venta)
     
     # 7) Devolver respuesta
     return _to_response(camiones, pedidos_no_inc, cap_default)
@@ -548,6 +573,85 @@ def _revalidar_altura_camiones(
     validator.validar_camiones(camiones, operacion=operacion, effective_config=effective, venta=venta)
 
 
+def _validar_altura_pre_agregar(
+    camion: Camion,
+    pedidos_a_agregar: List[Pedido],
+    config,
+    cliente: str,
+    venta: str = None
+) -> None:
+    """
+    Valida que agregar los pedidos no viole restricciones de altura.
+    Simula el agregado y valida sin modificar el estado real.
+    
+    Raises:
+        ValueError: Si agregar los pedidos violaría restricciones de altura
+    """
+    from copy import deepcopy
+    from utils.config_helpers import get_effective_config, get_consolidacion_config
+    from optimization.validation.height_validator import HeightValidator
+    
+    # Crear copia del camión con los pedidos agregados
+    camion_simulado = deepcopy(camion)
+    camion_simulado.pedidos = camion.pedidos + pedidos_a_agregar
+    
+    # Verificar si tiene SKUs para validar
+    tiene_skus = any(p.tiene_skus for p in camion_simulado.pedidos)
+    if not tiene_skus:
+        return  # Sin SKUs, no hay validación de altura
+    
+    # Obtener configuración
+    effective = get_effective_config(config, venta)
+    
+    # Verificar si la validación de altura está habilitada
+    if not effective.get('VALIDAR_ALTURA', True):
+        return
+    
+    # Obtener altura máxima del camión
+    altura_maxima = camion_simulado.capacidad.altura_cm
+    if hasattr(config, 'get_altura_maxima'):
+        subcliente = ""
+        if camion_simulado.pedidos:
+            subcliente = camion_simulado.pedidos[0].metadata.get("SUBCLIENTE", "")
+        altura_maxima = config.get_altura_maxima(subcliente, altura_maxima)
+    
+    # Obtener configuración de consolidación (incluye ALTURA_MAX_PICKING_APILADO_CM)
+    subcliente = None
+    oc = None
+    if camion_simulado.pedidos:
+        primer_pedido = camion_simulado.pedidos[0]
+        subcliente = primer_pedido.metadata.get("SUBCLIENTE") if primer_pedido.metadata else None
+        oc = primer_pedido.oc
+    
+    consolidacion = get_consolidacion_config(config, subcliente=subcliente, oc=oc, venta=venta)
+    
+    # Crear validador
+    validator = HeightValidator(
+        altura_maxima_cm=altura_maxima,
+        permite_consolidacion=consolidacion["PERMITE_CONSOLIDACION"],
+        max_skus_por_pallet=consolidacion["MAX_SKUS_POR_PALLET"],
+        max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM")
+    )
+    
+    # Ejecutar validación
+    es_valido, errores, layout, debug_info = validator.validar_camion_rapido(camion_simulado)
+    
+    if not es_valido:
+        # Construir mensaje de error descriptivo
+        errores_limpios = [str(e) for e in errores if e]
+        
+        if errores_limpios:
+            msg = "No se pueden agregar los pedidos: " + "; ".join(errores_limpios)
+        else:
+            # Si no hay errores específicos, dar mensaje genérico
+            msg = "No se pueden agregar los pedidos: excede las restricciones de altura del camión"
+            
+            # Agregar info de altura máxima de picking si aplica
+            altura_picking_max = consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM")
+            if altura_picking_max:
+                msg += f" (máximo {altura_picking_max}cm cuando hay picking)"
+        
+        raise ValueError(msg)
 
 # ============================================================================
 # HELPERS INTERNOS
@@ -771,28 +875,6 @@ def _validar_reglas_cliente_pre_agregar(
                 raise ValueError(
                     f"SMU no permite mezclar flujos en un camión. "
                 )
-        
-        # Validación SMU: no permitir picking duplicado del mismo SKU
-        effective = _get_effective_config_para_postprocess(config, [camion], venta)
-        if effective.get('PROHIBIR_PICKING_DUPLICADO', False):
-            # Obtener SKUs de picking actuales en el camión
-            skus_picking_actuales = set()
-            for pedido in camion.pedidos:
-                if hasattr(pedido, 'skus') and pedido.skus:
-                    for sku in pedido.skus:
-                        if sku.cantidad_pallets < 1.0:  # Es picking
-                            skus_picking_actuales.add(sku.sku_id)
-            
-            # Verificar SKUs de picking en pedidos a agregar
-            for pedido in pedidos_a_agregar:
-                if hasattr(pedido, 'skus') and pedido.skus:
-                    for sku in pedido.skus:
-                        if sku.cantidad_pallets % 1 > 0.001:  # Es picking
-                            if sku.sku_id in skus_picking_actuales:
-                                raise ValueError(
-                                    f"SMU no permite picking duplicado del mismo SKU en un camión. "
-                                    f"El SKU {sku.sku_id} ya tiene picking en este camión."
-                                )
 
         # Validar que el tipo de camión sea válido para el flujo del pedido
         tipo_ruta = camion.tipo_ruta.value if camion.tipo_ruta else "normal"
@@ -881,3 +963,41 @@ def _get_effective_config_para_postprocess(config, camiones: List[Camion], venta
     from utils.config_helpers import get_effective_config
     
     return get_effective_config(config, venta)
+
+
+def _actualizar_alertas_picking_camion(camion: Camion, config, venta: str = None) -> None:
+    """
+    Detecta y asigna alertas de picking duplicado a un camión específico.
+    """
+    from collections import defaultdict
+    
+    effective = _get_effective_config_para_postprocess(config, [camion], venta)
+    if not effective.get('PROHIBIR_PICKING_DUPLICADO', False):
+        return
+    
+    alertas = []
+    skus_picking: Dict[str, List[tuple]] = defaultdict(list)
+    
+    for pedido in camion.pedidos:
+        if not hasattr(pedido, 'skus') or not pedido.skus:
+            continue
+        
+        for sku in pedido.skus:
+            if sku.cantidad_pallets % 1 > 0.001:
+                skus_picking[sku.sku_id].append((pedido.pedido, sku.cantidad_pallets))
+    
+    for sku_id, pedidos_info in skus_picking.items():
+        if len(pedidos_info) > 1:
+            alertas.append({
+                'tipo': 'PICKING_DUPLICADO',
+                'sku_id': sku_id,
+                'pedidos': [
+                    {'pedido_id': pid, 'cajas': round(cant, 3)}
+                    for pid, cant in pedidos_info
+                ]
+            })
+    
+    if alertas:
+        camion.metadata['alertas_picking'] = alertas
+    elif 'alertas_picking' in camion.metadata:
+        del camion.metadata['alertas_picking']  # Limpiar si ya no hay conflictos

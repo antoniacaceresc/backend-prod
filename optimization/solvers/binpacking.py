@@ -16,8 +16,7 @@ from optimization.solvers.constraints import (
     agregar_restriccion_po_agrupado,                            
     agregar_restricciones_apilabilidad,
     agregar_restricciones_walmart_multicd,
-    agregar_restriccion_misma_po_diferente_camion,
-    agregar_restriccion_picking_sku_unico)
+    agregar_restriccion_misma_po_diferente_camion)
 from optimization.utils.helpers import preparar_datos_solver, heuristica_ffd
 from optimization.solvers.output import construir_camiones_desde_solver
 
@@ -55,6 +54,33 @@ def optimizar_grupo_binpacking(
             'pedidos_excluidos': [],
             'camiones': []
         }
+    
+    # Validar pedidos inviables
+    pedidos_validos = []
+    pedidos_inviables = []
+    
+    for p in pedidos:
+        excede_peso = p.peso > capacidad.cap_weight
+        excede_vol = p.volumen > capacidad.cap_volume
+        excede_pallets = p.pallets_capacidad > capacidad.max_pallets
+        
+        if excede_peso or excede_vol or excede_pallets:
+            pedidos_inviables.append(p)
+        else:
+            pedidos_validos.append(p)
+    
+    # Si TODOS son inviables, retornar inmediatamente
+    if not pedidos_validos:
+        return {
+            'status': 'NO_SOLUTION',
+            'pedidos_asignados_ids': [],
+            'pedidos_asignados': [],
+            'pedidos_excluidos': [_pedido_a_dict_excluido(p, capacidad) for p in pedidos_inviables],
+            'camiones': []
+        }
+    
+    # Continuar SOLO con válidos
+    pedidos = pedidos_validos
     
     # Preparar datos
     datos = preparar_datos_solver(pedidos, capacidad)
@@ -113,16 +139,30 @@ def optimizar_grupo_binpacking(
         
     # Construir salida
     if estado in ('OPTIMAL', 'FEASIBLE'):
-        return construir_camiones_desde_solver(
+        resultado = construir_camiones_desde_solver(
             solver, x, y_truck, pedidos, pedidos_ids, grupo_cfg,
             capacidad, datos, n_cam, 'binpacking', tipo_camion
         )
+
+        # Agregar inviables a excluidos
+        if pedidos_inviables:
+            excluidos_inviables = [_pedido_a_dict_excluido(p, capacidad) for p in pedidos_inviables]
+            resultado['pedidos_excluidos'].extend(excluidos_inviables)
+        
+        return resultado
+
     else:
+
+        # Incluir tanto los que no se asignaron como los inviables
+        todos_excluidos = [_pedido_a_dict_excluido(p, capacidad) for p in pedidos]
+        if pedidos_inviables:
+            todos_excluidos.extend([_pedido_a_dict_excluido(p, capacidad) for p in pedidos_inviables])
+        
         return {
             'status': estado,
             'pedidos_asignados_ids': [],
             'pedidos_asignados': [],
-            'pedidos_excluidos': [_pedido_a_dict_excluido(p, capacidad) for p in pedidos],
+            'pedidos_excluidos': todos_excluidos,
             'camiones': []
         }
 
@@ -204,14 +244,7 @@ def _agregar_restricciones_generales_binpacking(
         agregar_restriccion_misma_po_diferente_camion(
             model, x, datos, pedidos_ids, n_cam
         )
-        
-    # Restricción SMU: no permitir picking duplicado del mismo SKU
-    if effective_config.get("PROHIBIR_PICKING_DUPLICADO", False):
-        # Obtener objetos pedido desde datos
-        pedidos_objs = [datos[pid]['pedido_obj'] for pid in pedidos_ids if pid in datos]
-        agregar_restriccion_picking_sku_unico(
-            model, x, pedidos_objs, pedidos_ids, n_cam
-        )
+
         
 
 

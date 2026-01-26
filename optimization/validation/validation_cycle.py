@@ -17,7 +17,8 @@ from typing import List, Set, Tuple
 
 from models.domain import Camion, Pedido, TruckCapacity
 from optimization.validation.truck_validator import TruckValidator
-from optimization.validation.adjustment import PostValidationAdjuster, PedidoRecovery
+from optimization.validation.adjustment import PostValidationAdjuster, PedidoRecovery, AdjustmentResult
+from optimization.validation.greedy_injection import inyectar_pedidos_greedy
 
 
 # Flag para activar/desactivar prints de debug
@@ -63,7 +64,7 @@ class ValidationCycle:
         result = cycle.ejecutar(camiones, pedidos_asignados)
     """
     
-    MAX_INTENTOS_RECUPERACION = 3
+    MAX_INTENTOS_RECUPERACION = 5
     
     def __init__(
         self,
@@ -150,6 +151,22 @@ class ValidationCycle:
                 }
         
         all_camiones.extend(camiones_validos)
+
+        # 2. INYECCIÓN GREEDY: Intentar meter pedidos en camiones existentes
+        #    ANTES de crear camiones nuevos en recuperación
+        if pedidos_removidos and all_camiones:
+            injection_result = inyectar_pedidos_greedy(
+                camiones=all_camiones,
+                pedidos_sobrantes=pedidos_removidos,
+                client_config=self.config,
+                effective_config=self.effective_config,
+                venta=self.venta
+            )
+            pedidos_removidos = injection_result.pedidos_no_inyectados
+            
+            if DEBUG_VALIDATION:
+                print(f"[INYECCIÓN GREEDY] Inyectados: {injection_result.total_inyectados}, Restantes: {len(pedidos_removidos)}")
+        
         
         
         # 3. Loop de recuperación
@@ -183,17 +200,36 @@ class ValidationCycle:
             all_camiones.extend(adj_result.camiones_validos)
             pedidos_removidos = adj_result.pedidos_removidos
 
+        # 4. INYECCIÓN GREEDY: Intentar meter pedidos sobrantes en camiones existentes
+        if pedidos_removidos and all_camiones:
+            if DEBUG_VALIDATION:
+                print(f"\n[INYECCIÓN GREEDY] Intentando inyectar {len(pedidos_removidos)} pedidos en {len(all_camiones)} camiones")
+            
+            injection_result = inyectar_pedidos_greedy(
+                camiones=all_camiones,
+                pedidos_sobrantes=pedidos_removidos,
+                client_config=self.config,
+                effective_config=self.effective_config,
+                venta=self.venta
+            )
+            
+            # Actualizar pedidos que quedaron fuera
+            pedidos_removidos = injection_result.pedidos_no_inyectados
+            
+            if DEBUG_VALIDATION:
+                print(f"[INYECCIÓN GREEDY] Inyectados: {injection_result.total_inyectados}")
+                print(f"[INYECCIÓN GREEDY] No inyectados: {injection_result.total_no_inyectados}")
+
+
         # Actualizar pedidos asignados
         pedidos_asignados = set()
         for cam in all_camiones:
             pedidos_asignados.update(p.pedido for p in cam.pedidos)
-        
-        if DEBUG_VALIDATION:
-            print(f"\n[CICLO COMPLETO] Resultado {fase}:")
-            print(f"  - Camiones válidos: {len(all_camiones)}")
-            print(f"  - Pedidos asignados: {len(pedidos_asignados)}")
-            print(f"  - Pedidos sin recuperar: {len(pedidos_removidos)}")
-            print(f"  - Iteraciones: {intento}")
+
+        # Actualizar alertas de picking post-validación (SMU)
+        if self.effective_config.get('PROHIBIR_PICKING_DUPLICADO', False):
+            for camion in camiones:
+                self._actualizar_alertas_picking_camion(camion)
 
         return ValidationCycleResult(
             camiones_validos=all_camiones,
@@ -201,6 +237,41 @@ class ValidationCycle:
             pedidos_no_recuperados=pedidos_removidos,
             iteraciones=intento
         )
+
+
+    def _actualizar_alertas_picking_camion(self, camion: Camion) -> None:
+        """
+        Detecta y asigna alertas de picking duplicado basándose en los pedidos ACTUALES.
+        """
+        from collections import defaultdict
+        
+        alertas = []
+        skus_picking: dict = defaultdict(list)
+        
+        for pedido in camion.pedidos:
+            if not hasattr(pedido, 'skus') or not pedido.skus:
+                continue
+            
+            for sku in pedido.skus:
+                # Solo pickings (cantidad fraccionaria)
+                if sku.cantidad_pallets % 1 > 0.001:
+                    skus_picking[sku.sku_id].append((pedido.pedido, sku.cantidad_pallets))
+        
+        for sku_id, pedidos_info in skus_picking.items():
+            if len(pedidos_info) > 1:
+                alertas.append({
+                    'tipo': 'PICKING_DUPLICADO',
+                    'sku_id': sku_id,
+                    'pedidos': [
+                        {'pedido_id': pid, 'cajas': round(cant, 3)}
+                        for pid, cant in pedidos_info
+                    ]
+                })
+        
+        if alertas:
+            camion.metadata['alertas_picking'] = alertas
+        elif 'alertas_picking' in camion.metadata:
+            del camion.metadata['alertas_picking']
 
 
 # Función de conveniencia para uso simple

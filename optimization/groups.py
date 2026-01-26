@@ -140,7 +140,6 @@ def _build_normal_groups(
             ce=ces,
             oc=oc
         )
-        print(f"[DEBUG GROUPS] Creando grupo: cd={cds}, ce={ces}, oc={oc}")
         
         grupos.append((cfg, pedidos_grupo))
         asignados.update(p.pedido for p in pedidos_grupo)

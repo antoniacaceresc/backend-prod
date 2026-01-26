@@ -24,6 +24,8 @@ class WalmartConfig:
             "SKU": "SKU",
             "ALTURA_PICKING": "Altura Picking",
             "ALTURA_FULL_PALLET": "Altura full Pallet",
+            "APILABLE_BASE": "Apilable Base",
+            "MONTADO": "Montado",
 
         },
         "Helados": {

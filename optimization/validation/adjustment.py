@@ -3,7 +3,6 @@
 Ajuste post-validación de camiones.
 Maneja la remoción de pedidos de camiones inválidos y su recuperación.
 
-Extraído de orchestrator.py para mejor modularidad.
 """
 
 from __future__ import annotations

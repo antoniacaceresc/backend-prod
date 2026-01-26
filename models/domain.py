@@ -930,7 +930,7 @@ class Camion:
             "opciones_tipo_camion": self.opciones_tipo_camion,
         }
         
-        # ✅ AGREGAR: Incluir información de validación si existe
+        # Incluir información de validación si existe
         if self.metadata:
             if 'altura_validada' in self.metadata:
                 result['altura_validada'] = self.metadata['altura_validada']
@@ -940,6 +940,9 @@ class Camion:
             
             if 'layout_info' in self.metadata:
                 result['layout_info'] = self.metadata['layout_info']
+
+            if 'alertas_picking' in self.metadata:
+                result['alertas_picking'] = self.metadata['alertas_picking']
         
         return result
 

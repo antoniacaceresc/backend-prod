@@ -83,24 +83,12 @@ class VCUPipeline(OptimizationPipeline):
         
         start_time = time.time()
         
-        # ================================================================
-        # FASE 0: Adherencia BH (opcional)
-        # ================================================================
-        if self.adherencia_bh and self.adherencia_bh > 0:
-            fase0_result = self._ejecutar_fase_adherencia(pedidos, context)
-            all_camiones.extend(fase0_result.camiones)
-            context.pedidos_asignados.update(fase0_result.pedidos_asignados)
-        
-        
-        # Pedidos disponibles para Fase 1
-        pedidos_disponibles = self._filtrar_disponibles(pedidos, context.pedidos_asignados)
-        
 
         # ================================================================
         # FASE 1: Camiones Nestlé
         # ================================================================
-        if not context.timeout_cercano() and pedidos_disponibles:
-            fase1_result = self._ejecutar_fase_nestle(pedidos_disponibles, context)
+        if not context.timeout_cercano():
+            fase1_result = self._ejecutar_fase_nestle(pedidos, context)
             all_camiones.extend(fase1_result.camiones)
             context.pedidos_asignados.update(fase1_result.pedidos_asignados)
         
@@ -125,7 +113,8 @@ class VCUPipeline(OptimizationPipeline):
         # Aplicar adherencia final si está configurada
         if self.adherencia_bh and self.adherencia_bh > 0:
             all_camiones = aplicar_adherencia_backhaul(
-                all_camiones, self.config, self.adherencia_bh
+                all_camiones, self.config, self.adherencia_bh,
+                self.effective_config, self.venta
             )
 
         # CRÍTICO: Recalcular pedidos_asignados basándose en los camiones reales
@@ -143,7 +132,7 @@ class VCUPipeline(OptimizationPipeline):
             pedidos_asignados=context.pedidos_asignados,
             pedidos_no_incluidos=pedidos_no_incluidos,
             tiempo_total_ms=elapsed_ms,
-            fases_ejecutadas=['adherencia', 'nestle', 'backhaul']
+            fases_ejecutadas=['nestle', 'backhaul', 'adherencia']
         )
     
     def _ejecutar_fase_adherencia(
@@ -349,6 +338,7 @@ class VCUPipeline(OptimizationPipeline):
         
         # Preparar grupos con capacidades
         grupos_preparados = []
+        grupos_alvi_crr = []  # Grupos que requieren pasadas múltiples
         
         for cfg, pedidos_grupo in grupos:
             pedidos_no_asignados = self._filtrar_disponibles(
@@ -375,28 +365,49 @@ class VCUPipeline(OptimizationPipeline):
             if not camiones_nestle:
                 continue
             
-            tipo_camion = self.truck_selector.seleccionar_tipo_camion(
-                cfg, camiones_nestle, {'fase': 'nestle'}
-            )
+            # Detectar si es Alvi CRR (requiere pasadas múltiples)
+            es_alvi_crr = self._es_alvi_crr(cfg)
             
-            cap = get_capacity_for_type(self.config, tipo_camion, self.venta)
-            
-            # Ajustar si no permite apilamiento
-            from utils.config_helpers import permite_apilamiento_cd
-            cd_grupo = cfg.cd[0] if cfg.cd else ""
-            if not permite_apilamiento_cd(self.config, cd_grupo, self.venta):
-                cap = cap.sin_apilamiento()
-            
-            grupos_preparados.append((cfg, pedidos_no_asignados, cap, tipo_camion))
+            if es_alvi_crr:
+                # Guardar para procesamiento especial
+                grupos_alvi_crr.append((cfg, pedidos_no_asignados, camiones_nestle))
+            else:
+                # Procesamiento normal
+                tipo_camion = self.truck_selector.seleccionar_tipo_camion(
+                    cfg, camiones_nestle, {'fase': 'nestle'}
+                )
+                
+                cap = get_capacity_for_type(self.config, tipo_camion, self.venta)
+                
+                # Ajustar si no permite apilamiento
+                from utils.config_helpers import permite_apilamiento_cd
+                cd_grupo = cfg.cd[0] if cfg.cd else ""
+                if not permite_apilamiento_cd(self.config, cd_grupo, self.venta):
+                    cap = cap.sin_apilamiento()
+                
+                grupos_preparados.append((cfg, pedidos_no_asignados, cap, tipo_camion))
         
-        if not grupos_preparados:
-            return PipelineResult()
-        
-        # Ejecutar optimización
-        if paralelo:
-            return self._optimizar_paralelo(grupos_preparados, context)
+        # Procesar grupos Alvi CRR con pasadas múltiples
+        if grupos_alvi_crr:
+            result_alvi = self._procesar_alvi_crr_pasadas(grupos_alvi_crr, context)
+            # Los pedidos asignados ya se actualizan en el método
         else:
-            return self._optimizar_secuencial_grupos(grupos_preparados, context)
+            result_alvi = PipelineResult()
+
+        # Procesar grupos normales
+        if grupos_preparados:
+            if paralelo:
+                result_normal = self._optimizar_paralelo(grupos_preparados, context)
+            else:
+                result_normal = self._optimizar_secuencial_grupos(grupos_preparados, context)
+        else:
+            result_normal = PipelineResult()
+
+        # Combinar resultados
+        return PipelineResult(
+            camiones=result_alvi.camiones + result_normal.camiones,
+            pedidos_asignados=result_alvi.pedidos_asignados | result_normal.pedidos_asignados
+        )
     
     def _procesar_tipo_ruta_backhaul(
         self,
@@ -648,3 +659,58 @@ class VCUPipeline(OptimizationPipeline):
     ) -> List[Pedido]:
         """Filtra pedidos no asignados."""
         return [p for p in pedidos if p.pedido not in asignados]
+
+
+    def _es_alvi_crr(self, cfg: ConfiguracionGrupo) -> bool:
+        """Detecta si un grupo es Alvi CRR."""
+        if not cfg.cd or not cfg.oc:
+            return False
+        cd = cfg.cd[0] if isinstance(cfg.cd, list) else cfg.cd
+        return "Alvi" in cd and cfg.oc.upper() == "CRR"
+
+
+    def _procesar_alvi_crr_pasadas(
+        self,
+        grupos: List[Tuple],
+        context: PhaseContext
+    ) -> PipelineResult:
+        """
+        Procesa grupos Alvi CRR con pasadas múltiples: mediano → pequeño.
+        """
+        from utils.config_helpers import get_capacity_for_type
+        from models.enums import TipoCamion
+        
+        all_camiones = []
+        pedidos_asignados = set()
+        
+        # Orden de pasadas: mediano primero, luego pequeño
+        pasadas = [TipoCamion.MEDIANO, TipoCamion.PEQUEÑO, TipoCamion.PAQUETERA]
+        
+        for tipo_camion in pasadas:
+            for cfg, pedidos_grupo, camiones_permitidos in grupos:
+                # Verificar que este tipo esté permitido
+                if tipo_camion not in camiones_permitidos:
+                    continue
+                
+                # Filtrar pedidos no asignados aún
+                pedidos_disponibles = [
+                    p for p in pedidos_grupo 
+                    if p.pedido not in context.pedidos_asignados and p.pedido not in pedidos_asignados
+                ]
+                
+                if not pedidos_disponibles:
+                    continue
+                
+                cap = get_capacity_for_type(self.config, tipo_camion, self.venta)
+                
+                # Optimizar
+                grupos_preparados = [(cfg, pedidos_disponibles, cap, tipo_camion)]
+                result = self._optimizar_secuencial_grupos(grupos_preparados, context)
+                
+                all_camiones.extend(result.camiones)
+                pedidos_asignados.update(result.pedidos_asignados)
+        
+        return PipelineResult(
+            camiones=all_camiones,
+            pedidos_asignados=pedidos_asignados
+        )

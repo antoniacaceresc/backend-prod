@@ -119,7 +119,8 @@ class TruckValidator:
                     self._validar_camion_worker, 
                     cam, 
                     idx,
-                    print_lock
+                    print_lock,
+                    venta
                 ): cam
                 for idx, cam in enumerate(camiones_a_validar)
             }
@@ -144,7 +145,8 @@ class TruckValidator:
         self,
         cam: Camion,
         cam_idx: int,
-        print_lock: threading.Lock
+        print_lock: threading.Lock,
+        venta: str = None
     ) -> TruckValidationResult:
         """
         Worker que valida un camión individual.
@@ -157,6 +159,8 @@ class TruckValidator:
         Returns:
             TruckValidationResult con el resultado
         """
+        from utils.config_helpers import get_consolidacion_config
+
         start = time.time()
         error_msg = None
         
@@ -165,13 +169,25 @@ class TruckValidator:
             altura_maxima = self._get_altura_maxima(cam)
 
             # Obtener consolidación específica para este camión (SMU)
-            consolidacion = self._get_consolidacion_camion(cam)
+            subcliente = None
+            oc = None
+            if cam.pedidos:
+                primer_pedido = cam.pedidos[0]
+                subcliente = primer_pedido.metadata.get("SUBCLIENTE") if primer_pedido.metadata else None
+                oc = getattr(primer_pedido, 'oc', None)
             
+            consolidacion = get_consolidacion_config(
+                self.config, 
+                subcliente=subcliente, 
+                oc=oc, 
+                venta=venta
+            )
+
             # Crear validador
             validator = HeightValidator(
                 altura_maxima_cm=altura_maxima,
-                permite_consolidacion=consolidacion["PERMITE_CONSOLIDACION"],
-                max_skus_por_pallet=consolidacion["MAX_SKUS_POR_PALLET"],
+                permite_consolidacion=consolidacion.get("PERMITE_CONSOLIDACION", self.permite_consolidacion),
+                max_skus_por_pallet=consolidacion.get("MAX_SKUS_POR_PALLET", self.max_skus_por_pallet),
                 max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM")
             )
             

@@ -170,6 +170,7 @@ def _process_dataframe_con_skus(
     """
     # 1. Limpieza y normalización a nivel SKU
     df_skus = _limpiar_datos_skus(df_raw)
+
     # 2. Optimizar apilabilidad ANTES de validar
     altura_maxima = 270  # Default, o extraer de client_config
     from utils.config_helpers import get_effective_config
@@ -177,7 +178,7 @@ def _process_dataframe_con_skus(
     truck_types = effective.get("TRUCK_TYPES", {})
     if 'paquetera' in truck_types:
         altura_maxima = truck_types['paquetera'].get('altura_cm', 270)
-    
+        
     df_skus = _optimizar_apilabilidad_skus(df_skus, altura_maxima)
     
     # 3. Validar datos de SKU
@@ -296,43 +297,65 @@ def _optimizar_apilabilidad_skus(df: pd.DataFrame, altura_maxima_cm: float = 260
         altura = df.at[idx, 'ALTURA_FULL_PALLET']
         si_mismo = df.at[idx, 'SI_MISMO']
         
-        # REGLA 1: Si altura > 200cm → NO_APILABLE
-        if altura > 200:
-            df.at[idx, 'NO_APILABLE'] += si_mismo
-            df.at[idx, 'SI_MISMO'] = 0
-            cambios['si_mismo_a_no_apilable'] += 1
-            continue
+        # Separar parte entera (pallets completos) y decimal (picking)
+        pallets_completos = int(si_mismo)
+        picking = si_mismo - pallets_completos  # Parte decimal
+        es_solo_picking = pallets_completos == 0
         
-        # REGLA 2: Si 2 × altura > altura_max → intentar BASE/SUPERIOR
-        if 2 * altura > altura_maxima_cm:
-            puede_ser_base = df.at[idx, 'BASE'] > 0 or _tiene_columna_base(df, idx)
-            puede_ser_superior = df.at[idx, 'SUPERIOR'] > 0 or _tiene_columna_superior(df, idx)
+        # REGLAS 1 y 2: Solo aplican si hay pallets completos
+        if not es_solo_picking:
+            # REGLA 1: Si altura > 200cm → NO_APILABLE (solo pallets completos)
+            if altura > 200:
+                df.at[idx, 'NO_APILABLE'] += si_mismo
+                df.at[idx, 'SI_MISMO'] = 0
+                cambios['si_mismo_a_no_apilable'] += 1
+                continue
             
-            if puede_ser_base:
-                df.at[idx, 'BASE'] += si_mismo
-                df.at[idx, 'SI_MISMO'] = 0
-                cambios['si_mismo_a_base_superior'] += 1
-            elif puede_ser_superior:
-                df.at[idx, 'SUPERIOR'] += si_mismo
-                df.at[idx, 'SI_MISMO'] = 0
-                cambios['si_mismo_a_base_superior'] += 1
-            # Si no puede ser ni BASE ni SUPERIOR, dejar como SI_MISMO
-            continue
+            # REGLA 2: Si 2 × altura > altura_max → intentar BASE/SUPERIOR
+            if 2 * altura > altura_maxima_cm:
+                puede_ser_base = df.at[idx, 'BASE'] > 0 or _tiene_columna_base(df, idx)
+                puede_ser_superior = df.at[idx, 'SUPERIOR'] > 0 or _tiene_columna_superior(df, idx)
+                
+                if puede_ser_base:
+                    df.at[idx, 'BASE'] += si_mismo
+                    df.at[idx, 'SI_MISMO'] = 0
+                    cambios['si_mismo_a_base_superior'] += 1
+                elif puede_ser_superior:
+                    df.at[idx, 'SUPERIOR'] += si_mismo
+                    df.at[idx, 'SI_MISMO'] = 0
+                    cambios['si_mismo_a_base_superior'] += 1
+                continue
         
-        # REGLA 3: Cantidad impar → convertir 1 pallet a BASE/SUPERIOR
-        if si_mismo >= 1 and si_mismo % 2 != 0:  # Impar
-            puede_ser_base = df.at[idx, 'BASE'] > 0 or _tiene_columna_base(df, idx)
-            puede_ser_superior = df.at[idx, 'SUPERIOR'] > 0 or _tiene_columna_superior(df, idx)
-            
+        # REGLA 3: Convertir sobrantes (impar + picking) a BASE/SUPERIOR
+        # - Solo picking (0.3): convertir todo
+        # - Impar + picking (2.3): convertir 1 + 0.3 = 1.3
+        # - Par + picking (2.3 con par=2): convertir solo 0.3
+        # - Impar sin picking (3.0): convertir 1
+        puede_ser_base = df.at[idx, 'BASE'] > 0 or _tiene_columna_base(df, idx)
+        puede_ser_superior = df.at[idx, 'SUPERIOR'] > 0 or _tiene_columna_superior(df, idx)
+        
+        if es_solo_picking:
+            # Solo picking: convertir todo a BASE/SUPERIOR
+            a_convertir = picking
+        elif pallets_completos % 2 != 0:
+            # Impar: convertir 1 pallet + picking
+            a_convertir = 1 + picking
+        elif picking > 0.001:
+            # Par con picking: convertir solo el picking
+            a_convertir = picking
+        else:
+            # Par sin picking: nada que convertir
+            a_convertir = 0
+        
+        if a_convertir > 0.001:
             if puede_ser_base:
-                df.at[idx, 'BASE'] += 1
-                df.at[idx, 'SI_MISMO'] -= 1
+                df.at[idx, 'BASE'] += a_convertir
+                df.at[idx, 'SI_MISMO'] -= a_convertir
                 cambios['impares_ajustados'] += 1
             elif puede_ser_superior:
-                df.at[idx, 'SUPERIOR'] += 1
-                df.at[idx, 'SI_MISMO'] -= 1
+                df.at[idx, 'SUPERIOR'] += a_convertir
+                df.at[idx, 'SI_MISMO'] -= a_convertir
                 cambios['impares_ajustados'] += 1
-    
     for col in ['BASE', 'SUPERIOR', 'FLEXIBLE', 'NO_APILABLE', 'SI_MISMO']:
        df[col] = df[col].clip(lower=0)
     

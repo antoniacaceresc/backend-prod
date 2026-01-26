@@ -253,6 +253,12 @@ class PosicionCamion:
         # Obtener categorías dominantes
         cat_inf = self._categoria_dominante(inferior)
         cat_sup = self._categoria_dominante(superior)
+
+        # Pickings consolidados pueden ir sobre cualquier full pallet (excepto NO_APILABLE)
+        if superior.tiene_pickings and not superior.tiene_full_pallets:
+            if cat_inf == CategoriaApilamiento.NO_APILABLE:
+                return False, "NO_APILABLE no acepta nada encima"
+            return True, None  # Pickings pueden ir sobre cualquier otro
         
         # Regla 1: NO_APILABLE nunca tiene nada encima
         if cat_inf == CategoriaApilamiento.NO_APILABLE:
@@ -310,9 +316,7 @@ class PosicionCamion:
         
         # Regla 6: SUPERIOR generalmente no acepta nada encima (solo si es FLEXIBLE o SUPERIOR)
         if cat_inf == CategoriaApilamiento.SUPERIOR:
-            if cat_sup in (CategoriaApilamiento.FLEXIBLE, CategoriaApilamiento.SUPERIOR):
-                return True, None
-            return False, f"SUPERIOR no acepta {cat_sup.value} encima"
+            return False, f"SUPERIOR no acepta nada encima (es categoría que va arriba)"
         
         # Default: no permitir
         return False, f"Combinación no permitida: {cat_inf.value} + {cat_sup.value}"
@@ -331,6 +335,11 @@ class PosicionCamion:
         Returns:
             CategoriaApilamiento dominante
         """
+
+        # Pallets consolidados siempre van arriba
+        if pallet.es_consolidado:
+            return CategoriaApilamiento.SUPERIOR
+
         categorias = [f.categoria for f in pallet.fragmentos]
         
         if CategoriaApilamiento.NO_APILABLE in categorias:

@@ -55,8 +55,6 @@ class SmuConfig:
             "MODO_ADHERENCIA": None,
             
             "VALIDAR_ALTURA": True,
-            "PERMITE_CONSOLIDACION": False,
-            "MAX_SKUS_POR_PALLET": 1,
 
             # Restricciones comunes Picking
             "PROHIBIR_PICKING_DUPLICADO": True,
@@ -66,7 +64,7 @@ class SmuConfig:
             "ALVI_ALTURA_MAX_CM": 230,
 
             # Restricciones RENDIC
-            "RENDIC_ALTURA_MAX_CM": 240,
+            "RENDIC_ALTURA_MAX_CM": 240, #universal
 
             # CDs sin apilamiento permitido
             "CDS_SIN_APILAMIENTO": ["Bodega Noviciado"],
@@ -75,27 +73,27 @@ class SmuConfig:
             "SUBCLIENTE_CONFIG": {
                 "Alvi": {
                     "INV": {
-                        "PERMITE_CONSOLIDACION": False,
-                        "MAX_SKUS_POR_PALLET": 1,
+                        "PERMITE_CONSOLIDACION": True,
+                        "MAX_SKUS_POR_PALLET": 2,
                     },
                     "CRR": {
                         "PERMITE_CONSOLIDACION": True,
-                        "MAX_SKUS_POR_PALLET": 5,
+                        "MAX_SKUS_POR_PALLET": 2,
                         "PASADAS_CAMIONES": ["pequeño", "mediano"],  # Primero pequeños, luego medianos
                     },
                 },
                 "Rendic": {
-                    "PERMITE_CONSOLIDACION": False,
-                    "MAX_SKUS_POR_PALLET": 1,
+                    "PERMITE_CONSOLIDACION": True,
+                    "MAX_SKUS_POR_PALLET": 6,
                 },
             },
 
             "TRUCK_TYPES": {
-                'paquetera':        {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.2, 'max_pallets': 60, 'altura_cm': 280},
-                'rampla_directa':   {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.8, 'max_pallets': 56, 'altura_cm': 270},
+                'paquetera':        {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.7, 'max_pallets': 60, 'altura_cm': 280},
+                'rampla_directa':   {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.7, 'max_pallets': 56, 'altura_cm': 270},
                 'backhaul':         {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.6, 'max_pallets': 56, 'altura_cm': 240},
-                'mediano':          {'cap_weight': 10000, 'cap_volume': 18000, 'max_positions': 12, 'levels': 2, 'vcu_min': 0.1, 'max_pallets': 12, 'altura_cm': 230},
-                'pequeño':          {'cap_weight':  5000, 'cap_volume': 13000, 'max_positions':  3, 'levels': 2, 'vcu_min': 0.1, 'max_pallets':  3, 'altura_cm': 230},
+                'mediano':          {'cap_weight': 10000, 'cap_volume': 18000, 'max_positions': 12, 'levels': 2, 'vcu_min': 0.5, 'max_pallets': 12, 'altura_cm': 230},
+                'pequeño':          {'cap_weight':  5000, 'cap_volume': 13000, 'max_positions':  3, 'levels': 2, 'vcu_min': 0.5, 'max_pallets':  3, 'altura_cm': 230},
             },
 
             "RUTAS_POSIBLES": {

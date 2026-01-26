@@ -16,8 +16,7 @@ from optimization.solvers.constraints import (
     agregar_restricciones_apilabilidad,
     agregar_restricciones_walmart_multicd,
     agregar_restricciones_capacidad_dura,
-    agregar_restriccion_misma_po_diferente_camion,
-    agregar_restriccion_picking_sku_unico)
+    agregar_restriccion_misma_po_diferente_camion)
 from optimization.utils.helpers import preparar_datos_solver, heuristica_ffd
 from optimization.solvers.output import construir_camiones_desde_solver
 
@@ -264,13 +263,6 @@ def _agregar_restricciones_generales_vcu(
             model, x, datos, pedidos_ids, n_cam
         )
         
-    # Restricción SMU: no permitir picking duplicado del mismo SKU
-    if effective_config.get("PROHIBIR_PICKING_DUPLICADO", False):
-        # Obtener objetos pedido desde datos
-        pedidos_objs = [datos[pid]['pedido_obj'] for pid in pedidos_ids if pid in datos]
-        agregar_restriccion_picking_sku_unico(
-            model, x, pedidos_objs, pedidos_ids, n_cam
-        )
 
 
 def _definir_objetivo_vcu(

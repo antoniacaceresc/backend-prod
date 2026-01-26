@@ -35,7 +35,7 @@ class HeightValidator:
     def __init__(
         self,
         altura_maxima_cm: float = 270,
-        permite_consolidacion: bool = False,
+        permite_consolidacion: bool = True,
         max_skus_por_pallet: int = 3,
         max_altura_picking_apilado_cm: float = None,
     ):
@@ -83,6 +83,14 @@ class HeightValidator:
                 if frag.altura_cm > self.altura_maxima_cm:
                     errores.append(f"SKU {frag.sku_id} del pedido {frag.pedido_id} excede altura: " 
                                 f"{frag.altura_cm:.1f}cm > {self.altura_maxima_cm:.1f}cm")
+                
+                # Validar pickings contra su límite específico 
+                if frag.es_picking and self.max_altura_picking_apilado_cm:
+                    if frag.altura_cm > self.max_altura_picking_apilado_cm:
+                        errores.append(
+                            f"PICKING SKU {frag.sku_id} del pedido {frag.pedido_id} excede altura máxima picking: "
+                            f"{frag.altura_cm:.1f}cm > {self.max_altura_picking_apilado_cm:.1f}cm"
+                        )
             
             if errores and any(e is not None for e in errores):
                 self._reportar_fallas_detallado(camion, debug_info, fragmentos, errores)
@@ -405,6 +413,39 @@ class HeightValidator:
         
         for frag in fragmentos_ordenados:
             colocado = False
+
+            # CASO 0: FLEXIBLE puede insertarse DEBAJO de SUPERIOR existente
+            if frag.categoria == CategoriaApilamiento.FLEXIBLE:
+                for posicion in layout.posiciones:
+                    if len(posicion.pallets_apilados) == 1:  # Solo 1 pallet en posición
+                        pallet_existente = posicion.pallets_apilados[0]
+                        cat_existente = self._categoria_dominante_pallet(pallet_existente)
+                        
+                        if cat_existente == CategoriaApilamiento.SUPERIOR:
+                            # Verificar que hay espacio para ambos
+                            altura_nueva_total = frag.altura_cm + pallet_existente.altura_total_cm
+                            if altura_nueva_total <= posicion.altura_maxima_cm:
+                                # Crear pallet FLEXIBLE en nivel 0
+                                pallet_flexible = PalletFisico(
+                                    id=f"pallet_{pallet_id_counter}",
+                                    posicion_id=posicion.id,
+                                    nivel=0
+                                )
+                                pallet_flexible.agregar_fragmento(frag)
+                                
+                                # Mover SUPERIOR a nivel 1
+                                pallet_existente.nivel = 1
+                                
+                                # Insertar FLEXIBLE al inicio de la lista
+                                posicion.pallets_apilados.insert(0, pallet_flexible)
+                                
+                                pallet_id_counter += 1
+                                colocado = True
+                                break
+                
+                if colocado:
+                    debug_info['fragmentos_colocados'] += 1
+                    continue
             
             # CASO 1: Intentar apilar en posición existente
             for posicion in layout.posiciones:
@@ -413,20 +454,30 @@ class HeightValidator:
 
                 # SOLO consolidar pickings, NO pallets completos
                 if frag.es_picking and posicion.pallets_apilados:
-                    pallet_superior = posicion.pallets_apilados[-1]
+                    # Buscar pallet que tenga pickings (no full pallets)
+                    pallet_para_consolidar = next(
+                        (p for p in posicion.pallets_apilados if p.tiene_pickings),
+                        None
+                    )
                     
-                    # Verificar si se puede agregar a este pallet (solo para pickings)
-                    if self._puede_agregar_a_pallet(pallet_superior, frag):
-                        # Intentar agregar al pallet existente
-                        pallet_superior.agregar_fragmento(frag)
+                    if pallet_para_consolidar and self._puede_agregar_a_pallet(pallet_para_consolidar, frag):
+                        # Agregar el fragmento
+                        pallet_para_consolidar.agregar_fragmento(frag)
                         
-                        # Verificar que no exceda altura
-                        if posicion.altura_usada_cm <= self.altura_maxima_cm:
-                            colocado = True
-                            break
-                        else:
-                            # Rollback: quitar el fragmento
+                        # Validar altura máxima de picking apilado
+                        if self.max_altura_picking_apilado_cm:
+                            altura_picking_posicion = self._calcular_altura_picking_posicion(posicion)
+                            if altura_picking_posicion > self.max_altura_picking_apilado_cm:
+                                pallet_superior.fragmentos.remove(frag)
+                                continue
+                        
+                        # Verificar altura total del camión
+                        if posicion.altura_usada_cm > self.altura_maxima_cm:
                             pallet_superior.fragmentos.remove(frag)
+                            continue
+                        
+                        colocado = True
+                        break
                 
                 
                 # Si no se pudo agregar al pallet existente,
@@ -530,36 +581,34 @@ class HeightValidator:
                 if posicion.esta_vacia:
                     continue
                 
-                # Intento 1a: Consolidar en pallet existente (pickings)
+                # Intento 1a: Consolidar picking en pallet de pickings existente
                 if frag.es_picking and posicion.pallets_apilados:
-                    pallet_superior = posicion.pallets_apilados[-1]
+                    pallet_pickings = next(
+                        (p for p in posicion.pallets_apilados if p.tiene_pickings and not p.tiene_full_pallets),
+                        None
+                    )
                     
-                    if self._puede_agregar_a_pallet(pallet_superior, frag):
+                    if pallet_pickings and self._puede_agregar_a_pallet(pallet_pickings, frag):
                         intento_info['intentos'].append({
                             'tipo': 'consolidar_en_pallet',
                             'posicion': pos_idx,
-                            'pallet': pallet_superior.id,
+                            'pallet': pallet_pickings.id,
                             'resultado': 'intentando'
                         })
                         
-                        # Intentar agregar
-                        pallet_superior.agregar_fragmento(frag)
-                        
-                        if posicion.altura_usada_cm <= self.altura_maxima_cm:
-                            colocado = True
-                            intento_info['exito'] = True
-                            intento_info['ubicacion'] = f"posicion_{pos_idx}_consolidado"
-                            intento_info['intentos'][-1]['resultado'] = 'exito'
-                            continue
-                        
-                        # Validar altura máxima de picking apilado (SMU)
+                        pallet_pickings.agregar_fragmento(frag)
+
                         if self.max_altura_picking_apilado_cm:
                             altura_picking_posicion = self._calcular_altura_picking_posicion(posicion)
                             if altura_picking_posicion > self.max_altura_picking_apilado_cm:
-                                pallet_superior.fragmentos.remove(frag)
+                                pallet_pickings.fragmentos.remove(frag)
                                 intento_info['intentos'][-1]['resultado'] = 'excede_altura_picking'
-                                intento_info['intentos'][-1]['altura_picking'] = altura_picking_posicion
                                 continue
+                        
+                        if posicion.altura_usada_cm > self.altura_maxima_cm:
+                            pallet_pickings.fragmentos.remove(frag)
+                            intento_info['intentos'][-1]['resultado'] = 'excede_altura_camion'
+                            continue
                         
                         colocado = True
                         intento_info['exito'] = True
@@ -567,6 +616,45 @@ class HeightValidator:
                         intento_info['intentos'][-1]['resultado'] = 'exito'
                         break
                 
+                # Intento 1a-bis: Crear pallet de pickings sobre full pallet existente
+                if not colocado and frag.es_picking and len(posicion.pallets_apilados) == 1:
+                    pallet_inferior = posicion.pallets_apilados[0]
+                    
+                    # No apilar sobre NO_APILABLE
+                    cat_inferior = next(
+                        (f.categoria for f in pallet_inferior.fragmentos),
+                        None
+                    )
+                    if cat_inferior == CategoriaApilamiento.NO_APILABLE:
+                        continue
+                    
+                    # Verificar altura antes de crear
+                    if posicion.altura_usada_cm + frag.altura_cm > self.altura_maxima_cm:
+                        continue
+                    
+                    # Crear pallet de pickings en nivel 1
+                    pallet_nuevo = PalletFisico(
+                        id=f"pallet_{pallet_id_counter}",
+                        posicion_id=posicion.id,
+                        nivel=1
+                    )
+                    pallet_nuevo.agregar_fragmento(frag)
+                    
+                    posicion.pallets_apilados.append(pallet_nuevo)
+                    
+                    # Validar altura picking
+                    if self.max_altura_picking_apilado_cm:
+                        altura_picking = self._calcular_altura_picking_posicion(posicion)
+                        if altura_picking > self.max_altura_picking_apilado_cm:
+                            posicion.pallets_apilados.remove(pallet_nuevo)
+                            continue
+                    
+                    pallet_id_counter += 1
+                    colocado = True
+                    intento_info['exito'] = True
+                    intento_info['ubicacion'] = f"posicion_{pos_idx}_picking_sobre_full"
+                    break
+
                 # Intento 1b: Nuevo nivel en posición existente
                 if not colocado and len(posicion.pallets_apilados) < 2:
                     pallet_nuevo = PalletFisico(
@@ -706,19 +794,16 @@ class HeightValidator:
         
         # ✅ SÍ PERMITE CONSOLIDACIÓN
         else:
-            # Regla 1: No exceder límite de SKUs diferentes
-            skus_en_pallet = pallet.skus_unicos
-            if fragmento.sku_id not in skus_en_pallet:
-                if len(skus_en_pallet) >= self.max_skus_por_pallet:
-                    return False  # Ya alcanzó el máximo
+            # Regla 1: No exceder límite de fragmentos diferentes
+            if len(pallet.fragmentos) >= self.max_skus_por_pallet:
+                return False  # Ya alcanzó el máximo
             
-            # Regla 2: Solo pickings del mismo tipo pueden consolidarse
-            if fragmento.es_picking and pallet.tiene_pickings:
-                # Verificar que sean del mismo tipo de apilamiento
-                tipos_en_pallet = {frag.categoria for frag in pallet.fragmentos}
-                if fragmento.categoria not in tipos_en_pallet:
-                    return False  # Diferentes tipos de apilamiento
-            
+            # Caso para límite por skus y no por fragmento
+            #skus_en_pallet = pallet.skus_unicos
+            #if fragmento.sku_id not in skus_en_pallet:
+            #    if len(skus_en_pallet) >= self.max_skus_por_pallet:
+            #        return False  # Ya alcanzó el máximo
+
             # Regla 3: No mezclar pickings con full pallets
             if fragmento.es_picking and pallet.tiene_full_pallets:
                 return False
@@ -729,22 +814,35 @@ class HeightValidator:
 
     def _validar_altura_picking_posicion(self, posicion: PosicionCamion) -> tuple[bool, float]:
         """
-        Valida que la altura de picking en una posición no exceda el límite.
-        Solo aplica si max_altura_picking_apilado_cm está configurado.
+        Valida que si hay picking en una posición, la altura TOTAL no exceda el límite.
+        
+        La restricción es: si hay cualquier picking en la posición, 
+        la altura total (pallets completos + picking) no puede exceder max_altura_picking_apilado_cm.
         
         Returns:
-            (es_valido, altura_picking_actual)
+            (es_valido, altura_total_posicion)
         """
         if not self.max_altura_picking_apilado_cm:
             return True, 0.0
         
-        altura_picking = 0.0
+        # Verificar si hay algún picking en la posición
+        tiene_picking = False
         for pallet in posicion.pallets_apilados:
             for frag in pallet.fragmentos:
                 if frag.es_picking:
-                    altura_picking += frag.altura_cm
+                    tiene_picking = True
+                    break
+            if tiene_picking:
+                break
         
-        return altura_picking <= self.max_altura_picking_apilado_cm, altura_picking
+        # Si no hay picking, no aplica la restricción
+        if not tiene_picking:
+            return True, 0.0
+        
+        # Si hay picking, la altura TOTAL de la posición debe ser <= límite
+        altura_total = posicion.altura_usada_cm
+        
+        return altura_total <= self.max_altura_picking_apilado_cm, altura_total
 
 
     def _prioridad_colocacion(self, frag: FragmentoSKU) -> int:
@@ -762,8 +860,8 @@ class HeightValidator:
             CategoriaApilamiento.NO_APILABLE: 0,
             CategoriaApilamiento.BASE: 1,
             CategoriaApilamiento.SI_MISMO: 2,
-            CategoriaApilamiento.FLEXIBLE: 3,
-            CategoriaApilamiento.SUPERIOR: 4,
+            CategoriaApilamiento.SUPERIOR: 3,
+            CategoriaApilamiento.FLEXIBLE: 4,
         }
         return prioridades[frag.categoria]
 
@@ -945,3 +1043,17 @@ class HeightValidator:
                 print(f"     - {cat}: {count} fragmentos")
         
         print(f"\n{'='*80}\n")
+
+    def _categoria_dominante_pallet(self, pallet: PalletFisico) -> CategoriaApilamiento:
+        """Obtiene categoría dominante de un pallet."""
+        categorias = [f.categoria for f in pallet.fragmentos]
+        
+        if CategoriaApilamiento.NO_APILABLE in categorias:
+            return CategoriaApilamiento.NO_APILABLE
+        if CategoriaApilamiento.BASE in categorias:
+            return CategoriaApilamiento.BASE
+        if CategoriaApilamiento.SUPERIOR in categorias:
+            return CategoriaApilamiento.SUPERIOR
+        if CategoriaApilamiento.SI_MISMO in categorias:
+            return CategoriaApilamiento.SI_MISMO
+        return CategoriaApilamiento.FLEXIBLE

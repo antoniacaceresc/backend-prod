@@ -12,10 +12,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse
 
-# ==========================================
-# IMPORTS REFACTORIZADOS
-# ==========================================
-
 from models.api import (PostProcessRequest, PostProcessResponse)
 from optimization.orchestrator import procesar
 from services.postprocess import (move_orders, add_truck, delete_truck, compute_stats, apply_truck_type_change)

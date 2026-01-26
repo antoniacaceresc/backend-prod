@@ -385,16 +385,39 @@ def _calcular_estadisticas(camiones: List, pedidos_no_incluidos: List) -> Dict[s
 def _aplicar_overrides_vcu(config, vcuTarget, vcuTargetBH, venta: str = None):
     """
     Aplica overrides de VCU desde el frontend.
+    Crea copia profunda para no mutar el config original de clase.
     """
+    import copy
+    
     if vcuTarget is None and vcuTargetBH is None:
         return config
     
-    # Obtener TRUCK_TYPES efectivo
-    from utils.config_helpers import get_effective_config
-    effective = get_effective_config(config, venta)
-    truck_types = effective["TRUCK_TYPES"]
+    # Crear copia profunda del CHANNEL_CONFIG o TRUCK_TYPES para no mutar el original
+    if hasattr(config, 'CHANNEL_CONFIG') and venta:
+        # Buscar el canal correcto (case-insensitive)
+        venta_upper = venta.upper()
+        canal_key = None
+        for key in config.CHANNEL_CONFIG:
+            if key.upper() == venta_upper:
+                canal_key = key
+                break
+        
+        if canal_key and 'TRUCK_TYPES' in config.CHANNEL_CONFIG[canal_key]:
+            # Copia profunda solo del TRUCK_TYPES del canal
+            config.CHANNEL_CONFIG[canal_key]['TRUCK_TYPES'] = copy.deepcopy(
+                config.CHANNEL_CONFIG[canal_key]['TRUCK_TYPES']
+            )
+            truck_types = config.CHANNEL_CONFIG[canal_key]['TRUCK_TYPES']
+        else:
+            return config
+    elif hasattr(config, 'TRUCK_TYPES'):
+        # Cliente legacy sin CHANNEL_CONFIG
+        config.TRUCK_TYPES = copy.deepcopy(config.TRUCK_TYPES)
+        truck_types = config.TRUCK_TYPES
+    else:
+        return config
     
-    # VCU target para Nestlé
+    # VCU target para Nestlé (todos excepto backhaul)
     if vcuTarget is not None:
         vcu_decimal = vcuTarget / 100.0
         for tipo in ['paquetera', 'rampla_directa', 'mediano', 'pequeño']:

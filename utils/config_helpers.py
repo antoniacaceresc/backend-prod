@@ -44,7 +44,7 @@ def get_effective_config(client_config, venta: str = None) -> dict:
             
             # Restricciones específicas SMU
             "PROHIBIR_PICKING_DUPLICADO": channel.get("PROHIBIR_PICKING_DUPLICADO", getattr(client_config, 'PROHIBIR_PICKING_DUPLICADO', False)),
-            "ALTURA_MAX_PICKING_APILADO_CM": channel.get("ALTURA_MAX_PICKING_APILADO_CM", getattr(client_config, 'ALTURA_MAX_PICKING_APILADO_CM', 180)),
+            "ALTURA_MAX_PICKING_APILADO_CM": channel.get("ALTURA_MAX_PICKING_APILADO_CM", getattr(client_config, 'ALTURA_MAX_PICKING_APILADO_CM', None)),
             "CDS_SIN_APILAMIENTO": channel.get("CDS_SIN_APILAMIENTO", getattr(client_config, 'CDS_SIN_APILAMIENTO', [])),
             
             # Restricciones ALVI
@@ -75,7 +75,7 @@ def get_effective_config(client_config, venta: str = None) -> dict:
         "ADHERENCIA_BACKHAUL": getattr(client_config, 'ADHERENCIA_BACKHAUL', None),
         "MODO_ADHERENCIA": getattr(client_config, 'MODO_ADHERENCIA', None),
         "PROHIBIR_PICKING_DUPLICADO": getattr(client_config, 'PROHIBIR_PICKING_DUPLICADO', False),
-        "ALTURA_MAX_PICKING_APILADO_CM": getattr(client_config, 'ALTURA_MAX_PICKING_APILADO_CM', 180),
+        "ALTURA_MAX_PICKING_APILADO_CM": getattr(client_config, 'ALTURA_MAX_PICKING_APILADO_CM', None),
         "CDS_SIN_APILAMIENTO": getattr(client_config, 'CDS_SIN_APILAMIENTO', []),
         "ALVI_ALTURA_MAX_CM": getattr(client_config, 'ALVI_ALTURA_MAX_CM', 230),
         "ALVI_ELIMINAR_SKU_DUPLICADO": getattr(client_config, 'ALVI_ELIMINAR_SKU_DUPLICADO', False),
@@ -255,7 +255,6 @@ def get_consolidacion_config(client_config, subcliente: str = None, oc: str = No
     Returns:
         Dict con PERMITE_CONSOLIDACION y MAX_SKUS_POR_PALLET
     """
-    print(f"[DEBUG CONSOLIDACION] subcliente={subcliente}, oc={oc}, venta={venta}")
     effective = get_effective_config(client_config, venta)
     
     # Valores por defecto del canal
@@ -271,14 +270,24 @@ def get_consolidacion_config(client_config, subcliente: str = None, oc: str = No
     
     # Buscar SUBCLIENTE_CONFIG en el channel
     if hasattr(client_config, 'CHANNEL_CONFIG'):
-        channel = client_config.CHANNEL_CONFIG.get(venta, {}) if venta else {}
+        if venta:
+            # Búsqueda case-insensitive (igual que get_effective_config)
+            venta_upper = venta.upper()
+            for key, value in client_config.CHANNEL_CONFIG.items():
+                if key.upper() == venta_upper:
+                    channel = value
+                    break
+        else:
+            # Usar primer canal disponible como default (típicamente "Secos")
+            channel = next(iter(client_config.CHANNEL_CONFIG.values()), {})
         subcliente_configs = channel.get("SUBCLIENTE_CONFIG", {})
         
-        if subcliente in subcliente_configs:
-            sub_config = subcliente_configs[subcliente]
-            
+        subcliente_key = next((k for k in subcliente_configs if k.lower() == subcliente.lower()), None)
+        if subcliente_key:
+            sub_config = subcliente_configs[subcliente_key]
+    
             # Si es Alvi y tiene flujo específico (INV o CRR)
-            if subcliente == "Alvi" and oc and oc.upper() in sub_config:
+            if subcliente_key.lower() == "alvi" and oc and oc.upper() in sub_config:
                 flujo_config = sub_config[oc.upper()]
                 config["PERMITE_CONSOLIDACION"] = flujo_config.get("PERMITE_CONSOLIDACION", False)
                 config["MAX_SKUS_POR_PALLET"] = flujo_config.get("MAX_SKUS_POR_PALLET", 1)
@@ -286,4 +295,5 @@ def get_consolidacion_config(client_config, subcliente: str = None, oc: str = No
                 # Config general del subcliente (Rendic o Alvi sin flujo)
                 config["PERMITE_CONSOLIDACION"] = sub_config.get("PERMITE_CONSOLIDACION", False)
                 config["MAX_SKUS_POR_PALLET"] = sub_config.get("MAX_SKUS_POR_PALLET", 1)
+
     return config
