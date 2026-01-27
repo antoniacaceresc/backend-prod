@@ -181,11 +181,27 @@ class BackhaulAdherenceManager:
         """
         # Guardar tipo original por si hay que revertir
         tipo_original = cam.tipo_camion
+
+        # Verificar si la ruta requiere sin apilamiento para backhaul
+        from utils.config_helpers import ruta_sin_apilamiento_backhaul
+        
+        cam_cd = [cam.cd] if isinstance(cam.cd, str) else cam.cd
+        cam_ce = [cam.ce] if isinstance(cam.ce, str) else cam.ce
+        tipo_ruta_str = cam.tipo_ruta.value if hasattr(cam.tipo_ruta, 'value') else str(cam.tipo_ruta)
+        
+        # Ajustar capacidad si la ruta no permite apilamiento
+        cap_a_usar = cap_backhaul
+        requiere_sin_apilamiento = ruta_sin_apilamiento_backhaul(self.config, cam_cd, cam_ce, tipo_ruta_str, self.venta)
+        if requiere_sin_apilamiento:
+            cap_a_usar = cap_backhaul.sin_apilamiento()
+            cam.metadata["sin_apilamiento"] = True
+
+
         capacidad_original = cam.capacidad
         
         # Convertir a BH
         cam.tipo_camion = TipoCamion.BACKHAUL
-        cam.capacidad = cap_backhaul
+        cam.capacidad = cap_a_usar
         cam._invalidar_cache()
         
         for p in cam.pedidos:
@@ -193,7 +209,7 @@ class BackhaulAdherenceManager:
         
         # Re-validar altura (BH tiene altura menor)
         validator = HeightValidator(
-            altura_maxima_cm=cap_backhaul.altura_cm,
+            altura_maxima_cm=cap_a_usar.altura_cm,
             permite_consolidacion=self.permite_consolidacion,
             max_skus_por_pallet=self.max_skus_por_pallet
         )
@@ -201,6 +217,9 @@ class BackhaulAdherenceManager:
         es_valido, errores, layout, debug_info = validator.validar_camion_rapido(cam)
         
         if es_valido:
+            # Marcar si tiene restricción de apilamiento
+            if requiere_sin_apilamiento:
+                cam.metadata["sin_apilamiento"] = True
             # Actualizar layout_info
             self._actualizar_layout_info(cam, layout, debug_info)
             return True

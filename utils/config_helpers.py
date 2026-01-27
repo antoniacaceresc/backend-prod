@@ -297,3 +297,46 @@ def get_consolidacion_config(client_config, subcliente: str = None, oc: str = No
                 config["MAX_SKUS_POR_PALLET"] = sub_config.get("MAX_SKUS_POR_PALLET", 1)
 
     return config
+
+def ruta_sin_apilamiento_backhaul(
+    client_config, cds: List[str], ces: List[str], tipo_ruta: str = "normal", venta: str = None
+) -> bool:
+    """
+    Verifica si una ruta tiene restricción de no apilar para backhaul.
+    """
+    effective = get_effective_config(client_config, venta)
+    rutas_posibles = effective["RUTAS_POSIBLES"]
+    rutas_tipo = rutas_posibles.get(tipo_ruta, [])
+    
+    cds_busqueda = _normalize_cd_list(cds or [])
+    ces_busqueda = _normalize_ce_list(ces or [])
+    
+    for ruta in rutas_tipo:
+        if isinstance(ruta, dict):
+            ruta_cds = _normalize_cd_list(ruta.get('cds', []))
+            ruta_ces = _normalize_ce_list(ruta.get('ces', []))
+            
+            if ruta_cds == cds_busqueda and ruta_ces == ces_busqueda:
+                return ruta.get('sin_apilamiento_backhaul', False)
+    
+    return False
+
+def get_capacity_for_route(
+    client_config, 
+    tipo_camion: TipoCamion,
+    cds: List[str],
+    ces: List[str],
+    tipo_ruta: str = "normal",
+    venta: str = None
+) -> TruckCapacity:
+    """
+    Obtiene capacidad para un tipo de camión, ajustada según restricciones de ruta.
+    """
+    cap = get_capacity_for_type(client_config, tipo_camion, venta)
+    
+    # Si es backhaul y la ruta no permite apilamiento
+    if tipo_camion == TipoCamion.BACKHAUL:
+        if ruta_sin_apilamiento_backhaul(client_config, cds, ces, tipo_ruta, venta):
+            cap = cap.sin_apilamiento()
+    
+    return cap

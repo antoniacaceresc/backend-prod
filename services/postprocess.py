@@ -99,6 +99,10 @@ def _camion_from_dict(cam_dict: Dict[str, Any], capacidades: Dict[TipoCamion, Tr
     
     capacidad = capacidades.get(tipo_camion, capacidades.get(TipoCamion.PAQUETERA, next(iter(capacidades.values()))))
     
+    # Ajustar si el camión tiene metadata indicando sin apilamiento
+    if cam_dict.get("metadata", {}).get("sin_apilamiento") or cam_dict.get("sin_apilamiento"):
+        capacidad = capacidad.sin_apilamiento()
+    
     # Determinar tipo de ruta
     try:
         tipo_ruta = TipoRuta(cam_dict.get("tipo_ruta", "normal"))
@@ -333,6 +337,18 @@ def add_truck(
     
     # Usar el primer tipo permitido, o PAQUETERA como fallback
     tipo_inicial = camiones_permitidos[0] if camiones_permitidos else TipoCamion.PAQUETERA
+
+    # Obtener capacidad para el tipo inicial
+    from utils.config_helpers import get_capacity_for_type, ruta_sin_apilamiento_backhaul
+    
+    capacidad_inicial = get_capacity_for_type(config, tipo_inicial, venta)
+    metadata_inicial = {}
+    
+    # Ajustar si es backhaul y la ruta no permite apilamiento
+    if tipo_inicial == TipoCamion.BACKHAUL:
+        if ruta_sin_apilamiento_backhaul(config, cd_list, ce_list, tipo_ruta.value, venta):
+            capacidad_inicial = capacidad_inicial.sin_apilamiento()
+            metadata_inicial["sin_apilamiento"] = True
     
     # 4) Crear camión nuevo
     nuevo_camion = Camion(
@@ -342,10 +358,11 @@ def add_truck(
         cd=cd_list,
         ce=ce_list,
         grupo=f"manual__{'-'.join(cd_list)}__{'-'.join(map(str, ce_list))}",
-        capacidad=cap_default,
-        pedidos=[]
+        capacidad=capacidad_inicial,
+        pedidos=[],
+        metadata=metadata_inicial
     )
-    
+
     # Calcular opciones de cambio de tipo
     _actualizar_opciones_tipo_camion(nuevo_camion, config, venta)
     
@@ -485,6 +502,22 @@ def apply_truck_type_change(
     if not nueva_capacidad:
         raise ValueError(f"Sin capacidad definida para tipo '{tipo_nuevo}'")
     
+    # Ajustar si es backhaul y la ruta no permite apilamiento
+    from utils.config_helpers import ruta_sin_apilamiento_backhaul
+    
+    if nuevo_tipo_enum == TipoCamion.BACKHAUL:
+        cam_cd = camion.cd if isinstance(camion.cd, list) else [camion.cd]
+        cam_ce = camion.ce if isinstance(camion.ce, list) else [camion.ce]
+        tipo_ruta_str = camion.tipo_ruta.value if hasattr(camion.tipo_ruta, 'value') else str(camion.tipo_ruta)
+        
+        if ruta_sin_apilamiento_backhaul(config, cam_cd, cam_ce, tipo_ruta_str, venta):
+            nueva_capacidad = nueva_capacidad.sin_apilamiento()
+            camion.metadata["sin_apilamiento"] = True
+    else:
+        # Limpiar metadata si cambia desde backhaul a otro tipo
+        if "sin_apilamiento" in camion.metadata:
+            del camion.metadata["sin_apilamiento"]
+    
     # Validar que el camión cabe en la nueva capacidad
     if not camion.valida_capacidad(nueva_capacidad):
         raise ValueError(f"El camión no cabe en capacidad de tipo '{tipo_nuevo}'")
@@ -514,7 +547,7 @@ def apply_truck_type_change(
         
         if cliente.lower() == 'smu':
                 _actualizar_alertas_picking_camion(cam, config, venta)
-    
+
     # 7) Devolver respuesta
     return _to_response(camiones, pedidos_no_inc, cap_default)
 
@@ -593,6 +626,7 @@ def _validar_altura_pre_agregar(
     
     # Crear copia del camión con los pedidos agregados
     camion_simulado = deepcopy(camion)
+
     camion_simulado.pedidos = camion.pedidos + pedidos_a_agregar
     
     # Verificar si tiene SKUs para validar

@@ -60,7 +60,7 @@ class CencosudConfig:
             "TRUCK_TYPES": {
                 'paquetera':        {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.8, 'max_pallets': 60, 'altura_cm': 280},
                 'rampla_directa':   {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.8, 'max_pallets': 56, 'altura_cm': 270},
-                'backhaul':         {'cap_weight': 22000, 'cap_volume': 60000, 'max_positions': 26, 'levels': 2, 'vcu_min': 0.55, 'max_pallets': 26, 'altura_cm': 230}
+                'backhaul':         {'cap_weight': 22000, 'cap_volume': 60000, 'max_positions': 26, 'levels': 2, 'vcu_min': 0.55, 'max_pallets': 52, 'altura_cm': 230}
             },
 
             "RUTAS_POSIBLES": {
@@ -74,12 +74,12 @@ class CencosudConfig:
                     {"cds": ["N725 Bodega Noviciado"], "ces": ["8150"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
 
                     # N641 Bodega Noviciado PYP
-                    {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["0079"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
-                    {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["0080"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
-                    {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
-                    {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
-                    {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["3598"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
-                    {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["8150"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
+                    {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["0079"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"], "sin_apilamiento_backhaul": True},
+                    {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["0080"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"], "sin_apilamiento_backhaul": True},
+                    {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"], "sin_apilamiento_backhaul": True},
+                    {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"], "sin_apilamiento_backhaul": True},
+                    {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["3598"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"], "sin_apilamiento_backhaul": True},
+                    {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["8150"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"], "sin_apilamiento_backhaul": True},
 
                     # N794 Bodega Chillan - Solo Nestlé
                     {"cds": ["N794 Bodega Chillan"], "ces": ["0079"], "camiones_permitidos": ["paquetera", "rampla_directa"]},

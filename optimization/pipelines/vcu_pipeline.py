@@ -380,10 +380,16 @@ class VCUPipeline(OptimizationPipeline):
                 cap = get_capacity_for_type(self.config, tipo_camion, self.venta)
                 
                 # Ajustar si no permite apilamiento
-                from utils.config_helpers import permite_apilamiento_cd
+                from utils.config_helpers import permite_apilamiento_cd, ruta_sin_apilamiento_backhaul
                 cd_grupo = cfg.cd[0] if cfg.cd else ""
                 if not permite_apilamiento_cd(self.config, cd_grupo, self.venta):
                     cap = cap.sin_apilamiento()
+                    grupo_sin_apilamiento = True
+                # Restricción específica: backhaul sin apilar para ciertas rutas
+                elif tipo_camion == TipoCamion.BACKHAUL:
+                    if ruta_sin_apilamiento_backhaul(self.config, cfg.cd, cfg.ce, cfg.tipo.value, self.venta):
+                        cap = cap.sin_apilamiento()
+                        grupo_sin_apilamiento = True
                 
                 grupos_preparados.append((cfg, pedidos_no_asignados, cap, tipo_camion))
         
@@ -448,11 +454,17 @@ class VCUPipeline(OptimizationPipeline):
             if TipoCamion.BACKHAUL not in camiones_permitidos:
                 continue
             
+            # Ajustar capacidad si la ruta no permite apilamiento para backhaul
+            from utils.config_helpers import ruta_sin_apilamiento_backhaul
+            cap_a_usar = cap_backhaul
+            if ruta_sin_apilamiento_backhaul(self.config, cfg.cd, cfg.ce, tipo_ruta, self.venta):
+                cap_a_usar = cap_backhaul.sin_apilamiento()
+
             n_pedidos = len(pedidos_no_asignados)
             tiempo_grupo = ajustar_tiempo_grupo(context.tpg, n_pedidos, tipo_ruta)
             
             res = optimizar_grupo_vcu(
-                pedidos_no_asignados, cfg, self.effective_config, cap_backhaul, tiempo_grupo, TipoCamion.BACKHAUL
+                pedidos_no_asignados, cfg, self.effective_config, cap_a_usar, tiempo_grupo, TipoCamion.BACKHAUL
             )
             
             if res.get("status") in ("OPTIMAL", "FEASIBLE"):
@@ -465,6 +477,11 @@ class VCUPipeline(OptimizationPipeline):
                         cam.tipo_camion = TipoCamion.BACKHAUL
                         for p in cam.pedidos:
                             p.tipo_camion = "backhaul"
+
+                    # Marcar si tiene restricción de apilamiento
+                    if ruta_sin_apilamiento_backhaul(self.config, cfg.cd, cfg.ce, tipo_ruta, self.venta):
+                        for cam in camiones:
+                            cam.metadata["sin_apilamiento"] = True
                     
                     all_camiones.extend(camiones)
                     pedidos_asignados.update(nuevos)

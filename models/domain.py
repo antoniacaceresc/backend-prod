@@ -943,6 +943,11 @@ class Camion:
 
             if 'alertas_picking' in self.metadata:
                 result['alertas_picking'] = self.metadata['alertas_picking']
+            
+            if 'sin_apilamiento' in self.metadata:
+                if 'metadata' not in result:
+                    result['metadata'] = {}
+                result['metadata']['sin_apilamiento'] = self.metadata['sin_apilamiento']
         
         return result
 

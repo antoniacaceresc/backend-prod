@@ -156,10 +156,16 @@ class BinPackingPipeline(OptimizationPipeline):
         cap = get_capacity_for_type(self.config, tipo_camion, self.venta)
         
         # Ajustar si no permite apilamiento
-        from utils.config_helpers import permite_apilamiento_cd
+        from utils.config_helpers import permite_apilamiento_cd, ruta_sin_apilamiento_backhaul
         cd_grupo = cfg.cd[0] if cfg.cd else ""
         if not permite_apilamiento_cd(self.config, cd_grupo, self.venta):
             cap = cap.sin_apilamiento()
+            grupo_sin_apilamiento = True
+        # Restricción específica: backhaul sin apilar para ciertas rutas
+        elif tipo_camion == TipoCamion.BACKHAUL:
+            if ruta_sin_apilamiento_backhaul(self.config, cfg.cd, cfg.ce, cfg.tipo.value, self.venta):
+                cap = cap.sin_apilamiento()
+                grupo_sin_apilamiento = True
         
         if DEBUG_VALIDATION:
             print(f"[BP] Optimizando {cfg.id}: {n_pedidos} pedidos, {tiempo_grupo}s")
@@ -180,6 +186,11 @@ class BinPackingPipeline(OptimizationPipeline):
                         cam.tipo_camion = tipo_camion
                         for p in cam.pedidos:
                             p.tipo_camion = tipo_camion.value
+                
+                # Marcar si tiene restricción de apilamiento
+                if ruta_sin_apilamiento_backhaul(self.config, cfg.cd, cfg.ce, cfg.tipo.value, self.venta):
+                    for cam in camiones:
+                        cam.metadata["sin_apilamiento"] = True
                 
                 if DEBUG_VALIDATION:
                     print(f"[BP] ✓ {cfg.id}: {len(nuevos)}/{n_pedidos} en {len(camiones)} camiones")

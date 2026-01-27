@@ -394,135 +394,6 @@ class HeightValidator:
         
         return posiciones
     
-    def _construir_layout(self, camion: Camion, fragmentos: List[FragmentoSKU]) -> Optional[LayoutCamion]:
-        """Construye layout real usando algoritmo greedy."""
-        
-        layout = LayoutCamion(
-            camion_id=camion.id,
-            max_posiciones=camion.capacidad.max_positions,
-            altura_maxima_cm=self.altura_maxima_cm
-        )
-        
-        # Ordenar fragmentos por prioridad
-        fragmentos_ordenados = sorted(
-            fragmentos,
-            key=lambda f: self._prioridad_colocacion(f)
-        )
-        
-        pallet_id_counter = 0
-        
-        for frag in fragmentos_ordenados:
-            colocado = False
-
-            # CASO 0: FLEXIBLE puede insertarse DEBAJO de SUPERIOR existente
-            if frag.categoria == CategoriaApilamiento.FLEXIBLE:
-                for posicion in layout.posiciones:
-                    if len(posicion.pallets_apilados) == 1:  # Solo 1 pallet en posición
-                        pallet_existente = posicion.pallets_apilados[0]
-                        cat_existente = self._categoria_dominante_pallet(pallet_existente)
-                        
-                        if cat_existente == CategoriaApilamiento.SUPERIOR:
-                            # Verificar que hay espacio para ambos
-                            altura_nueva_total = frag.altura_cm + pallet_existente.altura_total_cm
-                            if altura_nueva_total <= posicion.altura_maxima_cm:
-                                # Crear pallet FLEXIBLE en nivel 0
-                                pallet_flexible = PalletFisico(
-                                    id=f"pallet_{pallet_id_counter}",
-                                    posicion_id=posicion.id,
-                                    nivel=0
-                                )
-                                pallet_flexible.agregar_fragmento(frag)
-                                
-                                # Mover SUPERIOR a nivel 1
-                                pallet_existente.nivel = 1
-                                
-                                # Insertar FLEXIBLE al inicio de la lista
-                                posicion.pallets_apilados.insert(0, pallet_flexible)
-                                
-                                pallet_id_counter += 1
-                                colocado = True
-                                break
-                
-                if colocado:
-                    debug_info['fragmentos_colocados'] += 1
-                    continue
-            
-            # CASO 1: Intentar apilar en posición existente
-            for posicion in layout.posiciones:
-                if posicion.esta_vacia:
-                    continue
-
-                # SOLO consolidar pickings, NO pallets completos
-                if frag.es_picking and posicion.pallets_apilados:
-                    # Buscar pallet que tenga pickings (no full pallets)
-                    pallet_para_consolidar = next(
-                        (p for p in posicion.pallets_apilados if p.tiene_pickings),
-                        None
-                    )
-                    
-                    if pallet_para_consolidar and self._puede_agregar_a_pallet(pallet_para_consolidar, frag):
-                        # Agregar el fragmento
-                        pallet_para_consolidar.agregar_fragmento(frag)
-                        
-                        # Validar altura máxima de picking apilado
-                        if self.max_altura_picking_apilado_cm:
-                            altura_picking_posicion = self._calcular_altura_picking_posicion(posicion)
-                            if altura_picking_posicion > self.max_altura_picking_apilado_cm:
-                                pallet_superior.fragmentos.remove(frag)
-                                continue
-                        
-                        # Verificar altura total del camión
-                        if posicion.altura_usada_cm > self.altura_maxima_cm:
-                            pallet_superior.fragmentos.remove(frag)
-                            continue
-                        
-                        colocado = True
-                        break
-                
-                
-                # Si no se pudo agregar al pallet existente,
-                # intentar crear nuevo nivel en esta posición
-                if not colocado and len(posicion.pallets_apilados) < 2:  # Máximo 2 niveles
-                    pallet_nuevo = PalletFisico(
-                        id=f"pallet_{pallet_id_counter}",
-                        posicion_id=posicion.id,
-                        nivel=len(posicion.pallets_apilados)
-                    )
-                    pallet_nuevo.agregar_fragmento(frag)
-                    
-                    if posicion.apilar(pallet_nuevo, max_niveles=camion.capacidad.levels):
-                        pallet_id_counter += 1
-                        colocado = True
-                        break
-            
-            if colocado:
-                continue
-            
-            # CASO 2: Buscar posición vacía
-            posicion_vacia = next(
-                (p for p in layout.posiciones if p.esta_vacia),
-                None
-            )
-            
-            if posicion_vacia is None:
-                # No hay más posiciones disponibles
-                return None
-            
-            # Colocar en posición vacía
-            pallet = PalletFisico(
-                id=f"pallet_{pallet_id_counter}",
-                posicion_id=posicion_vacia.id,
-                nivel=0
-            )
-            pallet.agregar_fragmento(frag)
-            
-            if not posicion_vacia.apilar(pallet, max_niveles=camion.capacidad.levels):
-                return None
-            
-            pallet_id_counter += 1
-        
-        return layout
-    
     def _construir_layout_con_debug(
         self, 
         camion: Camion, 
@@ -617,7 +488,7 @@ class HeightValidator:
                         break
                 
                 # Intento 1a-bis: Crear pallet de pickings sobre full pallet existente
-                if not colocado and frag.es_picking and len(posicion.pallets_apilados) == 1:
+                if not colocado and frag.es_picking and len(posicion.pallets_apilados) > 1:
                     pallet_inferior = posicion.pallets_apilados[0]
                     
                     # No apilar sobre NO_APILABLE
