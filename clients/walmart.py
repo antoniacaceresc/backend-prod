@@ -224,7 +224,6 @@ class WalmartConfig:
 
             "TRUCK_TYPES": {
                 'paquetera':        {'cap_weight': 20000, 'cap_volume': 58612, 'max_positions': 30, 'levels': 1, 'vcu_min': 0.7, 'max_pallets': 30,'altura_cm': 280},
-                'rampla_directa':   {'cap_weight': 20000, 'cap_volume': 58612, 'max_positions': 28, 'levels': 1, 'vcu_min': 0.7, 'max_pallets': 28,'altura_cm': 270},
                 'backhaul':         {'cap_weight': 20000, 'cap_volume': 58612, 'max_positions': 28, 'levels': 1, 'vcu_min': 0.5, 'max_pallets': 28, 'altura_cm': 240}
             },
 
@@ -249,7 +248,6 @@ class WalmartConfig:
 
             "TRUCK_TYPES": {
                 'paquetera':        {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 1, 'vcu_min': 0.77, 'max_pallets': 30,'altura_cm': 280},
-                'rampla_directa':   {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 1, 'vcu_min': 0.77, 'max_pallets': 28,'altura_cm': 270},
                 'backhaul':         {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 1, 'vcu_min': 0.5, 'max_pallets': 28, 'altura_cm': 240}
             },
 

@@ -55,7 +55,7 @@ class CencosudConfig:
             
             "VALIDAR_ALTURA": True,
             "PERMITE_CONSOLIDACION": False,
-            "MAX_SKUS_POR_PALLET": 5,
+            "MAX_SKUS_POR_PALLET": 4,
 
             "TRUCK_TYPES": {
                 'paquetera':        {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.8, 'max_pallets': 60, 'altura_cm': 280},

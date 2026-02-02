@@ -525,7 +525,14 @@ def apply_truck_type_change(
     # Validar reglas del cliente
     _validar_cambio_tipo_cliente(camion, nuevo_tipo_enum, config, cliente, venta)
     
-    # 5) Aplicar cambio
+    # 5) Guardar estado original ANTES de aplicar cambio
+    tipo_original = camion.tipo_camion
+    capacidad_original = camion.capacidad
+    pos_total_original = camion.pos_total
+    metadata_original = dict(camion.metadata) if camion.metadata else {}
+    tipos_pedidos_original = [p.tipo_camion for p in camion.pedidos]
+    
+    # 6) Aplicar cambio
     camion.cambiar_tipo(nuevo_tipo_enum, nueva_capacidad)
     
     # Recalcular posiciones
@@ -538,10 +545,30 @@ def apply_truck_type_change(
     for p in camion.pedidos:
         p.tipo_camion = nuevo_tipo_enum.value
     
-    # 6) Revalidar altura (crítico: cambió la capacidad)
+    # 7) Revalidar altura (crítico: cambió la capacidad)
     _revalidar_altura_camiones(camiones, config, cliente, venta, operacion="change_type")
+
+
+    # 8) Verificar si la validación fue exitosa
+    layout_info = camion.metadata.get('layout_info', {})
+    if not layout_info.get('altura_validada', True):
+        # Revertir cambio: la altura no es válida con el nuevo tipo
+        camion.cambiar_tipo(tipo_original, capacidad_original)
+        camion.pos_total = pos_total_original
+        camion.metadata = metadata_original
+        for p, tipo_orig in zip(camion.pedidos, tipos_pedidos_original):
+            p.tipo_camion = tipo_orig
+        
+        # Re-validar con tipo original
+        _revalidar_altura_camiones(camiones, config, cliente, venta, operacion="change_type_revert")
+        
+        raise ValueError(
+            f"El camión no valida altura con tipo '{tipo_nuevo}' "
+            f"(altura máxima: {nueva_capacidad.altura_cm}cm). "
+            f"Se mantiene como '{tipo_original.value}'."
+        )
     
-    # RECALCULAR opciones para TODOS los camiones
+    # Recalcular opciones para TODOS los camiones
     for cam in camiones:
         _actualizar_opciones_tipo_camion(cam, config, venta)
         

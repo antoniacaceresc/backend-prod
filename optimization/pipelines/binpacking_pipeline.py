@@ -188,7 +188,7 @@ class BinPackingPipeline(OptimizationPipeline):
                             p.tipo_camion = tipo_camion.value
                 
                 # Marcar si tiene restricción de apilamiento
-                if ruta_sin_apilamiento_backhaul(self.config, cfg.cd, cfg.ce, cfg.tipo.value, self.venta):
+                if tipo_camion == TipoCamion.BACKHAUL and ruta_sin_apilamiento_backhaul(self.config, cfg.cd, cfg.ce, cfg.tipo.value, self.venta):
                     for cam in camiones:
                         cam.metadata["sin_apilamiento"] = True
                 
