@@ -63,10 +63,6 @@ def root() -> str:
     return "<h2>Backend de FastAPI funcionando</h2>"
 
 
-
-# ----------------------------------------------------------------------------
-# Endpoints públicos (contratos mantenidos)
-# ----------------------------------------------------------------------------
 @app.post("/optimizar/{cliente}/{venta}")
 async def optimizar(
     cliente: str = Path(...),
@@ -74,6 +70,7 @@ async def optimizar(
     file: UploadFile = File(...),
     vcuTarget: Optional[int] = Form(default=None),
     vcuTargetBH: Optional[int] = Form(default=None),
+    fase: Optional[str] = Form(default=None),
 ) -> Dict[str, Any]:
     """Orquesta el proceso de optimización, aplicando timeout y control de concurrencia.
 
@@ -109,6 +106,7 @@ async def optimizar(
                 REQUEST_TIMEOUT,
                 vcuTarget,
                 vcuTargetBH,
+                fase
             ),
             timeout=REQUEST_TIMEOUT,
         )

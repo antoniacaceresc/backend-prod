@@ -79,6 +79,12 @@ class SKU:
     flexible: float = 0.0          # Columna: "Flexible"
     no_apilable: float = 0.0       # Columna: "No Apilable"
     si_mismo: float = 0.0          # Columna: "Apilable por si mismo"
+
+    
+    pallets_estimados: Optional[float] = None
+    pallets_solicitados: Optional[float] = None
+    peso_solicitado: Optional[float] = None
+    volumen_solicitado: Optional[float] = None
     
     # Límites de apilamiento (si aplica)
     max_altura_apilable_cm: Optional[float] = None  # Calculado o configurado

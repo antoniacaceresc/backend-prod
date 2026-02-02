@@ -215,7 +215,7 @@ def _limpiar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
     # Numéricos (a nivel SKU)
     numeric_cols = [
         "PESO", "VOL", "PALLETS", "VALOR", "VALOR_CAFE",
-        "ALTURA_FULL_PALLET", "ALTURA_PICKING"
+        "ALTURA_FULL_PALLET", "ALTURA_PICKING", "PALLETS_ESTIMADO", "PALLETS_SOLIC", "PESO_SOLIC", "VOL_SOLIC"
     ]
     for col in numeric_cols:
         if col in df.columns:
@@ -461,7 +461,7 @@ def _agregar_skus_a_pedidos(
     # Campos que se suman
     campos_suma = [
         "PALLETS", "PESO", "VOL", "VALOR", "VALOR_CAFE",
-        "BASE", "SUPERIOR", "FLEXIBLE", "NO_APILABLE", "SI_MISMO"
+        "BASE", "SUPERIOR", "FLEXIBLE", "NO_APILABLE", "SI_MISMO", "PALLETS_ESTIMADO"
     ]
     
     # Campos que se toman con MAX (flags)
@@ -580,7 +580,8 @@ def _crear_pedidos_dicts_con_skus(
         pedido_dict = {
             "PEDIDO": pedido_id,
             **row_pedido.to_dict(),
-            "_skus": skus_pedido.to_dict("records")  # Guardar SKUs como metadata
+            "_skus": skus_pedido.to_dict("records"),
+            "_pallets_estimado": row_pedido.get("PALLETS_ESTIMADO", row_pedido.get("PALLETS", 0))
         }
         
         pedidos_dicts.append(pedido_dict)

@@ -47,6 +47,10 @@ class WalmartConfig:
             "SKU": "SKU",
             "ALTURA_PICKING": "Altura Picking",
             "ALTURA_FULL_PALLET": "Altura full Pallet",
+            "PALLETS_ESTIMADOS": "Pal. Estimados",
+            "PALLETS_SOLIC": "Pal. Solic.",
+            "PESO_SOLIC": "Peso Solic.",
+            "VOL_SOLIC": "Vol. Solic.",
         },
 
         "Refrigerados": {
@@ -68,6 +72,10 @@ class WalmartConfig:
             "SKU": "SKU",
             "ALTURA_PICKING": "Altura Picking",
             "ALTURA_FULL_PALLET": "Altura full Pallet",
+            "PALLETS_ESTIMADOS": "Pal. Estimados",
+            "PALLETS_SOLIC": "Pal. Solic.",
+            "PESO_SOLIC": "Peso Solic.",
+            "VOL_SOLIC": "Vol. Solic.",
         }
     }
 
@@ -206,18 +214,18 @@ class WalmartConfig:
         "Helados": {
             "USA_OC": False,
             "AGRUPAR_POR_PO": False,
+            'PERMITE_APILAMIENTO': False,
             "VALIDAR_ALTURA": True,
             "PERMITE_CONSOLIDACION": False,
             "MAX_SKUS_POR_PALLET": 1,
 
-            "AUTO_SPLIT_ENABLED": True,      # Habilitar división automática
-            "RESTRICT_PO_GROUP": True,       # Restricción: mismo PO → diferentes camiones
-            "SPLIT_THRESHOLD_FACTOR": 0.93,
+            "MODO_DOS_FASES": True,
+            "COL_PALLETS_ESTIMADO": "Pal. Estimados",
 
             "TRUCK_TYPES": {
-                'paquetera':        {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 1, 'vcu_min': 0.59, 'max_pallets': 30,'altura_cm': 280},
-                'rampla_directa':   {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 1, 'vcu_min': 0.59, 'max_pallets': 28,'altura_cm': 270},
-                'backhaul':         {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 1, 'vcu_min': 0.5, 'max_pallets': 28, 'altura_cm': 240}
+                'paquetera':        {'cap_weight': 20000, 'cap_volume': 58612, 'max_positions': 30, 'levels': 1, 'vcu_min': 0.7, 'max_pallets': 30,'altura_cm': 280},
+                'rampla_directa':   {'cap_weight': 20000, 'cap_volume': 58612, 'max_positions': 28, 'levels': 1, 'vcu_min': 0.7, 'max_pallets': 28,'altura_cm': 270},
+                'backhaul':         {'cap_weight': 20000, 'cap_volume': 58612, 'max_positions': 28, 'levels': 1, 'vcu_min': 0.5, 'max_pallets': 28, 'altura_cm': 240}
             },
 
             "RUTAS_POSIBLES":  {
@@ -230,13 +238,14 @@ class WalmartConfig:
         "Refrigerados": {
             "USA_OC": False,
             "AGRUPAR_POR_PO": False,
+            'PERMITE_APILAMIENTO': False,
             "VALIDAR_ALTURA": True,
             "PERMITE_CONSOLIDACION": False,
             "MAX_SKUS_POR_PALLET": 1,
 
-            "AUTO_SPLIT_ENABLED": True,      # Habilitar división automática
-            "RESTRICT_PO_GROUP": True,       # Restricción: mismo PO → diferentes camiones
-            "SPLIT_THRESHOLD_FACTOR": 0.93,
+            # ═══ MODO DOS FASES (Pre-BOP / Post-BOP) ═══
+            "MODO_DOS_FASES": True,
+            "COL_PALLETS_ESTIMADO": "Pal. Estimados",
 
             "TRUCK_TYPES": {
                 'paquetera':        {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 1, 'vcu_min': 0.77, 'max_pallets': 30,'altura_cm': 280},

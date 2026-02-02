@@ -24,7 +24,7 @@ def get_effective_config(client_config, venta: str = None) -> dict:
             # Configuración algoritmo básica
             "USA_OC": channel.get("USA_OC", getattr(client_config, 'USA_OC', True)),
             "AGRUPAR_POR_PO": channel.get("AGRUPAR_POR_PO", getattr(client_config, 'AGRUPAR_POR_PO', False)),
-            "MAX_ORDENES": channel.get("MAX_ORDENES", getattr(client_config, 'MAX_ORDENES', 10)),
+            "MAX_ORDENES": channel.get("MAX_ORDENES", getattr(client_config, 'MAX_ORDENES', None)),
             "MIX_GRUPOS": channel.get("MIX_GRUPOS", getattr(client_config, 'MIX_GRUPOS', [])),
             "MAX_PALLETS_REAL_CRR": channel.get("MAX_PALLETS_REAL_CRR", getattr(client_config, 'MAX_PALLETS_REAL_CRR', 90)),
             
@@ -33,10 +33,9 @@ def get_effective_config(client_config, venta: str = None) -> dict:
             "PERMITE_CONSOLIDACION": channel.get("PERMITE_CONSOLIDACION", getattr(client_config, 'PERMITE_CONSOLIDACION', False)),
             "MAX_SKUS_POR_PALLET": channel.get("MAX_SKUS_POR_PALLET", getattr(client_config, 'MAX_SKUS_POR_PALLET', 3)),
             
-            # Auto-split para órdenes grandes
-            "AUTO_SPLIT_ENABLED": channel.get("AUTO_SPLIT_ENABLED", getattr(client_config, 'AUTO_SPLIT_ENABLED', False)),
-            "RESTRICT_PO_GROUP": channel.get("RESTRICT_PO_GROUP", getattr(client_config, 'RESTRICT_PO_GROUP', False)),
-            "SPLIT_THRESHOLD_FACTOR": channel.get("SPLIT_THRESHOLD_FACTOR", getattr(client_config, 'SPLIT_THRESHOLD_FACTOR', 0.9)),
+            # Modo dos fases (Helados/Refrigerados)
+            "MODO_DOS_FASES": channel.get("MODO_DOS_FASES", False),
+            "COL_PALLETS_ESTIMADO": channel.get("COL_PALLETS_ESTIMADO", "Pal. Estimado"),
             
             # Adherencia backhaul
             "ADHERENCIA_BACKHAUL": channel.get("ADHERENCIA_BACKHAUL", getattr(client_config, 'ADHERENCIA_BACKHAUL', None)),
@@ -66,7 +65,7 @@ def get_effective_config(client_config, venta: str = None) -> dict:
     return {
         "USA_OC": getattr(client_config, 'USA_OC', True),
         "AGRUPAR_POR_PO": getattr(client_config, 'AGRUPAR_POR_PO', False),
-        "MAX_ORDENES": getattr(client_config, 'MAX_ORDENES', 10),
+        "MAX_ORDENES": getattr(client_config, 'MAX_ORDENES', None),
         "MIX_GRUPOS": getattr(client_config, 'MIX_GRUPOS', []),
         "MAX_PALLETS_REAL_CRR": getattr(client_config, 'MAX_PALLETS_REAL_CRR', 90),
         "VALIDAR_ALTURA": getattr(client_config, 'VALIDAR_ALTURA', True),

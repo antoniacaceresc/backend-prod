@@ -46,7 +46,8 @@ def procesar(
     venta: str,
     REQUEST_TIMEOUT: int,
     vcuTarget: Any = None,
-    vcuTargetBH: Any = None
+    vcuTargetBH: Any = None,
+    fase: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     API principal de optimización (mantiene firma original para compatibilidad).
@@ -75,7 +76,7 @@ def procesar(
         # Ejecutar optimización
         return optimizar_con_dos_fases(
             df_full, config, client, venta,
-            REQUEST_TIMEOUT, MAX_TIEMPO_POR_GRUPO
+            REQUEST_TIMEOUT, MAX_TIEMPO_POR_GRUPO, fase
         )
     
     except Exception as e:
@@ -94,7 +95,8 @@ def optimizar_con_dos_fases(
     cliente: str,
     venta: str,
     request_timeout: int,
-    max_tpg: int
+    max_tpg: int,
+    fase: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Ejecuta optimización en dos fases: VCU y BinPacking.
@@ -117,14 +119,44 @@ def optimizar_con_dos_fases(
     
     # 2) Calcular tiempo por grupo
     effective_config = get_effective_config(client_config, venta)
+
+    # Manejo de modo 2 fases para Helados/Refrigerados
+    if effective_config.get("MODO_DOS_FASES") and fase:
+        from optimization.strategies.frozen_advisor import procesar_frozen_channel
+        
+        if fase == "pre_bop":
+            # Solo retornar recomendaciones, NO optimizar
+            resultado_fase = procesar_frozen_channel(pedidos_objetos, effective_config, fase)
+            return {
+                "tipo": "pre_bop",
+                "recomendacion": resultado_fase,
+            }
+        
+        elif fase == "post_bop":
+            # Procesar quiebres y continuar con optimización normal
+            resultado_fase = procesar_frozen_channel(pedidos_objetos, effective_config, fase)
+            
+            # Usar pedidos procesados (con quiebres manejados)
+            pedidos_procesados = resultado_fase.get("pedidos_para_optimizador")
+            if pedidos_procesados:
+                pedidos_objetos = pedidos_procesados
+            
+            # Guardar info de quiebres para incluir en respuesta
+            quiebres_info = resultado_fase.get("quiebres", {})
+    else:
+        quiebres_info = None
+
+
+    # 3) Calcular tiempos de grupos
+
     tpg = calcular_tiempo_por_grupo(pedidos_objetos, effective_config, request_timeout, max_tpg)
     
-    # 3) Ejecutar pipeline VCU
+    # 4) Ejecutar pipeline VCU
     resultado_vcu = _ejecutar_pipeline_vcu(
         pedidos_objetos, pedidos_dicts, client_config, tpg, request_timeout, venta
     )
     
-    # 4) Ejecutar pipeline BinPacking
+    # 5) Ejecutar pipeline BinPacking
     resultado_bp = _ejecutar_pipeline_binpacking(
         pedidos_objetos, pedidos_dicts, client_config, tpg, request_timeout, venta
     )
@@ -268,6 +300,10 @@ def _crear_pedido_desde_dict(p_dict: Dict[str, Any], client_config) -> Pedido:
                 flexible=float(sku_data.get("FLEXIBLE", 0)),
                 no_apilable=float(sku_data.get("NO_APILABLE", 0)),
                 si_mismo=float(sku_data.get("SI_MISMO", 0)),
+                pallets_estimados=float(sku_data.get("PALLETS_ESTIMADOS", 0)) or None,
+                pallets_solicitados=float(sku_data.get("PALLETS_SOLIC", 0)) or None,
+                peso_solicitado=float(sku_data.get("PESO_SOLIC", 0)) or None,
+                volumen_solicitado=float(sku_data.get("VOL_SOLIC", 0)) or None,
             )
             skus.append(sku)
     
