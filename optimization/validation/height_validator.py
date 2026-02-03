@@ -724,8 +724,8 @@ class HeightValidator:
         1. NO_APILABLE (más restrictivos)
         2. BASE (necesitan ir al fondo)
         3. SI_MISMO (se benefician de apilamiento temprano)
-        4. FLEXIBLE
-        5. SUPERIOR (van al final, encima de otros)
+        4. SUPERIOR
+        5. FLEXIBLE
         """
         prioridades = {
             CategoriaApilamiento.NO_APILABLE: 0,
