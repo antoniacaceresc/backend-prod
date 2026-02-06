@@ -254,11 +254,15 @@ class PosicionCamion:
         cat_inf = self._categoria_dominante(inferior)
         cat_sup = self._categoria_dominante(superior)
 
-        # Pickings consolidados pueden ir sobre cualquier full pallet (excepto NO_APILABLE)
+        # Pickings de 1 SKU pueden ir sobre CUALQUIER pallet completo (incluso NO_APILABLE)
         if superior.tiene_pickings and not superior.tiene_full_pallets:
+            skus_picking = {f.sku_id for f in superior.fragmentos}
+            if len(skus_picking) == 1 and inferior.tiene_full_pallets:
+                return True, None  # Picking de 1 SKU puede ir sobre cualquier full pallet
+            # Pickings de múltiples SKUs siguen regla anterior (no sobre NO_APILABLE)
             if cat_inf == CategoriaApilamiento.NO_APILABLE:
-                return False, "NO_APILABLE no acepta nada encima"
-            return True, None  # Pickings pueden ir sobre cualquier otro
+                return False, "NO_APILABLE no acepta pickings de múltiples SKUs encima"
+            return True, None
         
         # Regla 1: NO_APILABLE nunca tiene nada encima
         if cat_inf == CategoriaApilamiento.NO_APILABLE:

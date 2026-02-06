@@ -160,6 +160,7 @@ def optimizar_con_dos_fases(
     resultado_bp = _ejecutar_pipeline_binpacking(
         pedidos_objetos, pedidos_dicts, client_config, tpg, request_timeout, venta
     )
+
     
     return {
         "vcu": resultado_vcu,
@@ -358,6 +359,7 @@ def _formatear_resultado(
         # Calcular opciones_tipo_camion
         _actualizar_opciones_tipo_camion(cam, client_config, venta)
     
+
     # Calcular estadísticas
     estadisticas = _calcular_estadisticas(camiones, pedidos_no_incluidos)
 

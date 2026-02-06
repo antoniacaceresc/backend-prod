@@ -446,6 +446,43 @@ class HeightValidator:
             }
             
             colocado = False
+
+            # ═══════════════════════════════════════════════════════════════
+            # CASO 0: FLEXIBLE puede insertarse DEBAJO de SUPERIOR existente
+            # ═══════════════════════════════════════════════════════════════
+            if frag.categoria == CategoriaApilamiento.FLEXIBLE:
+                for pos_idx, posicion in enumerate(layout.posiciones):
+                    if len(posicion.pallets_apilados) == 1:
+                        pallet_existente = posicion.pallets_apilados[0]
+                        cat_existente = self._categoria_dominante_pallet(pallet_existente)
+                        
+                        if cat_existente == CategoriaApilamiento.SUPERIOR:
+                            altura_nueva_total = frag.altura_cm + pallet_existente.altura_total_cm
+                            if altura_nueva_total <= posicion.altura_maxima_cm:
+                                # Crear pallet FLEXIBLE en nivel 0
+                                pallet_flexible = PalletFisico(
+                                    id=f"pallet_{pallet_id_counter}",
+                                    posicion_id=posicion.id,
+                                    nivel=0
+                                )
+                                pallet_flexible.agregar_fragmento(frag)
+                                
+                                # Mover SUPERIOR a nivel 1
+                                pallet_existente.nivel = 1
+                                
+                                # Insertar FLEXIBLE al inicio
+                                posicion.pallets_apilados.insert(0, pallet_flexible)
+                                
+                                pallet_id_counter += 1
+                                colocado = True
+                                intento_info['exito'] = True
+                                intento_info['ubicacion'] = f"posicion_{pos_idx}_insertado_bajo_superior"
+                                break
+                
+                if colocado:
+                    debug_info['fragmentos_colocados'] += 1
+                    debug_info['historia_colocacion'].append(intento_info)
+                    continue
             
             # CASO 1: Intentar apilar en posición existente
             for pos_idx, posicion in enumerate(layout.posiciones):

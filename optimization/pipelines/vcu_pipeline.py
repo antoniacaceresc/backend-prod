@@ -424,8 +424,9 @@ class VCUPipeline(OptimizationPipeline):
     ) -> PipelineResult:
         """
         Procesa un tipo de ruta con camiones Backhaul.
+        Prioriza backhaul_28 (1 por CE) si está configurado.
         """
-        from utils.config_helpers import get_camiones_permitidos_para_ruta
+        from utils.config_helpers import get_camiones_permitidos_para_ruta, get_capacity_for_type
         
         grupos = _generar_grupos_para_tipo(pedidos, self.effective_config, tipo_ruta)
         
@@ -472,7 +473,6 @@ class VCUPipeline(OptimizationPipeline):
                 nuevos = res.get("pedidos_asignados_ids", [])
                 
                 if camiones and nuevos:
-                    # Marcar como backhaul
                     for cam in camiones:
                         cam.tipo_camion = TipoCamion.BACKHAUL
                         for p in cam.pedidos:
@@ -482,6 +482,9 @@ class VCUPipeline(OptimizationPipeline):
                     if ruta_sin_apilamiento_backhaul(self.config, cfg.cd, cfg.ce, tipo_ruta, self.venta):
                         for cam in camiones:
                             cam.metadata["sin_apilamiento"] = True
+                            print(f"[DEBUG-VCU-BH] ✓ Marcando sin_apilamiento camión {cam.id[:8]} tipo=backhaul CD={cfg.cd} CE={cfg.ce}")
+                    else:
+                        print(f"[DEBUG-VCU-BH] ✗ NO marca sin_apilamiento (backhaul pero ruta permite apilamiento) CD={cfg.cd} CE={cfg.ce}")
                     
                     all_camiones.extend(camiones)
                     pedidos_asignados.update(nuevos)
@@ -490,7 +493,7 @@ class VCUPipeline(OptimizationPipeline):
             camiones=all_camiones,
             pedidos_asignados=pedidos_asignados
         )
-    
+
     def _optimizar_paralelo(
         self,
         grupos_preparados: List[Tuple],
@@ -577,6 +580,16 @@ class VCUPipeline(OptimizationPipeline):
                 nuevos = res.get("pedidos_asignados_ids", [])
                 
                 if camiones and nuevos:
+                    # AGREGAR AQUÍ:
+                    from utils.config_helpers import permite_apilamiento_cd
+                    cd_grupo = cfg.cd[0] if cfg.cd else ""
+                    
+                    # SMU: Marcar sin_apilamiento si el CD no permite apilamiento (para TODOS los tipos)
+                    if not permite_apilamiento_cd(self.config, cd_grupo, self.venta):
+                        for cam in camiones:
+                            cam.metadata["sin_apilamiento"] = True
+                            print(f"[DEBUG-VCU-SEQ] ✓ Marcando sin_apilamiento por CD (todos tipos) CD={cd_grupo}")
+
                     all_camiones.extend(camiones)
                     pedidos_asignados.update(nuevos)
         
@@ -632,6 +645,18 @@ class VCUPipeline(OptimizationPipeline):
                         cam.tipo_camion = tipo_camion
                         for p in cam.pedidos:
                             p.tipo_camion = tipo_camion.value
+
+                    # AGREGAR: Marcar metadata si es backhaul con restricción
+                    if tipo_camion == TipoCamion.BACKHAUL:
+                        from utils.config_helpers import ruta_sin_apilamiento_backhaul
+                        if ruta_sin_apilamiento_backhaul(self.config, cfg.cd, cfg.ce, cfg.tipo.value, self.venta):
+                            for cam in camiones:
+                                cam.metadata["sin_apilamiento"] = True
+                                print(f"[DEBUG-VCU-SEQ] ✓ Marcando sin_apilamiento camión {cam.id[:8]} tipo=backhaul CD={cfg.cd} CE={cfg.ce}")
+                        else:
+                            print(f"[DEBUG-VCU-SEQ] ✗ NO marca sin_apilamiento (backhaul pero ruta permite apilamiento) CD={cfg.cd} CE={cfg.ce}")
+                    else:
+                        print(f"[DEBUG-VCU-SEQ] ✗ NO marca sin_apilamiento (tipo={tipo_camion.value}, no es backhaul) CD={cfg.cd} CE={cfg}")
                     
                     all_camiones.extend(camiones)
                     pedidos_asignados.update(nuevos)

@@ -161,11 +161,19 @@ class BinPackingPipeline(OptimizationPipeline):
         if not permite_apilamiento_cd(self.config, cd_grupo, self.venta):
             cap = cap.sin_apilamiento()
             grupo_sin_apilamiento = True
+
         # Restricción específica: backhaul sin apilar para ciertas rutas
         elif tipo_camion == TipoCamion.BACKHAUL:
             if ruta_sin_apilamiento_backhaul(self.config, cfg.cd, cfg.ce, cfg.tipo.value, self.venta):
                 cap = cap.sin_apilamiento()
                 grupo_sin_apilamiento = True
+                print(f"[DEBUG-BP] ✓ Marcando sin_apilamiento camión {cam.id[:8]} tipo={tipo_camion.value} CD={cfg.cd} CE={cfg.ce}")
+            else:
+                print(f"[DEBUG-BP] ✗ NO marca sin_apilamiento (backhaul pero ruta permite apilamiento) camión tipo={tipo_camion.value} CD={cfg.cd} CE={cfg.ce}")
+        else:
+            print(f"[DEBUG-BP] ✗ NO marca sin_apilamiento (tipo={tipo_camion.value}, no es backhaul) CD={cfg.cd} CE={cfg.ce}")
+
+                
         
         if DEBUG_VALIDATION:
             print(f"[BP] Optimizando {cfg.id}: {n_pedidos} pedidos, {tiempo_grupo}s")
@@ -188,9 +196,15 @@ class BinPackingPipeline(OptimizationPipeline):
                             p.tipo_camion = tipo_camion.value
                 
                 # Marcar si tiene restricción de apilamiento
-                if tipo_camion == TipoCamion.BACKHAUL and ruta_sin_apilamiento_backhaul(self.config, cfg.cd, cfg.ce, cfg.tipo.value, self.venta):
+                # SMU: todos los tipos en ciertos CDs
+                if not permite_apilamiento_cd(self.config, cd_grupo, self.venta):
                     for cam in camiones:
                         cam.metadata["sin_apilamiento"] = True
+                # Cencosud: solo backhaul en ciertas rutas
+                elif tipo_camion == TipoCamion.BACKHAUL:
+                    if ruta_sin_apilamiento_backhaul(self.config, cfg.cd, cfg.ce, cfg.tipo.value, self.venta):
+                        for cam in camiones:
+                            cam.metadata["sin_apilamiento"] = True
                 
                 if DEBUG_VALIDATION:
                     print(f"[BP] ✓ {cfg.id}: {len(nuevos)}/{n_pedidos} en {len(camiones)} camiones")

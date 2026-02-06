@@ -232,6 +232,10 @@ class BackhaulAdherenceManager:
             for p in cam.pedidos:
                 p.tipo_camion = tipo_original.value
             
+            # AGREGAR: Limpiar metadata de sin_apilamiento si se había marcado
+            if "sin_apilamiento" in cam.metadata:
+                del cam.metadata["sin_apilamiento"]
+    
             return False
     
     def _actualizar_layout_info(
@@ -247,9 +251,16 @@ class BackhaulAdherenceManager:
         cam.metadata['layout_info'] = {
             'altura_validada': True,
             'errores_validacion': [],
-            'fragmentos_fallidos': [],
+            'fragmentos_fallidos': debug_info.get('fragmentos_fallidos', []) if debug_info else [],
+            'fragmentos_totales': debug_info.get('fragmentos_totales', 0) if debug_info else 0,
             'posiciones_usadas': layout.posiciones_usadas,
+            'posiciones_disponibles': layout.posiciones_disponibles,
             'altura_maxima_cm': layout.altura_maxima_cm,
+            'total_pallets_fisicos': layout.total_pallets,
+            'altura_maxima_usada_cm': round(layout.altura_maxima_usada, 1),
+            'altura_promedio_usada': round(layout.altura_promedio_usada, 1),
+            'aprovechamiento_altura': round(layout.aprovechamiento_altura * 100, 1),
+            'aprovechamiento_posiciones': round(layout.aprovechamiento_posiciones * 100, 1),
             'posiciones': self._serializar_posiciones(layout)
         }
     

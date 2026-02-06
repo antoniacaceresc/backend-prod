@@ -15,6 +15,7 @@ from typing import List, Optional, Dict, Any
 from models.domain import Camion, TruckCapacity
 from models.enums import TipoCamion
 from optimization.utils.helpers import calcular_posiciones_apilabilidad
+from optimization.validation.height_validator import HeightValidator
 
 
 # Flag para activar/desactivar prints de debug
@@ -26,8 +27,8 @@ class NestleReclassifier:
     Reclasifica camiones Nestlé después de validación de altura.
     
     Lógica:
-    - Se optimiza inicialmente con PAQUETERA (más posiciones, 270cm altura)
-    - Después de validar altura, si el layout real cabe en RAMPLA_DIRECTA (220cm),
+    - Se optimiza inicialmente con PAQUETERA (más posiciones, 280cm altura)
+    - Después de validar altura, si el layout real cabe en RAMPLA_DIRECTA (270cm),
       se reclasifica para usar camión más económico
     """
     
@@ -153,27 +154,37 @@ class NestleReclassifier:
         layout_info: Dict[str, Any],
         cap_rampla: TruckCapacity
     ) -> TipoCamion:
-        """
-        Determina tipo óptimo usando datos reales del layout.
-        """
-        altura_maxima_usada = layout_info.get('altura_maxima_usada_cm', 0)
-        posiciones_usadas = layout_info.get('posiciones_usadas', len(camion.pedidos))
-        
-        # Verificar dimensiones básicas
-        peso_total = sum(p.peso for p in camion.pedidos)
-        volumen_total = sum(p.volumen for p in camion.pedidos)
-        pallets_total = camion.pallets_capacidad
-        
-        # Verificación completa: altura real + dimensiones + posiciones
-        cabe_en_rampla = (
-            altura_maxima_usada <= cap_rampla.altura_cm and  # Lo más importante
-            posiciones_usadas <= cap_rampla.max_positions and
-            peso_total <= cap_rampla.cap_weight and
-            volumen_total <= cap_rampla.cap_volume and
-            pallets_total <= cap_rampla.max_pallets
-        )
-        
-        if cabe_en_rampla:
+            """
+            Determina tipo óptimo usando datos reales del layout.
+            Re-valida el layout con altura de rampla antes de confirmar.
+            """
+            altura_maxima_usada = layout_info.get('altura_maxima_usada_cm', 0)
+            posiciones_usadas = layout_info.get('posiciones_usadas', len(camion.pedidos))
+            
+            # Verificar dimensiones básicas
+            peso_total = sum(p.peso for p in camion.pedidos)
+            volumen_total = sum(p.volumen for p in camion.pedidos)
+            pallets_total = camion.pallets_capacidad
+            
+            # Verificación rápida: si claramente no cabe, no hacer validación costosa
+            if (posiciones_usadas > cap_rampla.max_positions or
+                peso_total > cap_rampla.cap_weight or
+                volumen_total > cap_rampla.cap_volume or
+                pallets_total > cap_rampla.max_pallets):
+                return TipoCamion.PAQUETERA
+            
+            # Si la altura ya excede, no cabe
+            if altura_maxima_usada > cap_rampla.altura_cm:
+                return TipoCamion.PAQUETERA
+            
+            # ═══════════════════════════════════════════════════════════════════
+            # CRÍTICO: Re-validar el layout con la altura de rampla_directa
+            # ═══════════════════════════════════════════════════════════════════
+            if not self._validar_layout_para_rampla(camion, cap_rampla):
+                if DEBUG_VALIDATION:
+                    print(f"[RECLASIFICACIÓN] ❌ Camión {camion.id}: layout inválido para rampla_directa")
+                return TipoCamion.PAQUETERA
+            
             # Verificar que cumple VCU target
             vcu_peso_rampla = peso_total / cap_rampla.cap_weight if cap_rampla.cap_weight > 0 else 0
             vcu_vol_rampla = volumen_total / cap_rampla.cap_volume if cap_rampla.cap_volume > 0 else 0
@@ -181,9 +192,83 @@ class NestleReclassifier:
             
             if vcu_max_rampla >= cap_rampla.vcu_min:
                 return TipoCamion.RAMPLA_DIRECTA
+            
+            return TipoCamion.PAQUETERA
         
-        return TipoCamion.PAQUETERA
-    
+    def _validar_layout_para_rampla(
+        self,
+        camion: Camion,
+        cap_rampla: TruckCapacity
+    ) -> bool:
+        """
+        Valida que el layout del camión sea válido con las restricciones de rampla_directa.
+        Verifica TANTO altura como número de posiciones.
+        
+        Returns:
+            True si el layout es válido para rampla_directa
+        """
+        from utils.config_helpers import get_consolidacion_config
+        
+        # Obtener configuración de consolidación
+        subcliente = None
+        oc = None
+        if camion.pedidos:
+            primer_pedido = camion.pedidos[0]
+            subcliente = primer_pedido.metadata.get("SUBCLIENTE") if primer_pedido.metadata else None
+            oc = getattr(primer_pedido, 'oc', None)
+        
+        consolidacion = get_consolidacion_config(
+            self.config,
+            subcliente=subcliente,
+            oc=oc,
+            venta=self.venta
+        )
+        
+        # Crear validador con altura de RAMPLA_DIRECTA
+        validator = HeightValidator(
+            altura_maxima_cm=cap_rampla.altura_cm,
+            permite_consolidacion=consolidacion.get("PERMITE_CONSOLIDACION", True),
+            max_skus_por_pallet=consolidacion.get("MAX_SKUS_POR_PALLET", 3),
+            max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM")
+        )
+        
+        # Ejecutar validación de altura
+        es_valido, errores, layout, debug_info = validator.validar_camion_rapido(camion)
+        
+        if not es_valido:
+            if DEBUG_VALIDATION:
+                print(f"[RECLASIFICACIÓN] Camión {camion.id} falló validación altura rampla: {errores}")
+            return False
+        
+        # ═══════════════════════════════════════════════════════════════════
+        # CRÍTICO: Verificar que el layout NO excede las posiciones de rampla
+        # HeightValidator solo valida altura, NO valida límite de posiciones
+        # ═══════════════════════════════════════════════════════════════════
+        if layout is not None and layout.posiciones_usadas > cap_rampla.max_positions:
+            if DEBUG_VALIDATION:
+                print(f"[RECLASIFICACIÓN] ❌ Camión {camion.id}: layout usa {layout.posiciones_usadas} posiciones, "
+                    f"rampla_directa permite máx {cap_rampla.max_positions}")
+            return False
+        
+        # ═══════════════════════════════════════════════════════════════════
+        # Si es válido, guardar el nuevo layout_info para rampla
+        # ═══════════════════════════════════════════════════════════════════
+        if layout is not None:
+            camion.metadata['layout_info'] = {
+                'altura_validada': True,
+                'altura_maxima_cm': cap_rampla.altura_cm,
+                'altura_maxima_usada_cm': layout.altura_maxima_usada,
+                'posiciones_usadas': layout.posiciones_usadas,
+                'posiciones_disponibles': cap_rampla.max_positions,
+                'aprovechamiento_altura': round(layout.aprovechamiento_altura * 100, 1),
+                'aprovechamiento_posiciones': round((layout.posiciones_usadas / cap_rampla.max_positions) * 100, 1),
+                'errores': [],
+                'validado_para_tipo': 'rampla_directa'
+            }
+            camion.pos_total = layout.posiciones_usadas
+        
+        return True
+
     def _aplicar_reclasificacion(
         self,
         camion: Camion,
@@ -198,43 +283,9 @@ class NestleReclassifier:
         # Cambiar tipo y capacidad
         camion.cambiar_tipo(nuevo_tipo, nueva_capacidad)
         
-        # Recalcular posiciones con nueva capacidad
-        camion.pos_total = calcular_posiciones_apilabilidad(
-            camion.pedidos,
-            nueva_capacidad.max_positions
-        )
-        
         # Actualizar en todos los pedidos
         for pedido in camion.pedidos:
             pedido.tipo_camion = nuevo_tipo.value
-        
-        # Actualizar layout_info para reflejar nueva capacidad
-        self._actualizar_layout_info(camion, nueva_capacidad)
-    
-    def _actualizar_layout_info(self, camion: Camion, nueva_capacidad: TruckCapacity):
-        """Actualiza layout_info con la nueva capacidad."""
-        if 'layout_info' not in camion.metadata:
-            return
-        
-        layout_info = camion.metadata['layout_info']
-        
-        # Actualizar altura máxima del camión
-        layout_info['altura_maxima_cm'] = nueva_capacidad.altura_cm
-        
-        # Recalcular aprovechamiento de altura con nueva referencia
-        altura_usada = layout_info.get('altura_maxima_usada_cm', 0)
-        if nueva_capacidad.altura_cm > 0:
-            nuevo_aprovechamiento = (altura_usada / nueva_capacidad.altura_cm) * 100
-            layout_info['aprovechamiento_altura'] = round(nuevo_aprovechamiento, 1)
-        
-        # Actualizar posiciones disponibles si cambiaron
-        layout_info['posiciones_disponibles'] = nueva_capacidad.max_positions
-        
-        # Recalcular aprovechamiento de posiciones
-        posiciones_usadas = layout_info.get('posiciones_usadas', 0)
-        if nueva_capacidad.max_positions > 0:
-            nuevo_aprov_pos = (posiciones_usadas / nueva_capacidad.max_positions) * 100
-            layout_info['aprovechamiento_posiciones'] = round(nuevo_aprov_pos, 1)
 
 
 # Función de conveniencia
