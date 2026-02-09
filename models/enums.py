@@ -13,6 +13,7 @@ class TipoCamion(str, Enum):
     PAQUETERA = "paquetera"
     RAMPLA_DIRECTA = "rampla_directa"
     BACKHAUL = "backhaul"
+    BACKHAUL_28 = "backhaul_28" # Sólo para Cencosud
     MEDIANO = "mediano"
     PEQUEÑO = "pequeño" 
 
@@ -25,7 +26,7 @@ class TipoCamion(str, Enum):
     @property
     def es_backhaul(self) -> bool:
         """Indica si es camión backhaul del cliente"""
-        return self == TipoCamion.BACKHAUL
+        return self in (TipoCamion.BACKHAUL, TipoCamion.BACKHAUL_28)
 
 
 class StatusOptimizacion(str, Enum):

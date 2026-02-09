@@ -117,7 +117,9 @@ class NestleTruckSelector(TruckSelector):
         fase = contexto.get('fase', 'nestle')
         
         if fase == 'backhaul':
-            # En fase BH, solo backhaul
+            # En fase BH, priorizar backhaul_28 si está disponible
+            if TipoCamion.backhaul_28 in camiones_permitidos:
+                return TipoCamion.backhaul_28
             if TipoCamion.BACKHAUL in camiones_permitidos:
                 return TipoCamion.BACKHAUL
         

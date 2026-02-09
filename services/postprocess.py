@@ -485,6 +485,7 @@ def apply_truck_type_change(
         'rampla_directa': 'rampla_directa',
         'backhaul': 'backhaul',
         'bh': 'backhaul',
+        'backhaul_2': 'backhaul_2'
     }
     
     tipo_nuevo = tipo_mapping.get(tipo_nuevo, tipo_nuevo)
@@ -817,7 +818,7 @@ def _actualizar_opciones_tipo_camion(camion: Camion, client_config, venta: str =
                 print(f"[DEBUG] ⚠️ Error validando tipo '{tipo.value}': {e}")
     
     # Convertir a lista ordenada
-    orden = ['pequeño','mediano','paquetera', 'rampla_directa', 'backhaul']
+    orden = ['pequeño','mediano','paquetera', 'rampla_directa', 'backhaul', 'backhaul_2']
     opciones_ordenadas = [t for t in orden if t in opciones]
     
     # Agregar cualquier otro tipo no estándar que pueda estar

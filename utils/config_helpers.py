@@ -110,6 +110,10 @@ def extract_truck_capacities(client_config, venta: str = None) -> Dict[TipoCamio
     # Capacidad backhaul
     if 'backhaul' in truck_types:
         capacidades[TipoCamion.BACKHAUL] = TruckCapacity.from_config(truck_types['backhaul'])
+
+     # Capacidad backhaul_28
+    if 'backhaul_28' in truck_types:
+        capacidades[TipoCamion.BACKHAUL_28] = TruckCapacity.from_config(truck_types['backhaul_28'])
     
     # Capacidad mediano
     if 'mediano' in truck_types:

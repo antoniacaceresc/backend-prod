@@ -477,7 +477,7 @@ def _agregar_skus_a_pedidos(
         campos_identidad.append("OC")
 
     # Campos extra - identidad (primer valor)
-    campos_extra_first = ["Solic.", "Fecha preferente de entrega"]
+    campos_extra_first = ["Solic.", "Fecha preferente de entrega", "Fecha documento"]
     for col in campos_extra_first:
         if col in df_skus.columns:
             campos_identidad.append(col)
@@ -528,6 +528,10 @@ def _agregar_skus_a_pedidos(
     
     if "Fecha preferente de entrega" in df_pedidos.columns:
         df_pedidos['Fecha preferente de entrega'] = pd.to_datetime(df_pedidos['Fecha preferente de entrega']).dt.strftime('%d-%m-%Y')
+
+    
+    if "Fecha documento" in df_pedidos.columns:
+        df_pedidos['Fecha documento'] = pd.to_datetime(df_pedidos['Fecha documento']).dt.strftime('%d-%m-%Y')
     
     # Validar coherencia de campos de identidad
     _validar_coherencia_identidad(df_skus, campos_identidad)
