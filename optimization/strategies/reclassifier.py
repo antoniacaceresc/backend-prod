@@ -256,14 +256,17 @@ class NestleReclassifier:
         if layout is not None:
             camion.metadata['layout_info'] = {
                 'altura_validada': True,
+                'errores_validacion': [],
                 'altura_maxima_cm': cap_rampla.altura_cm,
-                'altura_maxima_usada_cm': layout.altura_maxima_usada,
+                'altura_maxima_usada_cm': round(layout.altura_maxima_usada, 1),
+                'altura_promedio_usada': round(layout.altura_promedio_usada, 1),
                 'posiciones_usadas': layout.posiciones_usadas,
                 'posiciones_disponibles': cap_rampla.max_positions,
+                'total_pallets_fisicos': layout.total_pallets,
                 'aprovechamiento_altura': round(layout.aprovechamiento_altura * 100, 1),
                 'aprovechamiento_posiciones': round((layout.posiciones_usadas / cap_rampla.max_positions) * 100, 1),
-                'errores': [],
-                'validado_para_tipo': 'rampla_directa'
+                'validado_para_tipo': 'rampla_directa',
+                'posiciones': self._serializar_posiciones(layout)  # ← AGREGAR ESTO
             }
             camion.pos_total = layout.posiciones_usadas
         
@@ -287,6 +290,37 @@ class NestleReclassifier:
         for pedido in camion.pedidos:
             pedido.tipo_camion = nuevo_tipo.value
 
+
+    def _serializar_posiciones(self, layout) -> List[Dict[str, Any]]:
+        """Serializa las posiciones del layout a diccionarios."""
+        return [
+            {
+                'id': pos.id,
+                'altura_usada_cm': pos.altura_usada_cm,
+                'altura_disponible_cm': pos.espacio_disponible_cm,
+                'num_pallets': pos.num_pallets,
+                'pallets': [
+                    {
+                        'id': pallet.id,
+                        'nivel': pallet.nivel,
+                        'altura_cm': pallet.altura_total_cm,
+                        'skus': [
+                            {
+                                'sku_id': frag.sku_id,
+                                'pedido_id': frag.pedido_id,
+                                'altura_cm': frag.altura_cm,
+                                'categoria': frag.categoria.value,
+                                'es_picking': frag.es_picking
+                            }
+                            for frag in pallet.fragmentos
+                        ]
+                    }
+                    for pallet in pos.pallets_apilados
+                ]
+            }
+            for pos in layout.posiciones
+            if not pos.esta_vacia
+        ]
 
 # Función de conveniencia
 def reclasificar_nestle_post_validacion(

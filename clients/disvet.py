@@ -37,7 +37,7 @@ class DisvetConfig:
         "Suma de Conf (Pallet)": "Pal. Conf.",
         "Suma de Valor neto CONF": "$$ Conf.",
         "%NS": "%NS",
-        "Fecha preferente de entrega": "Fecha prefer/entrega", 
+        "Fecha preferente de entrega": "Fecha prefer/entrega",
     }
 
     # Configuración por canal de venta

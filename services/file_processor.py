@@ -115,6 +115,7 @@ def build_column_mapping(client_config, venta: str) -> Dict[str, str]:
         "SKU": "SKU",
         "ALTURA_FULL_PALLET": "Altura full Pallet",
         "ALTURA_PICKING": "Altura Picking",
+        "DESCRIPCION": "Descripción",
     }
     
     # Agregar solo si no están en el mapping (para permitir override por cliente)
@@ -294,6 +295,7 @@ def _optimizar_apilabilidad_skus(df: pd.DataFrame, altura_maxima_cm: float = 260
     
     # Iterar sobre SKUs con SI_MISMO > 0
     for idx in df[df['SI_MISMO'] > 0].index:
+
         altura = df.at[idx, 'ALTURA_FULL_PALLET']
         si_mismo = df.at[idx, 'SI_MISMO']
         

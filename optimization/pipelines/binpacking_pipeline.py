@@ -167,11 +167,6 @@ class BinPackingPipeline(OptimizationPipeline):
             if ruta_sin_apilamiento_backhaul(self.config, cfg.cd, cfg.ce, cfg.tipo.value, self.venta):
                 cap = cap.sin_apilamiento()
                 grupo_sin_apilamiento = True
-                print(f"[DEBUG-BP] ✓ Marcando sin_apilamiento camión {cam.id[:8]} tipo={tipo_camion.value} CD={cfg.cd} CE={cfg.ce}")
-            else:
-                print(f"[DEBUG-BP] ✗ NO marca sin_apilamiento (backhaul pero ruta permite apilamiento) camión tipo={tipo_camion.value} CD={cfg.cd} CE={cfg.ce}")
-        else:
-            print(f"[DEBUG-BP] ✗ NO marca sin_apilamiento (tipo={tipo_camion.value}, no es backhaul) CD={cfg.cd} CE={cfg.ce}")
 
                 
         

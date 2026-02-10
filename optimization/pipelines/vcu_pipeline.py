@@ -482,9 +482,6 @@ class VCUPipeline(OptimizationPipeline):
                     if ruta_sin_apilamiento_backhaul(self.config, cfg.cd, cfg.ce, tipo_ruta, self.venta):
                         for cam in camiones:
                             cam.metadata["sin_apilamiento"] = True
-                            print(f"[DEBUG-VCU-BH] ✓ Marcando sin_apilamiento camión {cam.id[:8]} tipo=backhaul CD={cfg.cd} CE={cfg.ce}")
-                    else:
-                        print(f"[DEBUG-VCU-BH] ✗ NO marca sin_apilamiento (backhaul pero ruta permite apilamiento) CD={cfg.cd} CE={cfg.ce}")
                     
                     all_camiones.extend(camiones)
                     pedidos_asignados.update(nuevos)

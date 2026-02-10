@@ -305,6 +305,7 @@ def _crear_pedido_desde_dict(p_dict: Dict[str, Any], client_config) -> Pedido:
                 pallets_solicitados=float(sku_data.get("PALLETS_SOLIC", 0)) or None,
                 peso_solicitado=float(sku_data.get("PESO_SOLIC", 0)) or None,
                 volumen_solicitado=float(sku_data.get("VOL_SOLIC", 0)) or None,
+                descripcion=str(sku_data.get("DESCRIPCION", "")) or None,
             )
             skus.append(sku)
     

@@ -492,7 +492,6 @@ class Pedido:
         
         # Añadir metadata extra
         result.update(self.metadata)
-
         if self.skus:
             result["SKUS"] = [
                 {
