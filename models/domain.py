@@ -897,7 +897,6 @@ class Camion:
                 self.pedidos,
                 nueva_capacidad.max_positions
             )
-            
             if pos_necesarias > nueva_capacidad.max_positions + 1e-6:
                 return False
         except Exception:
@@ -1040,7 +1039,7 @@ class EstadoOptimizacion:
     @property
     def camiones_bh(self) -> List[Camion]:
         """Lista de camiones tipo BH"""
-        return [c for c in self.camiones if c.tipo_camion == TipoCamion.BACKHAUL]
+        return [c for c in self.camiones if c.tipo_camion.es_backhaul]
     
     @property
     def total_pedidos_asignados(self) -> int:
@@ -1117,7 +1116,7 @@ class EstadoOptimizacion:
     
     def get_capacidad_para_tipo(self, tipo_camion: TipoCamion) -> TruckCapacity:
         """Obtiene la capacidad correspondiente al tipo de camión"""
-        if tipo_camion == TipoCamion.BACKHAUL and self.capacidad_bh:
+        if tipo_camion.es_backhaul and self.capacidad_bh:
             return self.capacidad_bh
         return self.capacidad_normal
     

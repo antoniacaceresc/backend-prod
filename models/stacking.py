@@ -280,6 +280,10 @@ class PosicionCamion:
         
         # Regla 4: SI_MISMO solo acepta mismo SKU (validar límite de altura)
         if cat_inf == CategoriaApilamiento.SI_MISMO:
+            # Permitir máximo 1 picking encima de SI_MISMO (cualquier SKU)
+            if superior.tiene_pickings and not superior.tiene_full_pallets:
+                return True, None
+            
             skus_inf = {f.sku_id for f in inferior.fragmentos}
             skus_sup = {f.sku_id for f in superior.fragmentos}
             

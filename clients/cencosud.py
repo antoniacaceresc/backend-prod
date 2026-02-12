@@ -97,7 +97,11 @@ class CencosudConfig:
 
                 "multi_ce": [
                     # Solo Nestlé
-                    {"cds": ["N794 Bodega Chillan"], "ces": ["0088", "0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]}
+                    {"cds": ["N794 Bodega Chillan"], "ces": ["0088", "0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["N794 Bodega Chillan"], "ces": ["0088", "8150"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["N794 Bodega Chillan"], "ces": ["0103", "8150"], "camiones_permitidos": ["paquetera", "rampla_directa"]}
+                
+                
                 ]
             }
         },

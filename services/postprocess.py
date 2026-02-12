@@ -123,10 +123,6 @@ def _camion_from_dict(cam_dict: Dict[str, Any], capacidades: Dict[TipoCamion, Tr
     if "errores_validacion" in cam_dict:
         metadata["errores_validacion"] = cam_dict["errores_validacion"]
 
-    # LIMPIEZA: Remover sin_apilamiento si el camión NO es backhaul
-    if tipo_camion != TipoCamion.BACKHAUL and "sin_apilamiento" in metadata:
-        del metadata["sin_apilamiento"]
-    
     return Camion(
         id=cam_dict["id"],
         numero=cam_dict.get("numero", 0),
@@ -349,11 +345,10 @@ def add_truck(
     metadata_inicial = {}
     
     # Ajustar si es backhaul y la ruta no permite apilamiento
-    if tipo_inicial == TipoCamion.BACKHAUL:
+    if tipo_inicial.es_backhaul:
         if ruta_sin_apilamiento_backhaul(config, cd_list, ce_list, tipo_ruta.value, venta):
             capacidad_inicial = capacidad_inicial.sin_apilamiento()
             metadata_inicial["sin_apilamiento"] = True
-            print(f"[DEBUG-POST-ADD] ✓ Marcando sin_apilamiento nuevo camión tipo=backhaul CD={cd_list} CE={ce_list}")
     
     # 4) Crear camión nuevo
     nuevo_camion = Camion(
@@ -511,7 +506,7 @@ def apply_truck_type_change(
     # Ajustar si es backhaul y la ruta no permite apilamiento
     from utils.config_helpers import ruta_sin_apilamiento_backhaul
     
-    if nuevo_tipo_enum == TipoCamion.BACKHAUL:
+    if nuevo_tipo_enum.es_backhaul:
         cam_cd = camion.cd if isinstance(camion.cd, list) else [camion.cd]
         cam_ce = camion.ce if isinstance(camion.ce, list) else [camion.ce]
         tipo_ruta_str = camion.tipo_ruta.value if hasattr(camion.tipo_ruta, 'value') else str(camion.tipo_ruta)
@@ -519,13 +514,11 @@ def apply_truck_type_change(
         if ruta_sin_apilamiento_backhaul(config, cam_cd, cam_ce, tipo_ruta_str, venta):
             nueva_capacidad = nueva_capacidad.sin_apilamiento()
             camion.metadata["sin_apilamiento"] = True
-            print(f"[DEBUG-POST-CHG] ✓ Marcando sin_apilamiento camión {camion.id[:8]} cambio a backhaul CD={cam_cd} CE={cam_ce}")
 
     else:
         # Limpiar metadata si cambia desde backhaul a otro tipo
         if "sin_apilamiento" in camion.metadata:
             del camion.metadata["sin_apilamiento"]
-            print(f"[DEBUG-POST-CHG] ✗ REMOVIENDO sin_apilamiento camión {camion.id[:8]} cambio a {nuevo_tipo_enum.value}")
 
     
     # Validar que el camión cabe en la nueva capacidad
@@ -983,7 +976,7 @@ def _compute_stats(
     tipos_camion = Counter(c.tipo_camion.value for c in camiones)
     cantidad_paquetera = tipos_camion.get('paquetera', 0)
     cantidad_rampla = tipos_camion.get('rampla_directa', 0)
-    cantidad_backhaul = tipos_camion.get('backhaul', 0)
+    cantidad_backhaul = tipos_camion.get('backhaul', 0) + tipos_camion.get('backhaul_28', 0)
     
     # Camiones Nestlé = paquetera + rampla_directa
     cantidad_nestle = cantidad_paquetera + cantidad_rampla
@@ -996,7 +989,7 @@ def _compute_stats(
     vcu_nestle = sum(c.vcu_max for c in camiones_nestle) / len(camiones_nestle) if camiones_nestle else 0
     
     # VCU promedio de camiones Backhaul
-    camiones_bh = [c for c in camiones if c.tipo_camion == TipoCamion.BACKHAUL]
+    camiones_bh = [c for c in camiones if c.tipo_camion.es_backhaul]
     vcu_bh = sum(c.vcu_max for c in camiones_bh) / len(camiones_bh) if camiones_bh else 0
     
     # Valorizado

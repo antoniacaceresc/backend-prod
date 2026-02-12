@@ -155,6 +155,22 @@ class BinPackingPipeline(OptimizationPipeline):
         
         cap = get_capacity_for_type(self.config, tipo_camion, self.venta)
         
+        # Ajustar altura por subcliente (ej: Alvi=230cm)
+        if hasattr(self.config, 'get_altura_maxima') and pedidos:
+            subcliente = pedidos[0].metadata.get("SUBCLIENTE", "")
+            if subcliente:
+                altura_sub = self.config.get_altura_maxima(subcliente, cap.altura_cm)
+                if altura_sub < cap.altura_cm:
+                    cap = TruckCapacity(
+                        cap_weight=cap.cap_weight,
+                        cap_volume=cap.cap_volume,
+                        max_positions=cap.max_positions,
+                        max_pallets=cap.max_pallets,
+                        levels=cap.levels,
+                        vcu_min=cap.vcu_min,
+                        altura_cm=altura_sub
+                    )
+
         # Ajustar si no permite apilamiento
         from utils.config_helpers import permite_apilamiento_cd, ruta_sin_apilamiento_backhaul
         cd_grupo = cfg.cd[0] if cfg.cd else ""
@@ -163,7 +179,7 @@ class BinPackingPipeline(OptimizationPipeline):
             grupo_sin_apilamiento = True
 
         # Restricción específica: backhaul sin apilar para ciertas rutas
-        elif tipo_camion == TipoCamion.BACKHAUL:
+        elif tipo_camion.es_backhaul:
             if ruta_sin_apilamiento_backhaul(self.config, cfg.cd, cfg.ce, cfg.tipo.value, self.venta):
                 cap = cap.sin_apilamiento()
                 grupo_sin_apilamiento = True
@@ -196,7 +212,7 @@ class BinPackingPipeline(OptimizationPipeline):
                     for cam in camiones:
                         cam.metadata["sin_apilamiento"] = True
                 # Cencosud: solo backhaul en ciertas rutas
-                elif tipo_camion == TipoCamion.BACKHAUL:
+                elif tipo_camion.es_backhaul:
                     if ruta_sin_apilamiento_backhaul(self.config, cfg.cd, cfg.ce, cfg.tipo.value, self.venta):
                         for cam in camiones:
                             cam.metadata["sin_apilamiento"] = True

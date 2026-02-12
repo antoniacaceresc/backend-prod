@@ -386,9 +386,36 @@ class GreedyInjector:
         es_valido, errores, layout, debug_info = self.height_validator.validar_camion_rapido(
             camion_temp
         )
+        # Validar altura con parámetros específicos del camión
+        from utils.config_helpers import get_consolidacion_config
         
+        altura_maxima = camion.capacidad.altura_cm
+        if hasattr(self.config, 'get_altura_maxima'):
+            subcliente = ""
+            if camion.pedidos:
+                subcliente = camion.pedidos[0].metadata.get("SUBCLIENTE", "")
+            altura_maxima = self.config.get_altura_maxima(subcliente, altura_maxima)
+        
+        subcliente = None
+        oc = None
+        if camion.pedidos:
+            primer_pedido = camion.pedidos[0]
+            subcliente = primer_pedido.metadata.get("SUBCLIENTE") if primer_pedido.metadata else None
+            oc = getattr(primer_pedido, 'oc', None)
+        
+        consolidacion = get_consolidacion_config(self.config, subcliente=subcliente, oc=oc, venta=self.venta)
+        
+        validator = HeightValidator(
+            altura_maxima_cm=altura_maxima,
+            permite_consolidacion=consolidacion.get("PERMITE_CONSOLIDACION", False),
+            max_skus_por_pallet=consolidacion.get("MAX_SKUS_POR_PALLET", 1),
+            max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM")
+        )
+        
+        es_valido, errores, layout, debug_info = validator.validar_camion_rapido(camion_temp)
         return es_valido
-    
+        
+
     def _confirmar_inyeccion(
         self,
         camion: Camion,
@@ -408,18 +435,90 @@ class GreedyInjector:
         
         # Actualizar metadata del pedido
         pedido.tipo_camion = camion.tipo_camion.value if hasattr(camion.tipo_camion, 'value') else str(camion.tipo_camion)
+
+        # Validar altura con parámetros específicos del camión
+        from utils.config_helpers import get_consolidacion_config
         
-        # Re-validar y actualizar layout_info
+        altura_maxima = camion.capacidad.altura_cm
+        if hasattr(self.config, 'get_altura_maxima'):
+            subcliente = ""
+            if camion.pedidos:
+                subcliente = camion.pedidos[0].metadata.get("SUBCLIENTE", "")
+            altura_maxima = self.config.get_altura_maxima(subcliente, altura_maxima)
+        
+        subcliente = None
+        oc = None
+        if camion.pedidos:
+            primer_pedido = camion.pedidos[0]
+            subcliente = primer_pedido.metadata.get("SUBCLIENTE") if primer_pedido.metadata else None
+            oc = getattr(primer_pedido, 'oc', None)
+        
+        consolidacion = get_consolidacion_config(self.config, subcliente=subcliente, oc=oc, venta=self.venta)
+        
+        validator = HeightValidator(
+            altura_maxima_cm=altura_maxima,
+            permite_consolidacion=consolidacion.get("PERMITE_CONSOLIDACION", False),
+            max_skus_por_pallet=consolidacion.get("MAX_SKUS_POR_PALLET", 1),
+            max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM")
+        )
+        
         es_valido, errores, layout, debug_info = self.height_validator.validar_camion_rapido(camion)
         
-        camion.metadata['layout_info'] = {
+        layout_info = {
             'altura_validada': es_valido,
-            'errores_validacion': errores,
-            'fragmentos_colocados': debug_info.get('fragmentos_colocados', 0),
-            'fragmentos_totales': debug_info.get('fragmentos_totales', 0),
+            'errores_validacion': errores if errores else [],
+            'fragmentos_colocados': debug_info.get('fragmentos_colocados', 0) if debug_info else 0,
+            'fragmentos_totales': debug_info.get('fragmentos_totales', 0) if debug_info else 0,
             'inyeccion_greedy': True
         }
 
+        if layout is not None:
+            layout_info.update({
+                'posiciones_usadas': layout.posiciones_usadas,
+                'posiciones_disponibles': layout.posiciones_disponibles,
+                'altura_maxima_cm': layout.altura_maxima_cm,
+                'total_pallets_fisicos': layout.total_pallets,
+                'altura_maxima_usada_cm': round(layout.altura_maxima_usada, 1),
+                'altura_promedio_usada': round(layout.altura_promedio_usada, 1),
+                'aprovechamiento_altura': round(layout.aprovechamiento_altura * 100, 1),
+                'aprovechamiento_posiciones': round(layout.aprovechamiento_posiciones * 100, 1),
+                'posiciones': self._serializar_posiciones(layout)
+            })
+            camion.pos_total = layout.posiciones_usadas
+
+        camion.metadata['layout_info'] = layout_info
+
+    def _serializar_posiciones(self, layout) -> list:
+            """Serializa las posiciones del layout a diccionarios."""
+            return [
+                {
+                    'id': pos.id,
+                    'altura_usada_cm': pos.altura_usada_cm,
+                    'altura_disponible_cm': pos.espacio_disponible_cm,
+                    'num_pallets': pos.num_pallets,
+                    'pallets': [
+                        {
+                            'id': pallet.id,
+                            'nivel': pallet.nivel,
+                            'altura_cm': pallet.altura_total_cm,
+                            'skus': [
+                                {
+                                    'sku_id': frag.sku_id,
+                                    'pedido_id': frag.pedido_id,
+                                    'altura_cm': frag.altura_cm,
+                                    'categoria': frag.categoria.value,
+                                    'es_picking': frag.es_picking,
+                                    'descripcion': frag.descripcion
+                                }
+                                for frag in pallet.fragmentos
+                            ]
+                        }
+                        for pallet in pos.pallets_apilados
+                    ]
+                }
+                for pos in layout.posiciones
+                if not pos.esta_vacia
+            ]
 
 def inyectar_pedidos_greedy(
     camiones: List[Camion],

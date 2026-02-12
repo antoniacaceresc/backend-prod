@@ -150,12 +150,12 @@ class HeightValidator:
                     try:
                         cantidad_pallets = sku.cantidad_pallets
                         
-                        # ✅ VALIDACIÓN: Verificar que haya al menos UNA altura válida
+                        # VALIDACIÓN: Verificar que haya al menos UNA altura válida
                         altura_full = sku.altura_full_pallet_cm if sku.altura_full_pallet_cm > 0 else 0
                         altura_pick = sku.altura_picking_cm if (sku.altura_picking_cm and sku.altura_picking_cm > 0) else 0
                         
                         if altura_full == 0 and altura_pick == 0:
-                            # ⚠️ CASO CRÍTICO: Sin ninguna altura válida
+                            # CASO CRÍTICO: Sin ninguna altura válida
                             print(f"[WARN] SKU {sku.sku_id} sin alturas válidas, usando 100cm por defecto")
                             altura_full = 100.0  # Altura por defecto conservadora
                         
@@ -194,7 +194,7 @@ class HeightValidator:
                         pallets_completos = int(cantidad_pallets)
                         fraccion_picking = cantidad_pallets - pallets_completos
                         
-                        # ✅ DETERMINAR altura para pallets completos
+                        # DETERMINAR altura para pallets completos
                         if altura_full > 0:
                             altura_full_usar = altura_full
                         elif altura_pick > 0:
@@ -248,7 +248,7 @@ class HeightValidator:
                             fragmentos.append(frag_picking)
                     
                     except Exception as e:
-                        # ✅ CAPTURAR errores por SKU individual
+                        # CAPTURAR errores por SKU individual
                         print(f"[ERROR] ❌ Error procesando SKU {sku.sku_id} del pedido {pedido.pedido}: {e}")
                         import traceback
                         traceback.print_exc()
@@ -262,12 +262,6 @@ class HeightValidator:
                     fragmentos.append(frag)
                 except Exception as e:
                     continue
-        
-        # ✅ LOG FINAL
-        if not fragmentos:
-            print(f"[ERROR] ⚠️ NO se extrajeron fragmentos de {len(pedidos)} pedidos")
-            for p in pedidos[:3]:
-                print(f"  - Pedido {p.pedido}: tiene_skus={p.tiene_skus}, num_skus={len(p.skus) if p.tiene_skus else 0}")
         
         return fragmentos
 
@@ -447,9 +441,58 @@ class HeightValidator:
             
             colocado = False
 
-            # ═══════════════════════════════════════════════════════════════
-            # CASO 0: FLEXIBLE puede insertarse DEBAJO de SUPERIOR existente
-            # ═══════════════════════════════════════════════════════════════
+            # CASO 0: SI_MISMO - buscar posición que ya tenga el mismo SKU primero
+            if frag.categoria == CategoriaApilamiento.SI_MISMO:
+                for pos_idx, posicion in enumerate(layout.posiciones):
+                    if posicion.esta_vacia:
+                        continue
+                    
+                    # Verificar si esta posición tiene pallets del mismo SKU
+                    skus_en_posicion = set()
+                    for p in posicion.pallets_apilados:
+                        for f in p.fragmentos:
+                            skus_en_posicion.add(f.sku_id)
+                    
+                    if frag.sku_id not in skus_en_posicion:
+                        continue
+                    
+                    # Verificar que podemos apilar (altura y niveles)
+                    if len(posicion.pallets_apilados) >= camion.capacidad.levels:
+                        continue
+                    
+                    # Verificar altura
+                    if posicion.altura_usada_cm + frag.altura_cm > self.altura_maxima_cm:
+                        continue
+                    
+                    # Crear nuevo pallet en esta posición
+                    pallet_nuevo = PalletFisico(
+                        id=f"pallet_{pallet_id_counter}",
+                        posicion_id=posicion.id,
+                        nivel=len(posicion.pallets_apilados)
+                    )
+                    pallet_nuevo.agregar_fragmento(frag)
+                    
+                    intento_info['intentos'].append({
+                        'tipo': 'si_mismo_apilar',
+                        'posicion': pos_idx,
+                        'nivel': len(posicion.pallets_apilados),
+                        'sku_match': frag.sku_id
+                    })
+                    
+                    if posicion.apilar(pallet_nuevo, max_niveles=camion.capacidad.levels):
+                        pallet_id_counter += 1
+                        colocado = True
+                        intento_info['exito'] = True
+                        intento_info['ubicacion'] = f"posicion_{pos_idx}_si_mismo_apilado"
+                        intento_info['intentos'][-1]['resultado'] = 'exito'
+                        break
+                
+                if colocado:
+                    debug_info['fragmentos_colocados'] += 1
+                    debug_info['historia_colocacion'].append(intento_info)
+                    continue
+
+            # CASO 1: FLEXIBLE puede insertarse DEBAJO de SUPERIOR existente
             if frag.categoria == CategoriaApilamiento.FLEXIBLE:
                 for pos_idx, posicion in enumerate(layout.posiciones):
                     if len(posicion.pallets_apilados) == 1:
@@ -484,7 +527,7 @@ class HeightValidator:
                     debug_info['historia_colocacion'].append(intento_info)
                     continue
             
-            # CASO 1: Intentar apilar en posición existente
+            # CASO 2: Intentar apilar en posición existente
             for pos_idx, posicion in enumerate(layout.posiciones):
                 if posicion.esta_vacia:
                     continue
@@ -525,16 +568,8 @@ class HeightValidator:
                         break
                 
                 # Intento 1a-bis: Crear pallet de pickings sobre full pallet existente
-                if not colocado and frag.es_picking and len(posicion.pallets_apilados) > 1:
+                if not colocado and frag.es_picking and len(posicion.pallets_apilados) == 1:
                     pallet_inferior = posicion.pallets_apilados[0]
-                    
-                    # No apilar sobre NO_APILABLE
-                    cat_inferior = next(
-                        (f.categoria for f in pallet_inferior.fragmentos),
-                        None
-                    )
-                    if cat_inferior == CategoriaApilamiento.NO_APILABLE:
-                        continue
                     
                     # Verificar altura antes de crear
                     if posicion.altura_usada_cm + frag.altura_cm > self.altura_maxima_cm:
@@ -605,7 +640,7 @@ class HeightValidator:
                 debug_info['historia_colocacion'].append(intento_info)
                 continue
             
-            # CASO 2: Buscar posición vacía
+            # CASO 3: Buscar posición vacía
             posicion_vacia = next(
                 (p for p in layout.posiciones if p.esta_vacia),
                 None
@@ -700,7 +735,7 @@ class HeightValidator:
             
             return True
         
-        # ✅ SÍ PERMITE CONSOLIDACIÓN
+        # SÍ PERMITE CONSOLIDACIÓN
         else:
             # Regla 1: No exceder límite de fragmentos diferentes
             if len(pallet.fragmentos) >= self.max_skus_por_pallet:

@@ -292,6 +292,10 @@ def _optimizar_apilabilidad_skus(df: pd.DataFrame, altura_maxima_cm: float = 260
         'si_mismo_a_base_superior': 0,
         'impares_ajustados': 0
     }
+
+    for col in ['BASE', 'SUPERIOR', 'FLEXIBLE', 'NO_APILABLE', 'SI_MISMO']:
+        if col in df.columns:
+            df[col] = df[col].astype(float)
     
     # Iterar sobre SKUs con SI_MISMO > 0
     for idx in df[df['SI_MISMO'] > 0].index:

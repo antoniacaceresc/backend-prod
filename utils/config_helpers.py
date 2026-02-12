@@ -338,7 +338,7 @@ def get_capacity_for_route(
     cap = get_capacity_for_type(client_config, tipo_camion, venta)
     
     # Si es backhaul y la ruta no permite apilamiento
-    if tipo_camion == TipoCamion.BACKHAUL:
+    if tipo_camion.es_backhaul:
         if ruta_sin_apilamiento_backhaul(client_config, cds, ces, tipo_ruta, venta):
             cap = cap.sin_apilamiento()
     
