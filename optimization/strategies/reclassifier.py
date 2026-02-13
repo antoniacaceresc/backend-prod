@@ -271,7 +271,7 @@ class NestleReclassifier:
                 'aprovechamiento_altura': round(layout.aprovechamiento_altura * 100, 1),
                 'aprovechamiento_posiciones': round((layout.posiciones_usadas / cap_rampla.max_positions) * 100, 1),
                 'validado_para_tipo': 'rampla_directa',
-                'posiciones': self._serializar_posiciones(layout)  # ← AGREGAR ESTO
+                'posiciones': self._serializar_posiciones(layout)
             }
             camion.pos_total = layout.posiciones_usadas
         
