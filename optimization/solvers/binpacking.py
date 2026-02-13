@@ -128,7 +128,7 @@ def optimizar_grupo_binpacking(
     # Resolver
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = float(tiempo_max_seg)
-    solver.parameters.num_search_workers = 1
+    solver.parameters.num_search_workers = 8
     
     t0 = time.time()
     resultado = solver.Solve(model)

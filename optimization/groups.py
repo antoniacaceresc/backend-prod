@@ -641,7 +641,7 @@ def ajustar_tiempo_grupo(
     
     # Grupos extremadamente grandes (> 60 pedidos) → tiempo máximo
     else:
-        return min(int(tiempo_base *5), 150)
+        return min(int(tiempo_base *5), 180)
     
 __all__ = [
     "generar_grupos_optimizacion",

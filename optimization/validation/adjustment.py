@@ -310,10 +310,32 @@ class PostValidationAdjuster:
         Re-valida un camión después de remover pedidos.
         Actualiza su metadata con el nuevo resultado.
         """
+        
+        from utils.config_helpers import get_consolidacion_config
+
+        # Obtener altura real (ALVI=230, RENDIC=240, etc.)
+        altura_maxima = cam.capacidad.altura_cm
+        if hasattr(self.config, 'get_altura_maxima'):
+            subcliente = ""
+            if cam.pedidos:
+                subcliente = cam.pedidos[0].metadata.get("SUBCLIENTE", "")
+            altura_maxima = self.config.get_altura_maxima(subcliente, altura_maxima)
+
+        # Obtener consolidación por subcliente
+        subcliente = None
+        oc = None
+        if cam.pedidos:
+            primer_pedido = cam.pedidos[0]
+            subcliente = primer_pedido.metadata.get("SUBCLIENTE") if primer_pedido.metadata else None
+            oc = getattr(primer_pedido, 'oc', None)
+
+        consolidacion = get_consolidacion_config(self.config, subcliente=subcliente, oc=oc)
+
         validator = HeightValidator(
-            altura_maxima_cm=cam.capacidad.altura_cm,
-            permite_consolidacion=self.permite_consolidacion,
-            max_skus_por_pallet=self.max_skus_por_pallet
+            altura_maxima_cm=altura_maxima,
+            permite_consolidacion=consolidacion.get("PERMITE_CONSOLIDACION", self.permite_consolidacion),
+            max_skus_por_pallet=consolidacion.get("MAX_SKUS_POR_PALLET", self.max_skus_por_pallet),
+            max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM")
         )
         
         es_valido, errores, layout, debug_info = validator.validar_camion_rapido(cam)

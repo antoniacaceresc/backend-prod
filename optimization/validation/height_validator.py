@@ -527,79 +527,102 @@ class HeightValidator:
                     debug_info['historia_colocacion'].append(intento_info)
                     continue
             
+            # Para pickings: ordenar posiciones priorizando consolidación
+            if frag.es_picking:
+                def _prioridad_posicion_picking(pos):
+                    if pos.esta_vacia:
+                        return (5, 0, 0)
+                    
+                    pickings_en_pos = self._contar_pickings_en_posicion(pos)
+                    max_picks = self._max_pickings_para_posicion(pos)
+                    
+                    # Ya llena de pickings → no considerar
+                    if pickings_en_pos >= max_picks:
+                        return (5, 0, 0)
+                    
+                    pallet_piso = pos.pallets_apilados[0]
+                    
+                    # Piso es picking → consolidar pickings entre sí
+                    if not pallet_piso.tiene_full_pallets and pallet_piso.tiene_pickings:
+                        cat_picking = self._categoria_dominante_pallet(pallet_piso)
+                        if cat_picking == frag.categoria:
+                            return (0, -pickings_en_pos, pos.espacio_disponible_cm)
+                        return (3, -pickings_en_pos, pos.espacio_disponible_cm)
+                    
+                    # Piso es full pallet
+                    if pallet_piso.tiene_full_pallets:
+                        cat_piso = self._categoria_dominante_pallet(pallet_piso)
+                        
+                        # Misma categoría + ya tiene picking → CONSOLIDAR AQUÍ primero
+                        if cat_piso == frag.categoria and pickings_en_pos > 0:
+                            return (0.5, -pickings_en_pos, pos.espacio_disponible_cm)
+                        # Misma categoría sin picking aún
+                        if cat_piso == frag.categoria:
+                            return (1, 0, pos.espacio_disponible_cm)
+                        # BASE/FLEXIBLE + ya tiene picking
+                        if cat_piso in (CategoriaApilamiento.BASE, CategoriaApilamiento.FLEXIBLE):
+                            if pickings_en_pos > 0:
+                                return (1.5, -pickings_en_pos, pos.espacio_disponible_cm)
+                            return (2, 0, pos.espacio_disponible_cm)
+                        # Otro tipo + ya tiene picking
+                        if pickings_en_pos > 0:
+                            return (2.5, -pickings_en_pos, pos.espacio_disponible_cm)
+                        return (3, 0, pos.espacio_disponible_cm)
+                    
+                    return (4, 0, 0)
+                
+                posiciones_ordenadas = sorted(
+                    enumerate(layout.posiciones),
+                    key=lambda x: _prioridad_posicion_picking(x[1])
+                )
+            else:
+                posiciones_ordenadas = list(enumerate(layout.posiciones))
+            
             # CASO 2: Intentar apilar en posición existente
-            for pos_idx, posicion in enumerate(layout.posiciones):
+            for pos_idx, posicion in posiciones_ordenadas:
                 if posicion.esta_vacia:
                     continue
                 
-                # Intento 1a: Consolidar picking en pallet de pickings existente
-                if frag.es_picking and posicion.pallets_apilados:
-                    pallet_pickings = next(
-                        (p for p in posicion.pallets_apilados if p.tiene_pickings and not p.tiene_full_pallets),
-                        None
-                    )
+                # 1a Intento: Picking como capa independiente sobre pallet de piso
+                if not colocado and frag.es_picking and not posicion.esta_vacia:
+                    pickings_actuales = self._contar_pickings_en_posicion(posicion)
+                    max_pickings = self._max_pickings_para_posicion(posicion)
                     
-                    if pallet_pickings and self._puede_agregar_a_pallet(pallet_pickings, frag):
-                        intento_info['intentos'].append({
-                            'tipo': 'consolidar_en_pallet',
-                            'posicion': pos_idx,
-                            'pallet': pallet_pickings.id,
-                            'resultado': 'intentando'
-                        })
-                        
-                        pallet_pickings.agregar_fragmento(frag)
-
-                        if self.max_altura_picking_apilado_cm:
-                            altura_picking_posicion = self._calcular_altura_picking_posicion(posicion)
-                            if altura_picking_posicion > self.max_altura_picking_apilado_cm:
-                                pallet_pickings.fragmentos.remove(frag)
-                                intento_info['intentos'][-1]['resultado'] = 'excede_altura_picking'
-                                continue
-                        
-                        if posicion.altura_usada_cm > self.altura_maxima_cm:
-                            pallet_pickings.fragmentos.remove(frag)
-                            intento_info['intentos'][-1]['resultado'] = 'excede_altura_camion'
+                    if pickings_actuales < max_pickings:
+                        # Verificar altura
+                        if posicion.altura_usada_cm + frag.altura_cm > self.altura_maxima_cm:
                             continue
                         
-                        colocado = True
-                        intento_info['exito'] = True
-                        intento_info['ubicacion'] = f"posicion_{pos_idx}_consolidado"
-                        intento_info['intentos'][-1]['resultado'] = 'exito'
-                        break
+                        # Crear pallet picking como nueva capa
+                        pallet_nuevo = PalletFisico(
+                            id=f"pallet_{pallet_id_counter}",
+                            posicion_id=posicion.id,
+                            nivel=len(posicion.pallets_apilados)
+                        )
+                        pallet_nuevo.agregar_fragmento(frag)
+                        
+                        # max_niveles: total de pallets permitidos en la posición
+                        if posicion.apilar(pallet_nuevo, max_niveles=self.max_skus_por_pallet + 1):
+                            # Validar altura picking si aplica
+                            if self.max_altura_picking_apilado_cm:
+                                altura_picking = self._calcular_altura_picking_posicion(posicion)
+                                if altura_picking > self.max_altura_picking_apilado_cm:
+                                    posicion.pallets_apilados.remove(pallet_nuevo)
+                                    continue
+                            
+                            pallet_id_counter += 1
+                            colocado = True
+                            intento_info['exito'] = True
+                            intento_info['ubicacion'] = f"posicion_{pos_idx}_picking_capa_{pickings_actuales + 1}"
+                            break
+                        else:
+                            # Rollback si apilar falló
+                            if pallet_nuevo in posicion.pallets_apilados:
+                                posicion.pallets_apilados.remove(pallet_nuevo)
                 
-                # Intento 1a-bis: Crear pallet de pickings sobre full pallet existente
-                if not colocado and frag.es_picking and len(posicion.pallets_apilados) == 1:
-                    pallet_inferior = posicion.pallets_apilados[0]
-                    
-                    # Verificar altura antes de crear
-                    if posicion.altura_usada_cm + frag.altura_cm > self.altura_maxima_cm:
-                        continue
-                    
-                    # Crear pallet de pickings en nivel 1
-                    pallet_nuevo = PalletFisico(
-                        id=f"pallet_{pallet_id_counter}",
-                        posicion_id=posicion.id,
-                        nivel=1
-                    )
-                    pallet_nuevo.agregar_fragmento(frag)
-                    
-                    posicion.pallets_apilados.append(pallet_nuevo)
-                    
-                    # Validar altura picking
-                    if self.max_altura_picking_apilado_cm:
-                        altura_picking = self._calcular_altura_picking_posicion(posicion)
-                        if altura_picking > self.max_altura_picking_apilado_cm:
-                            posicion.pallets_apilados.remove(pallet_nuevo)
-                            continue
-                    
-                    pallet_id_counter += 1
-                    colocado = True
-                    intento_info['exito'] = True
-                    intento_info['ubicacion'] = f"posicion_{pos_idx}_picking_sobre_full"
-                    break
 
                 # Intento 1b: Nuevo nivel en posición existente
-                if not colocado and len(posicion.pallets_apilados) < 2:
+                if not colocado and not frag.es_picking and len(posicion.pallets_apilados) < 2:
                     pallet_nuevo = PalletFisico(
                         id=f"pallet_{pallet_id_counter}",
                         posicion_id=posicion.id,
@@ -718,42 +741,11 @@ class HeightValidator:
         if not pallet.fragmentos:
             return True
         
-        # NO PERMITE CONSOLIDACIÓN 
-        if not self.permite_consolidacion:
-            # Regla 1: Solo 1 SKU por pallet
-            if fragmento.sku_id not in pallet.skus_unicos:
-                return False  # Ya hay otro SKU
+        # Solo permitir mismo SKU en full pallets
+        if fragmento.sku_id not in pallet.skus_unicos:
+            return False
             
-            # Regla 2: Si es picking, NO puede consolidarse con NADA
-            # (cada picking va en su propio pallet físico)
-            if fragmento.es_picking:
-                return False
-            
-            # Regla 3: Si el pallet ya tiene pickings, no agregar más
-            if pallet.tiene_pickings:
-                return False
-            
-            return True
-        
-        # SÍ PERMITE CONSOLIDACIÓN
-        else:
-            # Regla 1: No exceder límite de fragmentos diferentes
-            if len(pallet.fragmentos) >= self.max_skus_por_pallet:
-                return False  # Ya alcanzó el máximo
-            
-            # Caso para límite por skus y no por fragmento
-            #skus_en_pallet = pallet.skus_unicos
-            #if fragmento.sku_id not in skus_en_pallet:
-            #    if len(skus_en_pallet) >= self.max_skus_por_pallet:
-            #        return False  # Ya alcanzó el máximo
-
-            # Regla 3: No mezclar pickings con full pallets
-            if fragmento.es_picking and pallet.tiene_full_pallets:
-                return False
-            if not fragmento.es_picking and pallet.tiene_pickings:
-                return False
-            
-            return True
+        return True
 
     def _validar_altura_picking_posicion(self, posicion: PosicionCamion) -> tuple[bool, float]:
         """
@@ -792,12 +784,11 @@ class HeightValidator:
         """
         Determina prioridad de colocación (menor = primero).
         
-        Orden de prioridad:
-        1. NO_APILABLE (más restrictivos)
-        2. BASE (necesitan ir al fondo)
-        3. SI_MISMO (se benefician de apilamiento temprano)
-        4. SUPERIOR
-        5. FLEXIBLE
+        Dos fases:
+        FASE 1 - Full pallets por categoría (van primero a piso):
+            NO_APILABLE > BASE > SI_MISMO > SUPERIOR > FLEXIBLE
+        FASE 2 - Pickings por categoría (se apilan sobre los full pallets):
+            Mismo orden de categoría, filtrados después
         """
         prioridades = {
             CategoriaApilamiento.NO_APILABLE: 0,
@@ -806,7 +797,11 @@ class HeightValidator:
             CategoriaApilamiento.SUPERIOR: 3,
             CategoriaApilamiento.FLEXIBLE: 4,
         }
-        return prioridades[frag.categoria]
+        fase = 0 if not frag.es_picking else 1
+        cat_prio = prioridades[frag.categoria]
+        
+        # Ordenar por (fase, categoría, altura desc para mejor empaquetamiento)
+        return (fase, cat_prio, -frag.altura_cm)
 
     def _calcular_altura_picking_posicion(self, posicion: PosicionCamion) -> float:
         """
@@ -819,6 +814,37 @@ class HeightValidator:
                 if frag.es_picking:
                     altura_picking += frag.altura_cm
         return altura_picking
+        
+    def _contar_pickings_en_posicion(self, posicion: PosicionCamion) -> int:
+        """Cuenta pallets de picking en una posición."""
+        return sum(
+            1 for p in posicion.pallets_apilados
+            if p.tiene_pickings and not p.tiene_full_pallets
+        )
+
+    def _max_pickings_para_posicion(self, posicion: PosicionCamion) -> int:
+        """
+        Retorna máximo de pickings permitidos según el pallet de piso.
+        - BASE o FLEXIBLE: hasta max_skus_por_pallet
+        - Cualquier otro full pallet: hasta 2
+        - Piso es picking: hasta max_skus_por_pallet (para mismo tipo)
+        - Posición vacía: 0
+        """
+        if posicion.esta_vacia:
+            return 0
+        
+        pallet_piso = posicion.pallets_apilados[0]
+        
+        # Piso es full pallet
+        if pallet_piso.tiene_full_pallets:
+            cat_piso = self._categoria_dominante_pallet(pallet_piso)
+            if cat_piso in (CategoriaApilamiento.BASE, CategoriaApilamiento.FLEXIBLE):
+                return self.max_skus_por_pallet
+            else:
+                return 2
+        
+        # Piso es picking → permitir apilar más pickings hasta max consolidación
+        return self.max_skus_por_pallet
     
 
     def _reportar_fallas_detallado(

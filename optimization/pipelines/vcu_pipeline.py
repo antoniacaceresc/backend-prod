@@ -378,6 +378,22 @@ class VCUPipeline(OptimizationPipeline):
                 )
                 
                 cap = get_capacity_for_type(self.config, tipo_camion, self.venta)
+
+                # Ajustar altura por subcliente (ej: Alvi=230cm)
+                if hasattr(self.config, 'get_altura_maxima') and pedidos_no_asignados:
+                    subcliente = pedidos_no_asignados[0].metadata.get("SUBCLIENTE", "")
+                    if subcliente:
+                        altura_sub = self.config.get_altura_maxima(subcliente, cap.altura_cm)
+                        if altura_sub < cap.altura_cm:
+                            cap = TruckCapacity(
+                                cap_weight=cap.cap_weight,
+                                cap_volume=cap.cap_volume,
+                                max_positions=cap.max_positions,
+                                max_pallets=cap.max_pallets,
+                                levels=cap.levels,
+                                vcu_min=cap.vcu_min,
+                                altura_cm=altura_sub
+                            )
                 
                 # Ajustar si no permite apilamiento
                 from utils.config_helpers import permite_apilamiento_cd, ruta_sin_apilamiento_backhaul
@@ -458,6 +474,23 @@ class VCUPipeline(OptimizationPipeline):
             # Ajustar capacidad si la ruta no permite apilamiento para backhaul
             from utils.config_helpers import ruta_sin_apilamiento_backhaul
             cap_a_usar = cap_backhaul
+
+            # Ajustar altura por subcliente
+            if hasattr(self.config, 'get_altura_maxima') and pedidos_no_asignados:
+                subcliente = pedidos_no_asignados[0].metadata.get("SUBCLIENTE", "")
+                if subcliente:
+                    altura_sub = self.config.get_altura_maxima(subcliente, cap_a_usar.altura_cm)
+                    if altura_sub < cap_a_usar.altura_cm:
+                        cap_a_usar = TruckCapacity(
+                            cap_weight=cap_a_usar.cap_weight,
+                            cap_volume=cap_a_usar.cap_volume,
+                            max_positions=cap_a_usar.max_positions,
+                            max_pallets=cap_a_usar.max_pallets,
+                            levels=cap_a_usar.levels,
+                            vcu_min=cap_a_usar.vcu_min,
+                            altura_cm=altura_sub
+                        )
+                        
             if ruta_sin_apilamiento_backhaul(self.config, cfg.cd, cfg.ce, tipo_ruta, self.venta):
                 cap_a_usar = cap_backhaul.sin_apilamiento()
 

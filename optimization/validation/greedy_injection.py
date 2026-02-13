@@ -462,7 +462,7 @@ class GreedyInjector:
             max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM")
         )
         
-        es_valido, errores, layout, debug_info = self.height_validator.validar_camion_rapido(camion)
+        es_valido, errores, layout, debug_info = validator.validar_camion_rapido(camion)
         
         layout_info = {
             'altura_validada': es_valido,

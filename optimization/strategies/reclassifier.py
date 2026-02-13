@@ -225,8 +225,13 @@ class NestleReclassifier:
         )
         
         # Crear validador con altura de RAMPLA_DIRECTA
+        altura_maxima = cap_rampla.altura_cm
+        if hasattr(self.config, 'get_altura_maxima'):
+            sub = subcliente or ""
+            altura_maxima = self.config.get_altura_maxima(sub, altura_maxima)
+
         validator = HeightValidator(
-            altura_maxima_cm=cap_rampla.altura_cm,
+            altura_maxima_cm=altura_maxima,
             permite_consolidacion=consolidacion.get("PERMITE_CONSOLIDACION", True),
             max_skus_por_pallet=consolidacion.get("MAX_SKUS_POR_PALLET", 3),
             max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM")
@@ -257,7 +262,7 @@ class NestleReclassifier:
             camion.metadata['layout_info'] = {
                 'altura_validada': True,
                 'errores_validacion': [],
-                'altura_maxima_cm': cap_rampla.altura_cm,
+                'altura_maxima_cm': altura_maxima,
                 'altura_maxima_usada_cm': round(layout.altura_maxima_usada, 1),
                 'altura_promedio_usada': round(layout.altura_promedio_usada, 1),
                 'posiciones_usadas': layout.posiciones_usadas,
