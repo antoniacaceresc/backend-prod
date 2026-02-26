@@ -116,6 +116,7 @@ def build_column_mapping(client_config, venta: str) -> Dict[str, str]:
         "ALTURA_FULL_PALLET": "Altura full Pallet",
         "ALTURA_PICKING": "Altura Picking",
         "DESCRIPCION": "Descripción",
+        "CONDOR": "Condor",
     }
     
     # Agregar solo si no están en el mapping (para permitir override por cliente)
@@ -244,6 +245,13 @@ def _limpiar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
         df["CHOCOLATES_FLAG"] = chocolates_str.isin(["SI", "SÍ", "1", "X", "TRUE", "YES"]).astype(int)
     else:
         df["CHOCOLATES_FLAG"] = 0
+    
+    # Condor (especial: SI/NO -> 1/0 para MAX, luego volver a SI/NO)
+    if "CONDOR" in df.columns:
+        condor_str = df["CONDOR"].astype(str).str.upper().str.strip()
+        df["CONDOR_FLAG"] = condor_str.isin(["SI", "SÍ", "1", "X", "TRUE", "YES"]).astype(int)
+    else:
+        df["CONDOR_FLAG"] = 0
 
     
     pedidos_antes = set(df["PEDIDO"].unique()) if "PEDIDO" in df.columns else set()
@@ -472,7 +480,7 @@ def _agregar_skus_a_pedidos(
     
     # Campos que se toman con MAX (flags)
     campos_max = [
-        "VALIOSO", "PDQ", "BAJA_VU", "LOTE_DIR", "CHOCOLATES_FLAG"
+        "VALIOSO", "PDQ", "BAJA_VU", "LOTE_DIR", "CHOCOLATES_FLAG","CONDOR_FLAG"
     ]
     
     # Campos de identidad (deben ser iguales, tomar el primero)
@@ -531,6 +539,12 @@ def _agregar_skus_a_pedidos(
             lambda x: "SI" if x == 1 else "NO"
         )
         df_pedidos = df_pedidos.drop(columns=["CHOCOLATES_FLAG"])
+    
+    if "CONDOR_FLAG" in df_pedidos.columns:
+        df_pedidos["CONDOR"] = df_pedidos["CONDOR_FLAG"].apply(
+            lambda x: "SI" if x == 1 else "NO"
+        )
+        df_pedidos = df_pedidos.drop(columns=["CONDOR_FLAG"])
     
     if "Fecha preferente de entrega" in df_pedidos.columns:
         df_pedidos['Fecha preferente de entrega'] = pd.to_datetime(df_pedidos['Fecha preferente de entrega']).dt.strftime('%d-%m-%Y')

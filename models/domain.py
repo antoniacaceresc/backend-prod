@@ -239,6 +239,7 @@ class Pedido:
     pdq: bool = False
     baja_vu: bool = False
     lote_dir: bool = False
+    condor: bool = False
     
     # ========== Apilabilidad ==========
     base: float = 0.0
@@ -427,6 +428,7 @@ class Pedido:
             pdq=bool(int(float(row.get("PDQ", 0)))),
             baja_vu=bool(int(float(row.get("BAJA_VU", 0)))),
             lote_dir=bool(int(float(row.get("LOTE_DIR", 0)))),
+            condor=str(row.get("CONDOR", "NO")).strip().upper() == "SI",
             
             # Apilabilidad
             base=float(row.get("BASE", 0)),
@@ -477,6 +479,7 @@ class Pedido:
             "FLEXIBLE": self.flexible,
             "NO_APILABLE": self.no_apilable,
             "SI_MISMO": self.si_mismo,
+            "CONDOR": "SI" if self.condor else "NO",
         }
         
         # Campos opcionales
@@ -950,6 +953,8 @@ class Camion:
             
             if 'sin_apilamiento' in self.metadata:
                 result['metadata'] = {'sin_apilamiento': True}
+            if 'bodega' in self.metadata:
+                result['bodega'] = self.metadata['bodega']
         
         return result
 

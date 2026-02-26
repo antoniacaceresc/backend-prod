@@ -274,3 +274,60 @@ def agregar_restriccion_misma_po_diferente_camion(
           f"{restricciones_added} restricciones totales")
     
     return restricciones_added
+
+
+def agregar_restricciones_crr_walmart(
+    model: cp_model.CpModel,
+    x: Dict,
+    datos: Dict,
+    pedidos_ids: List[str],
+    j: int,
+    y_truck_j,
+    effective_config: dict
+):
+    """
+    Restricciones para flujo CRR de Walmart:
+    - Máximo de SKUs distintos por camión
+    - Máximo de cajas totales por camión
+    Solo aplica a pedidos con oc == 'CRR'.
+    """
+    max_skus = effective_config.get("MAX_SKUS_CRR")
+    max_cajas = effective_config.get("MAX_CAJAS_CRR")
+    
+    if max_skus is None and max_cajas is None:
+        return
+    
+    crr_ids = [pid for pid in pedidos_ids if datos[pid].get('oc') == 'CRR' and (pid, j) in x]
+    if not crr_ids:
+        return
+    
+    # --- Máximo cajas (restricción lineal) ---
+    if max_cajas is not None:
+        model.Add(
+            sum(datos[pid]['cajas'] * x[(pid, j)] for pid in crr_ids)
+            <= max_cajas * y_truck_j
+        )
+    
+    # --- Máximo SKUs distintos (requiere variables auxiliares) ---
+    if max_skus is not None:
+        # Recopilar todos los sku_ids presentes en los pedidos CRR del grupo
+        todos_skus = set()
+        for pid in crr_ids:
+            todos_skus |= datos[pid]['sku_ids']
+        
+        # Para cada sku_id: variable booleana = "¿está este SKU en el camión j?"
+        sku_en_camion = {}
+        for sku_id in todos_skus:
+            v = model.NewBoolVar(f"sku_usado_{sku_id}_{j}")
+            sku_en_camion[sku_id] = v
+            
+            # pids que traen este sku
+            pids_con_sku = [pid for pid in crr_ids if sku_id in datos[pid]['sku_ids']]
+            for pid in pids_con_sku:
+                # si el pedido va al camión, el sku también está
+                model.Add(v >= x[(pid, j)])
+        
+        # Límite total de SKUs distintos
+        model.Add(
+            sum(sku_en_camion.values()) <= max_skus * y_truck_j
+        )

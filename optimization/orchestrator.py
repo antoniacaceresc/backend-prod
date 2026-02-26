@@ -151,87 +151,62 @@ def optimizar_con_dos_fases(
 
     tpg = calcular_tiempo_por_grupo(pedidos_objetos, effective_config, request_timeout, max_tpg)
     
-    # 4) Ejecutar pipeline VCU
-    resultado_vcu = _ejecutar_pipeline_vcu(
-        pedidos_objetos, pedidos_dicts, client_config, tpg, request_timeout, venta
-    )
-    
-    # 5) Ejecutar pipeline BinPacking
-    resultado_bp = _ejecutar_pipeline_binpacking(
-        pedidos_objetos, pedidos_dicts, client_config, tpg, request_timeout, venta
-    )
+    # 4) Separar pedidos según bodega Cóndor
+    pedidos_condor    = [p for p in pedidos_objetos if p.condor]
+    pedidos_no_condor = [p for p in pedidos_objetos if not p.condor]
 
-    
+    cap_default = _get_capacidad_default(client_config, venta)
+
+    from optimization.groups import generar_grupos_optimizacion
+
+    if pedidos_condor:
+        # Clasificar pedidos Cóndor según el tipo de grupo que formarían
+        grupos_condor = generar_grupos_optimizacion(pedidos_condor, effective_config, "vcu")
+        
+        RUTAS_NO_CONDOR = {"multi_cd", "multi_ce", "multi_ce_prioridad"}
+        
+        pedidos_condor_validos = []
+        pedidos_condor_excluidos = []
+        
+        for cfg, pedidos_grupo in grupos_condor:
+            if cfg.tipo.value in RUTAS_NO_CONDOR:
+                pedidos_condor_excluidos.extend(pedidos_grupo)
+            else:
+                pedidos_condor_validos.extend(pedidos_grupo)
+        
+        # Ronda 1: solo pedidos Cóndor que forman rutas normales
+        r1_vcu = VCUPipeline(client_config, venta).ejecutar(pedidos_condor_validos, request_timeout, tpg)
+        r1_bp  = BinPackingPipeline(client_config, venta).ejecutar(pedidos_condor_validos, request_timeout, tpg)
+        
+        for cam in r1_vcu.camiones + r1_bp.camiones:
+            cam.metadata["bodega"] = "condor"
+        
+        # Ronda 2: no-Cóndor + excluidos por ruta + no ruteados de ronda 1
+        base_vcu = pedidos_no_condor + pedidos_condor_excluidos + list(r1_vcu.pedidos_no_incluidos)
+        base_bp  = pedidos_no_condor + pedidos_condor_excluidos + list(r1_bp.pedidos_no_incluidos)
+        
+        r2_vcu = VCUPipeline(client_config, venta).ejecutar(base_vcu, request_timeout, tpg)
+        r2_bp  = BinPackingPipeline(client_config, venta).ejecutar(base_bp, request_timeout, tpg)
+
+        camiones_vcu, no_inc_vcu = r1_vcu.camiones + r2_vcu.camiones, r2_vcu.pedidos_no_incluidos
+        camiones_bp,  no_inc_bp  = r1_bp.camiones  + r2_bp.camiones,  r2_bp.pedidos_no_incluidos
+
+    else:
+        # Flujo estándar sin Cóndor
+        r_vcu = VCUPipeline(client_config, venta).ejecutar(pedidos_objetos, request_timeout, tpg)
+        r_bp  = BinPackingPipeline(client_config, venta).ejecutar(pedidos_objetos, request_timeout, tpg)
+
+        camiones_vcu, no_inc_vcu = r_vcu.camiones, r_vcu.pedidos_no_incluidos
+        camiones_bp,  no_inc_bp  = r_bp.camiones,  r_bp.pedidos_no_incluidos
+
     return {
-        "vcu": resultado_vcu,
-        "binpacking": resultado_bp
+        "vcu":        _formatear_resultado(camiones_vcu, no_inc_vcu, cap_default, client_config, venta),
+        "binpacking": _formatear_resultado(camiones_bp,  no_inc_bp,  cap_default, client_config, venta),
     }
 
-
-# ============================================================================
-# EJECUCIÓN DE PIPELINES
-# ============================================================================
-
-def _ejecutar_pipeline_vcu(
-    pedidos: List[Pedido],
-    pedidos_dicts: List[Dict],
-    client_config,
-    tpg: int,
-    timeout: int,
-    venta
-) -> Dict[str, Any]:
-    """
-    Ejecuta el pipeline VCU y formatea resultado.
-    """
+def _get_capacidad_default(client_config, venta):
     capacidades = extract_truck_capacities(client_config, venta)
-    capacidad_default = capacidades.get(
-        TipoCamion.PAQUETERA,
-        next(iter(capacidades.values()))
-    )
-
-    # Ejecutar pipeline
-    pipeline = VCUPipeline(client_config, venta)
-    result = pipeline.ejecutar(pedidos, timeout, tpg)
-    
-    # Formatear salida
-    return _formatear_resultado(
-        result.camiones,
-        result.pedidos_no_incluidos,
-        capacidad_default,
-        client_config,
-        venta
-    )
-
-
-def _ejecutar_pipeline_binpacking(
-    pedidos: List[Pedido],
-    pedidos_dicts: List[Dict],
-    client_config,
-    tpg: int,
-    timeout: int,
-    venta
-) -> Dict[str, Any]:
-    """
-    Ejecuta el pipeline BinPacking y formatea resultado.
-    """
-    capacidades = extract_truck_capacities(client_config, venta)
-    capacidad_default = capacidades.get(
-        TipoCamion.PAQUETERA,
-        next(iter(capacidades.values()))
-    )
-
-    # Ejecutar pipeline
-    pipeline = BinPackingPipeline(client_config, venta)
-    result = pipeline.ejecutar(pedidos, timeout, tpg)
-
-    # Formatear salida
-    return _formatear_resultado(
-        result.camiones,
-        result.pedidos_no_incluidos,
-        capacidad_default,
-        client_config,
-        venta
-    )
+    return capacidades.get(TipoCamion.PAQUETERA, next(iter(capacidades.values())))
 
 
 # ============================================================================
@@ -273,7 +248,7 @@ def _crear_pedido_desde_dict(p_dict: Dict[str, Any], client_config) -> Pedido:
         "PEDIDO", "CD", "CE", "PO", "PESO", "VOL", "PALLETS", "VALOR",
         "VALOR_CAFE", "OC", "CHOCOLATES", "VALIOSO", "PDQ", "BAJA_VU",
         "LOTE_DIR", "BASE", "SUPERIOR", "FLEXIBLE", "NO_APILABLE",
-        "SI_MISMO", "_skus", "SUBCLIENTE"
+        "SI_MISMO", "_skus", "SUBCLIENTE", "CONDOR"
     }
     
     # Extraer metadata (campos extra)
@@ -325,6 +300,7 @@ def _crear_pedido_desde_dict(p_dict: Dict[str, Any], client_config) -> Pedido:
         pdq=bool(p_dict.get("PDQ", 0)),
         baja_vu=bool(p_dict.get("BAJA_VU", 0)),
         lote_dir=bool(p_dict.get("LOTE_DIR", 0)),
+        condor=str(p_dict.get("CONDOR", "NO")).strip().upper() == "SI",
         base=float(p_dict.get("BASE", 0)),
         superior=float(p_dict.get("SUPERIOR", 0)),
         flexible=float(p_dict.get("FLEXIBLE", 0)),

@@ -16,7 +16,8 @@ from optimization.solvers.constraints import (
     agregar_restriccion_po_agrupado,                            
     agregar_restricciones_apilabilidad,
     agregar_restricciones_walmart_multicd,
-    agregar_restriccion_misma_po_diferente_camion)
+    agregar_restriccion_misma_po_diferente_camion,
+    agregar_restricciones_crr_walmart)
 from optimization.utils.helpers import preparar_datos_solver, heuristica_ffd
 from optimization.solvers.output import construir_camiones_desde_solver
 
@@ -85,6 +86,14 @@ def optimizar_grupo_binpacking(
     # Preparar datos
     datos = preparar_datos_solver(pedidos, capacidad)
     pedidos_ids = [p.pedido for p in pedidos]
+
+    # Enriquecer datos con campos CRR (oc, sku_ids, cajas)
+    pedidos_map_enrich = {p.pedido: p for p in pedidos}
+    for pid in pedidos_ids:
+        p = pedidos_map_enrich[pid]
+        datos[pid]['oc'] = p.oc
+        datos[pid]['sku_ids'] = {sku.sku_id for sku in p.skus} if p.skus else set()
+        datos[pid]['cajas'] = int(round(p.metadata.get('CJ Conf.', 0)))
     
     # Obtener max_ordenes si existe
     max_ordenes = effective_config.get("MAX_ORDENES")

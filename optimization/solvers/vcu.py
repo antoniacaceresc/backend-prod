@@ -16,7 +16,8 @@ from optimization.solvers.constraints import (
     agregar_restricciones_apilabilidad,
     agregar_restricciones_walmart_multicd,
     agregar_restricciones_capacidad_dura,
-    agregar_restriccion_misma_po_diferente_camion)
+    agregar_restriccion_misma_po_diferente_camion,
+    agregar_restricciones_crr_walmart)
 from optimization.utils.helpers import preparar_datos_solver, heuristica_ffd
 from optimization.solvers.output import construir_camiones_desde_solver
 
@@ -27,7 +28,7 @@ def optimizar_grupo_vcu(
     capacidad: TruckCapacity,
     tiempo_max_seg: int,
     tipo_camion: TipoCamion = None
-) -> Dict[str, Any]:
+    ) -> Dict[str, Any]:
     """
     Optimiza un grupo de pedidos usando CP-SAT en modo VCU.
     
@@ -85,6 +86,14 @@ def optimizar_grupo_vcu(
     # Preparar datos
     datos = preparar_datos_solver(pedidos, capacidad)
     pedidos_ids = [p.pedido for p in pedidos]
+
+    # Enriquecer datos con campos CRR (oc, sku_ids, cajas)
+    pedidos_map_enrich = {p.pedido: p for p in pedidos}
+    for pid in pedidos_ids:
+        p = pedidos_map_enrich[pid]
+        datos[pid]['oc'] = p.oc
+        datos[pid]['sku_ids'] = {sku.sku_id for sku in p.skus} if p.skus else set()
+        datos[pid]['cajas'] = int(round(p.metadata.get('CJ Conf.', 0)))
     
     # Estimar número de camiones con heurística FFD
     n_cam_heur = heuristica_ffd(
@@ -247,7 +256,7 @@ def _agregar_restricciones_generales_vcu(
             # Límite general de órdenes
             max_ordenes = effective_config.get("MAX_ORDENES")
             model.Add(sum(x[(pid, j)] for pid in lista_i) <= max_ordenes * y_truck[j])
-        
+               
         # Apilabilidad - solo si permite apilamiento
         permite_apilamiento = effective_config.get("PERMITE_APILAMIENTO", True)
         

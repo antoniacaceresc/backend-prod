@@ -50,6 +50,17 @@ def _rebuild_state(state: Dict[str, Any], cliente: str, venta: str) -> Tuple[Lis
     
     return camiones, pedidos_no_inc, config, cap_default
 
+def _recalcular_flag_condor(camiones: List[Camion]) -> None:
+    """
+    Recalcula la flag de bodega Cóndor para cada camión.
+    Un camión es Cóndor solo si TODOS sus pedidos tienen condor=True.
+    Se actualiza automáticamente tras cualquier operación de postproceso.
+    """
+    for camion in camiones:
+        if camion.pedidos and all(p.condor for p in camion.pedidos):
+            camion.metadata["bodega"] = "condor"
+        else:
+            camion.metadata.pop("bodega", None)
 
 def _to_response(
     camiones: List[Camion], 
@@ -63,6 +74,8 @@ def _to_response(
     Returns:
         Dict con formato API
     """
+    # Recalcular flag de condor
+    _recalcular_flag_condor(camiones)
     # Renumerar camiones secuencialmente
     for idx, camion in enumerate(camiones, start=1):
         camion.numero = idx
@@ -123,6 +136,9 @@ def _camion_from_dict(cam_dict: Dict[str, Any], capacidades: Dict[TipoCamion, Tr
     if "errores_validacion" in cam_dict:
         metadata["errores_validacion"] = cam_dict["errores_validacion"]
 
+    if "bodega" in cam_dict:
+        metadata["bodega"] = cam_dict["bodega"]
+
     return Camion(
         id=cam_dict["id"],
         numero=cam_dict.get("numero", 0),
@@ -176,7 +192,7 @@ def _pedido_from_dict(p_dict: Dict[str, Any]) -> Pedido:
         "VALOR_CAFE", "PALLETS_REAL", "OC", "CHOCOLATES", "VALIOSO", "PDQ",
         "BAJA_VU", "LOTE_DIR", "BASE", "SUPERIOR", "FLEXIBLE", "NO_APILABLE",
         "SI_MISMO", "SKUS", "VCU_VOL", "VCU_PESO", "CAMION", "GRUPO",
-        "TIPO_RUTA", "TIPO_CAMION"
+        "TIPO_RUTA", "TIPO_CAMION", "CONDOR"
     }
     
     # Extraer metadata (campos extra)
@@ -199,6 +215,7 @@ def _pedido_from_dict(p_dict: Dict[str, Any]) -> Pedido:
         pdq=bool(p_dict.get("PDQ", 0)),
         baja_vu=bool(p_dict.get("BAJA_VU", 0)),
         lote_dir=bool(p_dict.get("LOTE_DIR", 0)),
+        condor=str(p_dict.get("CONDOR", "NO")).strip().upper() == "SI",
         base=float(p_dict.get("BASE", 0)),
         superior=float(p_dict.get("SUPERIOR", 0)),
         flexible=float(p_dict.get("FLEXIBLE", 0)),

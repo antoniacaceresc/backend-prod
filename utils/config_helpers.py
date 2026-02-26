@@ -26,12 +26,13 @@ def get_effective_config(client_config, venta: str = None) -> dict:
             "AGRUPAR_POR_PO": channel.get("AGRUPAR_POR_PO", getattr(client_config, 'AGRUPAR_POR_PO', False)),
             "MAX_ORDENES": channel.get("MAX_ORDENES", getattr(client_config, 'MAX_ORDENES', None)),
             "MIX_GRUPOS": channel.get("MIX_GRUPOS", getattr(client_config, 'MIX_GRUPOS', [])),
-            "MAX_PALLETS_REAL_CRR": channel.get("MAX_PALLETS_REAL_CRR", getattr(client_config, 'MAX_PALLETS_REAL_CRR', 90)),
             
             # Validación y consolidación
             "VALIDAR_ALTURA": channel.get("VALIDAR_ALTURA", getattr(client_config, 'VALIDAR_ALTURA', True)),
             "PERMITE_CONSOLIDACION": channel.get("PERMITE_CONSOLIDACION", getattr(client_config, 'PERMITE_CONSOLIDACION', False)),
             "MAX_SKUS_POR_PALLET": channel.get("MAX_SKUS_POR_PALLET", getattr(client_config, 'MAX_SKUS_POR_PALLET', 3)),
+            "MAX_SKUS_CRR": channel.get("MAX_SKUS_CRR", getattr(client_config, 'MAX_SKUS_CRR', None)),
+            "MAX_CAJAS_CRR": channel.get("MAX_CAJAS_CRR", getattr(client_config, 'MAX_CAJAS_CRR', None)),
             
             # Modo dos fases (Helados/Refrigerados)
             "MODO_DOS_FASES": channel.get("MODO_DOS_FASES", False),
@@ -67,10 +68,11 @@ def get_effective_config(client_config, venta: str = None) -> dict:
         "AGRUPAR_POR_PO": getattr(client_config, 'AGRUPAR_POR_PO', False),
         "MAX_ORDENES": getattr(client_config, 'MAX_ORDENES', None),
         "MIX_GRUPOS": getattr(client_config, 'MIX_GRUPOS', []),
-        "MAX_PALLETS_REAL_CRR": getattr(client_config, 'MAX_PALLETS_REAL_CRR', 90),
         "VALIDAR_ALTURA": getattr(client_config, 'VALIDAR_ALTURA', True),
         "PERMITE_CONSOLIDACION": getattr(client_config, 'PERMITE_CONSOLIDACION', False),
         "MAX_SKUS_POR_PALLET": getattr(client_config, 'MAX_SKUS_POR_PALLET', 3),
+        "MAX_SKUS_CRR": channel.get("MAX_SKUS_CRR", getattr(client_config, 'MAX_SKUS_CRR', None)),
+        "MAX_CAJAS_CRR": channel.get("MAX_CAJAS_CRR", getattr(client_config, 'MAX_CAJAS_CRR', None)),
         "ADHERENCIA_BACKHAUL": getattr(client_config, 'ADHERENCIA_BACKHAUL', None),
         "MODO_ADHERENCIA": getattr(client_config, 'MODO_ADHERENCIA', None),
         "PROHIBIR_PICKING_DUPLICADO": getattr(client_config, 'PROHIBIR_PICKING_DUPLICADO', False),
