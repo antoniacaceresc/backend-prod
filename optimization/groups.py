@@ -345,7 +345,7 @@ def _match_oc(pedido_oc: str, grupo_oc: any) -> bool:
     if grupo_oc is None:
         return True  # Grupo sin filtro OC acepta todos
     
-    # ✅ NUEVO: Grupo especial "SIN_OC"
+    # Grupo especial "SIN_OC"
     if grupo_oc == "SIN_OC":
         return pedido_oc is None
     

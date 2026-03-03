@@ -99,10 +99,11 @@ class WalmartConfig:
             "AGRUPAR_POR_PO": False,
             "MAX_ORDENES": 10,
             "MIX_GRUPOS": [['INV', 'CRR'], ['CRR', 'XDOCK']],
-            "MAX_PALLETS_REAL_CRR": 90,
+            "MAX_SKUS_CRR": 100,
+            "MAX_CAJAS_CRR": 5000,
             "VALIDAR_ALTURA": True,
             "PERMITE_CONSOLIDACION": True,
-            "MAX_SKUS_POR_PALLET": 5,
+            "MAX_SKUS_POR_PALLET": 4,
             "TRUCK_TYPES": {
                 'paquetera':        {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.8, 'max_pallets': 60,'altura_cm': 280},
                 'rampla_directa':   {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.8, 'max_pallets': 56,'altura_cm': 270},

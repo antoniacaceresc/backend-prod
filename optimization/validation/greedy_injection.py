@@ -320,13 +320,7 @@ class GreedyInjector:
     ) -> bool:
         """Verifica reglas de negocio del cliente."""
         effective = self.effective_config
-        
-        # Regla: No mezclar chocolates
-        if effective.get('SEPARAR_CHOCOLATES', False):
-            camion_tiene_choco = any(p.chocolates == 'SI' for p in camion.pedidos)
-            pedido_es_choco = pedido.chocolates == 'SI'
-            if camion.pedidos and (camion_tiene_choco != pedido_es_choco):
-                return False
+    
         
         # Regla: Restricción de PO
         if effective.get('RESTRICT_PO_GROUP', False):
@@ -351,6 +345,21 @@ class GreedyInjector:
                             if sku.cantidad_pallets % 1 > 0.001:
                                 if sku.sku_id in skus_picking_pedido:
                                     return False
+
+        # Regla: No mezclar flujos OC incompatibles
+        if self.effective_config.get('USA_OC', False) and camion.pedidos:
+            oc_pedido = getattr(pedido, 'oc', None)
+            oc_camion = getattr(camion.pedidos[0], 'oc', None)
+            
+            if oc_pedido and oc_camion and oc_camion.upper() != oc_pedido.upper():
+                mix_grupos = self.effective_config.get('MIX_GRUPOS', [])
+                mix_permitido = any(
+                    oc_camion.upper() in [o.upper() for o in g] and 
+                    oc_pedido.upper() in [o.upper() for o in g]
+                    for g in mix_grupos
+                )
+                if not mix_permitido:
+                    return False
         
         return True
     
