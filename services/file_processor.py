@@ -223,10 +223,16 @@ def _limpiar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
     
     # Apilabilidad (a nivel SKU)
+    # DESPUÉS
     apilabilidad_cols = ["BASE", "SUPERIOR", "FLEXIBLE", "NO_APILABLE", "SI_MISMO"]
     for col in apilabilidad_cols:
         if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+            df[col] = (
+                df[col].astype(str)
+                .str.replace(",", ".", regex=False)
+                .pipe(pd.to_numeric, errors="coerce")
+                .fillna(0)
+            )
         else:
             df[col] = 0.0
 
