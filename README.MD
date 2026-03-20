@@ -30,12 +30,6 @@ uvicorn app.main:app --port 8001
 
 
 
-
-
-
-
-
-
 # Entrar al enviroment
 C:\venvs\backend-prod-env\Scripts\Activate.ps1
 

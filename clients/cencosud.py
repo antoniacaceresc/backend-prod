@@ -5,6 +5,7 @@ class CencosudConfig:
     # Mapeo de columnas
     COLUMN_MAPPING = {
         "Secos": {   
+            "CANAL_VENTA": "Canal de venta",
             "CD": "CD",
             "PO": "Número PO",
             "PEDIDO": "N° Pedido",
@@ -57,6 +58,8 @@ class CencosudConfig:
             "VALIDAR_ALTURA": True,
             "PERMITE_CONSOLIDACION": False,
             "MAX_SKUS_POR_PALLET": 4,
+
+            "MIX_CANAL_CDS": ["N794 Bodega Chillan"],
 
             "TRUCK_TYPES": {
                 'paquetera':        {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.8, 'max_pallets': 60, 'altura_cm': 280},

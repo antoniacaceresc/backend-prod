@@ -239,6 +239,7 @@ class Pedido:
     pdq: bool = False
     baja_vu: bool = False
     lote_dir: bool = False
+    es_purina: bool = False
     
     # ========== Apilabilidad ==========
     base: float = 0.0
@@ -472,6 +473,7 @@ class Pedido:
             "PDQ": int(self.pdq),
             "BAJA_VU": int(self.baja_vu),
             "LOTE_DIR": int(self.lote_dir),
+            "ES_PURINA": int(self.es_purina),
             "BASE": self.base,
             "SUPERIOR": self.superior,
             "FLEXIBLE": self.flexible,
@@ -538,6 +540,7 @@ class Pedido:
             "PDQ": int(self.pdq),
             "BAJA_VU": int(self.baja_vu),
             "LOTE_DIR": int(self.lote_dir),
+            "ES_PURINA": int(self.es_purina),
             "BASE": self.base,
             "SUPERIOR": self.superior,
             "FLEXIBLE": self.flexible,

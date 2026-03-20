@@ -237,6 +237,12 @@ def _limpiar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int).clip(0, 1)
         else:
             df[col] = 0
+
+    # Derivar ES_PURINA desde canal de venta
+    if "CANAL_VENTA" in df.columns:
+        df["ES_PURINA"] = (df["CANAL_VENTA"].astype(str).str.strip().str.upper() == "CL25").astype(int)
+    else:
+        df["ES_PURINA"] = 0
     
     # Chocolates (especial: SI/NO -> 1/0 para MAX, luego volver a SI/NO)
     if "CHOCOLATES" in df.columns:
@@ -531,6 +537,9 @@ def _agregar_skus_a_pedidos(
             lambda x: "SI" if x == 1 else "NO"
         )
         df_pedidos = df_pedidos.drop(columns=["CHOCOLATES_FLAG"])
+
+    if "ES_PURINA" in df_skus.columns:
+        agg_rules["ES_PURINA"] = "first"
     
     if "Fecha preferente de entrega" in df_pedidos.columns:
         df_pedidos['Fecha preferente de entrega'] = pd.to_datetime(df_pedidos['Fecha preferente de entrega']).dt.strftime('%d-%m-%Y')
