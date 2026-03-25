@@ -58,7 +58,7 @@ class SmuConfig:
 
             # Restricciones comunes Picking
             "PROHIBIR_PICKING_DUPLICADO": True,
-            "ALTURA_MAX_PICKING_APILADO_CM": 180,  # Máximo 1.8m de picking apilado
+            "ALTURA_MAX_PICKING_APILADO_CM": 200,  # Máximo 2m de picking apilado
 
             # Restricciones ALVI
             "ALVI_ALTURA_MAX_CM": 230,
