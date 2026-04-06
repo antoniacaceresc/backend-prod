@@ -1,0 +1,685 @@
+# services/optimizer_groups.py
+"""
+Generación de grupos y rutas para optimización.
+Particiona pedidos en grupos disjuntos según CD, CE, OC y tipo de ruta.
+"""
+
+from typing import List, Tuple, Iterator, Set
+from models.domain import Pedido, ConfiguracionGrupo
+from models.enums import TipoRuta
+from core.constants import CD_LO_AGUIRRE
+
+def _generar_grupos_para_tipo(
+    pedidos_disponibles: List[Pedido],
+    effective_config: dict,
+    tipo: str
+) -> List[Tuple[ConfiguracionGrupo, List[Pedido]]]:
+    """
+    Genera grupos de un tipo específico SOLO con los pedidos disponibles.
+    
+    Args:
+        pedidos_disponibles: Pedidos aún NO asignados
+        effective_config: Configuración del cliente
+        tipo: Tipo de ruta ("multi_ce", "multi_cd", etc.)
+    
+    Returns:
+        Lista de (ConfiguracionGrupo, pedidos) para este tipo
+    """
+    if not pedidos_disponibles:
+        return []
+    
+    # Obtener rutas del tipo solicitado
+    rutas = effective_config.get("RUTAS_POSIBLES", {}).get(tipo, [])
+    if not rutas:
+        return []
+    
+    usa_oc = effective_config.get("USA_OC", False)
+    mix_grupos = effective_config.get("MIX_GRUPOS", [])
+    mix_canal_cds = effective_config.get("MIX_CANAL_CDS", None)
+    
+    grupos = []
+    # Generar grupos según el tipo
+    if tipo == "normal":
+        grupos_tipo, _ = _build_normal_groups(
+            pedidos_disponibles, rutas, mix_grupos, usa_oc, mix_canal_cds
+        )
+    else:
+        grupos_tipo, _ = _build_other_groups(
+            pedidos_disponibles, rutas, tipo, usa_oc, mix_grupos, mix_canal_cds
+        )
+
+    return grupos_tipo
+
+
+def generar_grupos_optimizacion(
+    pedidos: List[Pedido],
+    effective_config: dict,
+    modo: str
+) -> List[Tuple[ConfiguracionGrupo, List[Pedido]]]:
+    """
+    Genera grupos para optimizar.
+    
+    Args:
+        pedidos: Lista de pedidos disponibles
+        effective_config: Configuración del cliente
+        modo: "vcu", "binpacking", o "normal" (solo grupos normales)
+    
+    Returns:
+        Lista de (ConfiguracionGrupo, pedidos)
+    """
+    usa_oc = effective_config.get("USA_OC", False)
+    mix_grupos = effective_config.get("MIX_GRUPOS", [])
+    mix_canal_cds = effective_config.get("MIX_CANAL_CDS", None)
+    
+    # Caso especial: solo generar grupos normales
+    if modo == "normal":
+        rutas_normal = effective_config.get("RUTAS_POSIBLES", {}).get("normal", [])
+        if rutas_normal:
+            grupos, _ = _build_normal_groups(pedidos, rutas_normal, mix_grupos, usa_oc, mix_canal_cds)
+            return grupos
+        return []
+
+    # Determinar tipos de ruta según modo
+    if modo == "binpacking":
+        tipos_ruta = effective_config.get("BINPACKING_TIPOS_RUTA", ["normal"]) or ["normal"]
+        rutas_binpacking = effective_config.get("RUTAS_BINPACKING", {})
+        rutas_posibles = effective_config.get("RUTAS_POSIBLES", {})
+        rutas_func = lambda t: rutas_binpacking.get(t, rutas_posibles.get(t, []))
+    else:  # VCU
+        tipos_ruta = ["multi_ce_prioridad", "normal", "multi_ce", "multi_cd"]
+        rutas_posibles = effective_config.get("RUTAS_POSIBLES", {})
+        rutas_func = lambda t: rutas_posibles.get(t, [])
+    
+    fases = [(t, rutas_func(t)) for t in tipos_ruta if rutas_func(t)]
+    
+    grupos = []
+    pedidos_restantes = pedidos.copy()
+    
+    # Procesar cada fase (para binpacking que sigue siendo secuencial)
+    for tipo, rutas in fases:
+        if tipo == "normal":
+            grupos_fase, pedidos_restantes = _build_normal_groups(
+                pedidos_restantes, rutas, mix_grupos, usa_oc, mix_canal_cds
+            )
+        else:
+            grupos_fase, pedidos_restantes = _build_other_groups(
+                pedidos_restantes, rutas, tipo, usa_oc, mix_grupos, mix_canal_cds
+            )
+        
+        grupos.extend(grupos_fase)
+    return grupos
+
+
+def _build_normal_groups(
+    pedidos: List[Pedido],
+    rutas,  # Puede ser List[Dict] o List[Tuple]
+    mix_grupos: List[List[str]],
+    usa_oc: bool,
+    mix_canal_cds: list = None
+) -> Tuple[List[Tuple[ConfiguracionGrupo, List[Pedido]]], List[Pedido]]:
+    """
+    Construye grupos para rutas normales sin solapamiento.
+    """
+    grupos = []
+    asignados: Set[str] = set()
+    
+    for cds, ces, oc in _generar_iterador_rutas("normal", rutas, pedidos, mix_grupos, usa_oc):
+        # Filtrar pedidos que coinciden y no están asignados
+        pedidos_grupo = [
+            p for p in pedidos
+            if p.pedido not in asignados
+            and p.cd in cds
+            and p.ce in ces
+            and _match_oc(p.oc, oc)
+        ]
+        if not pedidos_grupo:
+            continue
+        
+        oc_str = _format_oc_str(oc)
+        cd_permite_mix = (
+            mix_canal_cds is None or
+            all(cd in mix_canal_cds for cd in cds)
+        )
+
+        if cd_permite_mix:
+            cfg = ConfiguracionGrupo(
+                id=f"normal__{'-'.join(cds)}__{'-'.join(map(str, ces))}{oc_str}",
+                tipo=TipoRuta.NORMAL, cd=cds, ce=ces, oc=oc
+            )
+            grupos.append((cfg, pedidos_grupo))
+            asignados.update(p.pedido for p in pedidos_grupo)
+        else:
+            for es_p, canal_tag in [(False, "secos"), (True, "purina")]:
+                sub = [p for p in pedidos_grupo if p.es_purina == es_p]
+                if not sub:
+                    continue
+                cfg = ConfiguracionGrupo(
+                    id=f"normal__{'-'.join(cds)}__{'-'.join(map(str, ces))}{oc_str}__{canal_tag}",
+                    tipo=TipoRuta.NORMAL, cd=cds, ce=ces, oc=oc
+                )
+                grupos.append((cfg, sub))
+                asignados.update(p.pedido for p in sub)
+    
+    pedidos_restantes = [p for p in pedidos if p.pedido not in asignados]
+    return grupos, pedidos_restantes
+
+
+def _build_other_groups(
+    pedidos: List[Pedido],
+    rutas: List[Tuple[List[str], List[str]]],
+    tipo: str,
+    usa_oc: bool,
+    mix_grupos: List[List[str]],
+    mix_canal_cds: list = None
+) -> Tuple[List[Tuple[ConfiguracionGrupo, List[Pedido]]], List[Pedido]]:
+    """
+    Construye grupos para otros tipos de ruta.
+    """
+    
+    grupos = []
+    asignados: Set[str] = set()
+    
+    try:
+        iterador = _generar_iterador_rutas(tipo, rutas, pedidos, mix_grupos, usa_oc)
+        
+        for idx, (cds, ces, oc) in enumerate(iterador):
+            
+            pedidos_grupo = [
+                p for p in pedidos
+                if p.pedido not in asignados
+                and p.cd in cds
+                and p.ce in ces
+                and _match_oc(p.oc, oc)
+            ]
+            
+            if not pedidos_grupo:
+                continue
+            
+            if not _validar_grupo_por_tipo(tipo, pedidos_grupo, cds, ces):
+                continue
+            
+            oc_str = _format_oc_str(oc)
+            cfg = ConfiguracionGrupo(
+                id=f"{tipo}__{'-'.join(cds)}__{'-'.join(map(str, ces))}{oc_str}",
+                tipo=TipoRuta(tipo),
+                cd=cds,
+                ce=ces,
+                oc=oc
+            )
+            
+            cd_permite_mix = (
+                mix_canal_cds is None or
+                all(cd in mix_canal_cds for cd in cds)
+            )
+
+            if cd_permite_mix:
+                grupos.append((cfg, pedidos_grupo))
+                asignados.update(p.pedido for p in pedidos_grupo)
+            else:
+                for es_p, canal_tag in [(False, "secos"), (True, "purina")]:
+                    sub = [p for p in pedidos_grupo if p.es_purina == es_p]
+                    if not sub:
+                        continue
+                    cfg_sub = ConfiguracionGrupo(
+                        id=f"{cfg.id}__{canal_tag}",
+                        tipo=cfg.tipo, cd=cfg.cd, ce=cfg.ce, oc=cfg.oc
+                    )
+                    grupos.append((cfg_sub, sub))
+                    asignados.update(p.pedido for p in sub)
+
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise
+
+    pedidos_restantes = [p for p in pedidos if p.pedido not in asignados]
+    return grupos, pedidos_restantes
+
+
+def _generar_iterador_rutas(
+    tipo: str,
+    rutas,
+    pedidos: List[Pedido],
+    mix_grupos: List[List[str]],
+    usa_oc: bool
+) -> Iterator[Tuple[List[str], List[str], any]]:
+    """
+    Genera iterador de rutas con lógica específica por tipo.
+    Yields: (cds, ces, oc)
+    """
+    if tipo == "normal":
+        yield from _iter_normal_routes(rutas, pedidos, mix_grupos, usa_oc)
+    else:  # multi_ce, multi_cd, multi_ce_prioridad
+        yield from _iter_multi_routes(rutas, pedidos, usa_oc)
+
+
+def _iter_normal_routes(
+    rutas,  # Puede ser List[Dict] o List[Tuple]
+    pedidos: List[Pedido],
+    mix_grupos: List[List[str]],
+    usa_oc: bool
+) -> Iterator[Tuple[List[str], List[str], any]]:
+    """Iterador para rutas normales - soporta formato dict y tuple"""
+    
+    for ruta in rutas:
+        # Extraer campos según formato
+        if isinstance(ruta, dict):
+            cds = ruta['cds']
+            ces = ruta['ces']
+            ruta_ocs = ruta.get('ocs', [])  # OCs específicos de la ruta (ej: Alvi CRR/INV)
+        elif isinstance(ruta, tuple):
+            cds, ces = ruta
+            ruta_ocs = []
+        else:
+            continue
+        
+        if cds == [CD_LO_AGUIRRE]:
+            # Caso especial: Lo Aguirre por CE individual
+            pedidos_cd = [p for p in pedidos if p.cd == CD_LO_AGUIRRE]
+            for ce in ces:
+                pedidos_ce = [p for p in pedidos_cd if p.ce == ce]
+                
+                # Si la ruta tiene OCs específicos, filtrar por ellos
+                if ruta_ocs:
+                    for oc in ruta_ocs:
+                        pedidos_oc = [p for p in pedidos_ce if p.oc and p.oc.upper() == oc.upper()]
+                        if pedidos_oc:
+                            yield ([CD_LO_AGUIRRE], [ce], oc)
+                elif usa_oc:
+                    oc_unique = list(set(p.oc for p in pedidos_ce if p.oc))
+                    
+                    # OCs individuales
+                    for oc in oc_unique:
+                        yield ([CD_LO_AGUIRRE], [ce], oc)
+                    
+                    # OCs mixtas
+                    for ocg in mix_grupos:
+                        if all(o in oc_unique for o in ocg):
+                            yield ([CD_LO_AGUIRRE], [ce], ocg)
+                    
+                    # Pedidos SIN OC (None) van juntos
+                    pedidos_sin_oc = [p for p in pedidos_ce if p.oc is None]
+                    if pedidos_sin_oc:
+                        yield ([CD_LO_AGUIRRE], [ce], "SIN_OC")
+                else:
+                    if pedidos_ce:
+                        yield ([CD_LO_AGUIRRE], [ce], None)
+        else:
+            # Caso general
+            pedidos_ruta = [p for p in pedidos if p.cd in cds and p.ce in ces]
+            
+            # Si la ruta tiene OCs específicos, filtrar por ellos
+            if ruta_ocs:
+                for oc in ruta_ocs:
+                    pedidos_oc = [p for p in pedidos_ruta if p.oc and p.oc.upper() == oc.upper()]
+                    if pedidos_oc:
+                        yield (cds, ces, oc)
+            elif usa_oc:
+                # Agrupar por OC
+                oc_unique = list(set(p.oc for p in pedidos_ruta if p.oc))
+                
+                for oc in oc_unique:
+                    yield (cds, ces, oc)
+                
+                # Pedidos SIN OC van juntos
+                pedidos_sin_oc = [p for p in pedidos_ruta if p.oc is None]
+                if pedidos_sin_oc:
+                    yield (cds, ces, "SIN_OC")
+            else:
+                if pedidos_ruta:
+                    yield (cds, ces, None)
+
+def _iter_multi_routes(
+    rutas,  # Puede ser List[Dict] o List[Tuple]
+    pedidos: List[Pedido],
+    usa_oc: bool
+) -> Iterator[Tuple[List[str], List[str], any]]:
+    """Iterador para rutas multi (multi_ce, multi_cd) - soporta formato dict y tuple"""
+    
+    for ruta in rutas:
+        # Extraer campos según formato
+        if isinstance(ruta, dict):
+            cds = ruta['cds']
+            ces = ruta['ces']
+            ruta_ocs = ruta.get('ocs', [])
+        elif isinstance(ruta, tuple):
+            cds, ces = ruta
+            ruta_ocs = []
+        else:
+            continue
+        
+        pedidos_ruta = [p for p in pedidos if p.cd in cds and p.ce in ces]
+        
+        if not pedidos_ruta:
+            continue
+        
+        # Si la ruta tiene OCs específicos, filtrar por ellos
+        if ruta_ocs:
+            for oc in ruta_ocs:
+                pedidos_oc = [p for p in pedidos_ruta if p.oc and p.oc.upper() == oc.upper()]
+                if pedidos_oc:
+                    yield (cds, ces, oc)
+        elif usa_oc:
+            # Agrupar por OC
+            oc_unique = list(set(p.oc for p in pedidos_ruta if p.oc))
+            
+            for oc in oc_unique:
+                yield (cds, ces, oc)
+            
+            # Pedidos SIN OC van juntos
+            pedidos_sin_oc = [p for p in pedidos_ruta if p.oc is None]
+            if pedidos_sin_oc:
+                yield (cds, ces, "SIN_OC")
+        else:
+            yield (cds, ces, None)
+
+
+def _match_oc(pedido_oc: str, grupo_oc: any) -> bool:
+    """Verifica si un pedido coincide con el OC del grupo"""
+    if grupo_oc is None:
+        return True  # Grupo sin filtro OC acepta todos
+    
+    # Grupo especial "SIN_OC"
+    if grupo_oc == "SIN_OC":
+        return pedido_oc is None
+    
+    if isinstance(grupo_oc, list):
+        return pedido_oc in grupo_oc
+    
+    return pedido_oc == grupo_oc
+
+
+def _validar_grupo_por_tipo(
+    tipo: str,
+    pedidos: List[Pedido],
+    cds: List[str],
+    ces: List[str]
+) -> bool:
+    """Valida que un grupo cumpla requisitos específicos por tipo"""
+    if tipo in ("multi_ce", "multi_ce_prioridad"):
+        ce_presentes = {p.ce for p in pedidos}
+        return all(ce in ce_presentes for ce in ces)
+    
+    if tipo == "multi_cd":
+        cd_presentes = {p.cd for p in pedidos}
+        return all(cd in cd_presentes for cd in cds)
+    
+    return True
+
+
+def _format_oc_str(oc: any) -> str:
+    """Formatea OC para ID del grupo"""
+    if oc is None:
+        return ""
+    if isinstance(oc, list):
+        return f"__{'_'.join(oc)}"
+    return f"__{oc}"
+
+
+def calcular_tiempo_por_grupo(
+    pedidos: List[Pedido],
+    effective_config,
+    total_timeout: int,
+    max_por_grupo: int
+) -> int:
+    """
+    Calcula tiempo máximo por grupo de optimización CON TIEMPOS ADAPTATIVOS.
+    
+    VERSIÓN MEJORADA: Considera distribución de grupos grandes para ajustar base.
+    
+    Args:
+        pedidos: Lista de pedidos
+        effective_config: Configuración del cliente
+        total_timeout: Timeout total disponible
+        max_por_grupo: Máximo tiempo por grupo
+    
+    Returns:
+        Tiempo BASE en segundos por grupo
+    """
+    num_grupos, distribucion = _estimar_cantidad_grupos_mejorado(pedidos, effective_config)
+    tiempo_disponible = max(total_timeout - 5, 1)
+    
+    if num_grupos == 0:
+        return min(5, max_por_grupo)
+    
+    # Calcular tiempo base (distribución uniforme)
+    tpg_base = tiempo_disponible // num_grupos
+    tpg_base = min(max(tpg_base, 2), max_por_grupo)
+    
+    # ✅ NUEVO: Ajustar base según proporción de grupos grandes
+    num_grandes = distribucion.get('grandes', 0)
+    num_muy_grandes = distribucion.get('muy_grandes', 0)
+    proporcion_grandes = (num_grandes + num_muy_grandes) / max(num_grupos, 1)
+    
+    # Si hay muchos grupos grandes (>30%), aumentar tiempo base
+    if proporcion_grandes > 0.3:
+        factor = 1.2 if proporcion_grandes > 0.5 else 1.1
+        tpg_base = min(int(tpg_base * factor), max_por_grupo)
+    
+    # Si hay pocos grupos totales, dar más tiempo
+    if num_grupos <= 5:
+        tpg_base = min(int(tpg_base * 1.5), max_por_grupo)
+    
+    # Si hay muchos grupos pequeños, el tiempo base está bien
+    if num_grupos > 50 and distribucion.get('pequeños', 0) > 30:
+        tpg_base = max(2, int(tpg_base * 0.9))
+    
+    return tpg_base
+
+
+def _estimar_cantidad_grupos_mejorado(
+    pedidos: List[Pedido], 
+    effective_config
+) -> tuple:
+    """
+    Estima cantidad de grupos QUE SE GENERARÁN (incluyendo SIN_OC).
+    
+    Returns:
+        (total_grupos: int, distribucion: dict)
+        
+        donde distribucion es:
+        {
+            'pequeños': int,   # < 5 pedidos
+            'medianos': int,   # 5-20 pedidos
+            'grandes': int     # > 20 pedidos
+        }
+    """
+    tipos_ruta = ["multi_ce_prioridad", "normal", "multi_ce", "multi_cd"]
+    rutas_posibles = effective_config.get("RUTAS_POSIBLES", {})
+    fases = [
+        (tipo, rutas_posibles.get(tipo, []))
+        for tipo in tipos_ruta
+        if rutas_posibles.get(tipo)
+    ]
+    
+    total = 0
+    distribucion = {'pequeños': 0, 'medianos': 0, 'grandes': 0}
+    
+    usa_oc = effective_config.get("USA_OC", False)
+    mix_grupos = effective_config.get("MIX_GRUPOS", [])
+    
+    for tipo, rutas in fases:
+        if tipo == "normal":
+            for ruta in rutas:
+                # Normalizar formato (dict o tupla)
+                if isinstance(ruta, dict):
+                    cds = ruta['cds']
+                    ces = ruta['ces']
+                elif isinstance(ruta, tuple):
+                    cds, ces = ruta
+                else:
+                    continue
+                
+                if cds == [CD_LO_AGUIRRE]:
+                    pedidos_cd = [p for p in pedidos if p.cd == CD_LO_AGUIRRE]
+                    
+                    for ce in ces:
+                        pedidos_ce = [p for p in pedidos_cd if p.ce == ce]
+                        
+                        if not pedidos_ce:
+                            continue
+                        
+                        if usa_oc:
+                            # Contar OCs existentes
+                            oc_unique = list(set(p.oc for p in pedidos_ce if p.oc))
+                            
+                            for oc in oc_unique:
+                                pedidos_oc = [p for p in pedidos_ce if p.oc == oc]
+                                total += 1
+                                _clasificar_grupo(pedidos_oc, distribucion)
+                            
+                            # Contar grupos MIX
+                            for ocg in mix_grupos:
+                                if all(o in oc_unique for o in ocg):
+                                    pedidos_mix = [p for p in pedidos_ce if p.oc in ocg]
+                                    total += 1
+                                    _clasificar_grupo(pedidos_mix, distribucion)
+                            
+                            # CRÍTICO: Contar SIN_OC
+                            pedidos_sin_oc = [p for p in pedidos_ce if p.oc is None]
+                            if pedidos_sin_oc:
+                                total += 1
+                                _clasificar_grupo(pedidos_sin_oc, distribucion)
+                        else:
+                            total += 1
+                            _clasificar_grupo(pedidos_ce, distribucion)
+                else:
+                    # Caso general
+                    pedidos_ruta = [p for p in pedidos if p.cd in cds and p.ce in ces]
+                    
+                    if not pedidos_ruta:
+                        continue
+                    
+                    if usa_oc:
+                        # Contar OCs
+                        oc_unique = list(set(p.oc for p in pedidos_ruta if p.oc))
+                        
+                        for oc in oc_unique:
+                            pedidos_oc = [p for p in pedidos_ruta if p.oc == oc]
+                            total += 1
+                            _clasificar_grupo(pedidos_oc, distribucion)
+                        
+                        # CRÍTICO: Contar SIN_OC
+                        pedidos_sin_oc = [p for p in pedidos_ruta if p.oc is None]
+                        if pedidos_sin_oc:
+                            total += 1
+                            _clasificar_grupo(pedidos_sin_oc, distribucion)
+                    else:
+                        total += 1
+                        _clasificar_grupo(pedidos_ruta, distribucion)
+        
+        else:  # multi_ce, multi_cd, multi_ce_prioridad
+            for ruta in rutas:
+                # Normalizar formato (dict o tupla)
+                if isinstance(ruta, dict):
+                    cds = ruta['cds']
+                    ces = ruta['ces']
+                elif isinstance(ruta, tuple):
+                    cds, ces = ruta
+                else:
+                    continue
+                
+                pedidos_ruta = [p for p in pedidos if p.cd in cds and p.ce in ces]
+                
+                if not pedidos_ruta:
+                    continue
+                
+                if usa_oc:
+                    # Contar OCs
+                    oc_unique = list(set(p.oc for p in pedidos_ruta if p.oc))
+                    
+                    for oc in oc_unique:
+                        pedidos_oc = [p for p in pedidos_ruta if p.oc == oc]
+                        total += 1
+                        _clasificar_grupo(pedidos_oc, distribucion)
+                    
+                    # CRÍTICO: Contar SIN_OC
+                    pedidos_sin_oc = [p for p in pedidos_ruta if p.oc is None]
+                    if pedidos_sin_oc:
+                        total += 1
+                        _clasificar_grupo(pedidos_sin_oc, distribucion)
+                else:
+                    total += 1
+                    _clasificar_grupo(pedidos_ruta, distribucion)
+    
+    return total, distribucion
+
+
+def _clasificar_grupo(pedidos: List[Pedido], distribucion: dict):
+    """
+    Clasifica un grupo por tamaño y actualiza distribución.
+    
+    CLASIFICACIÓN MÁS GRANULAR para mejor estimación de tiempos.
+    
+    Args:
+        pedidos: Pedidos del grupo
+        distribucion: Dict a actualizar con clasificación
+    """
+    n = len(pedidos)
+    
+    # Clasificación más granular
+    if n < 5:
+        distribucion['pequeños'] += 1
+    elif n <= 20:
+        distribucion['medianos'] += 1
+    else:
+        distribucion['grandes'] += 1
+        
+        # Sub-clasificación para grupos grandes
+        if 'muy_grandes' not in distribucion:
+            distribucion['muy_grandes'] = 0
+        if n > 40:
+            distribucion['muy_grandes'] += 1
+
+def ajustar_tiempo_grupo(
+    tiempo_base: int,
+    num_pedidos: int,
+    tipo_grupo: str = "normal"
+) -> int:
+    """
+    Ajusta el tiempo de optimización según características del grupo.
+    
+    MULTIPLICADORES AGRESIVOS para grupos grandes.
+    
+    Args:
+        tiempo_base: Tiempo base calculado
+        num_pedidos: Número de pedidos en el grupo
+        tipo_grupo: Tipo de grupo (normal, multi_ce, etc.)
+    
+    Returns:
+        Tiempo ajustado en segundos
+    """
+    # Grupos muy pequeños (< 3 pedidos) → tiempo mínimo
+    if num_pedidos < 3:
+        return max(2, int(tiempo_base * 0.5))
+    
+    # Grupos pequeños (3-5 pedidos) → reducir tiempo
+    elif num_pedidos < 5:
+        return max(2, int(tiempo_base * 0.7))
+    
+    # Grupos pequeños-medianos (5-10 pedidos) → tiempo base reducido
+    elif num_pedidos <= 10:
+        return max(3, int(tiempo_base * 0.9))
+    
+    # Grupos medianos (10-20 pedidos) → tiempo base completo
+    elif num_pedidos <= 30:
+        return tiempo_base
+    
+    # Grupos grandes (20-40 pedidos) → aumentar significativamente
+    elif num_pedidos <= 40:
+        return min(int(tiempo_base * 2.5), 50)
+    
+    # Grupos muy grandes (40-60 pedidos) → aumentar mucho más
+    elif num_pedidos <= 60:
+        return min(int(tiempo_base * 4), 120)
+    
+    # Grupos extremadamente grandes (> 60 pedidos) → tiempo máximo
+    else:
+        return min(int(tiempo_base *5), 180)
+    
+__all__ = [
+    "generar_grupos_optimizacion",
+    "calcular_tiempo_por_grupo",
+    "ajustar_tiempo_grupo",
+]

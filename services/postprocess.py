@@ -1,549 +1,1067 @@
 # services/postprocess.py
-from __future__ import annotations
+"""
+Postprocesamiento de resultados de optimización.
+Maneja operaciones de edición manual de camiones.
 
+Estrategia:
+1. Recibe dicts desde API
+2. Convierte a objetos UNA VEZ al inicio
+3. Ejecuta lógica de negocio con objetos
+4. Convierte a dicts UNA VEZ al final
+
+REFACTORIZADO: Usa optimization.validation en lugar de orchestrator
+"""
+
+from __future__ import annotations
 from typing import List, Dict, Any, Optional, Tuple
 import uuid
-import math
 
-from config import get_client_config
-from collections import Counter
-
-PALLETS_SCALE = 10
-
-
-def _ruta_coincide_con_bh(cds_cam: List[str], ces_cam: List[int], rutas_bh: List) -> bool:
-    # Normalizadores para comparar siempre como string
-    def _norm_cd(x) -> str:
-        return ('' if x is None else str(x).strip())
-    def _norm_ce(x) -> str:
-        s = ('' if x is None else str(x).strip())
-        return s.lstrip('0') or '0'
-
-    set_cd = {_norm_cd(c) for c in (cds_cam or [])}
-    set_ce = {_norm_ce(e) for e in (ces_cam or [])}
-
-    for cds, ces in rutas_bh or []:
-        cds_norm = {_norm_cd(c) for c in (cds or [])}
-        ces_norm = {_norm_ce(e) for e in (ces or [])}
-        if set_cd.issubset(cds_norm) and set_ce.issubset(ces_norm):
-            return True
-    return False
+from models.domain import Pedido, Camion, TruckCapacity, TipoCamion, TipoRuta, SKU
+from utils.config_helpers import extract_truck_capacities
+from optimization.utils.helpers import calcular_posiciones_apilabilidad
+from core.config import get_client_config
+from optimization.validation.height_validator import HeightValidator
+from optimization.validation import TruckValidator
 
 
-def _compute_switch_options(truck: Dict[str, Any], client_config) -> Dict[str, Any]:
+# ============================================================================
+# CONFIGURACIÓN GLOBAL
+# ============================================================================
+
+# Flag para activar/desactivar prints de debug
+DEBUG_VALIDATION = False  # Cambiar a True para ver prints detallados
+
+
+def _rebuild_state(state: Dict[str, Any], cliente: str, venta: str) -> Tuple[List[Camion], List[Pedido], Any, TruckCapacity]:
     """
-    Calcula opciones de tipo de camión para un camión concreto.
-    NOTA: NO validamos BH_VCU_MIN aquí (pediste quitar esa exigencia para el cambio).
-          Sí respetamos BH_VCU_MAX y las reglas de ruta/CD/flujo.
+    Reconstruye objetos desde dicts de forma eficiente.
+    
+    Returns:
+        Tupla (camiones, pedidos_no_incluidos, config, capacidad_default)
     """
-    actual = (truck.get('tipo_camion') or 'normal').lower()
-    opciones = ['normal']  # siempre se puede volver a normal
+    config = get_client_config(cliente)
+    
+    capacidades = extract_truck_capacities(config, venta)
+    cap_default = capacidades.get(TipoCamion.PAQUETERA, next(iter(capacidades.values())))
+    
+    # Conversión batch
+    camiones = [_camion_from_dict(c, capacidades) for c in state.get("camiones", [])]
+    pedidos_no_inc = [_pedido_from_dict(p) for p in state.get("pedidos_no_incluidos", [])]
+    
+    return camiones, pedidos_no_inc, config, cap_default
 
-    if getattr(client_config, 'PERMITE_BH', False):
-        rutas_bh = getattr(client_config, 'RUTAS_POSIBLES', {}).get('bh', [])
-        ruta_ok = _ruta_coincide_con_bh(truck.get('cd'), truck.get('ce'), rutas_bh)
 
-        # CDs habilitados (si existe lista)
-        cd_ok = True
-        if hasattr(client_config, 'CD_CON_BH'):
-            cd_ok = all(cd in client_config.CD_CON_BH for cd in (truck.get('cd') or []))
+def _to_response(
+    camiones: List[Camion], 
+    pedidos_no_inc: List[Pedido], 
+    cap_default: TruckCapacity
+) -> Dict[str, Any]:
+    """
+    Convierte objetos a dicts y agrega estadísticas.
+    ADEMÁS renumera camiones secuencialmente.
+    
+    Returns:
+        Dict con formato API
+    """
+    # Renumerar camiones secuencialmente
+    for idx, camion in enumerate(camiones, start=1):
+        camion.numero = idx
+        # También actualizar el número en cada pedido del camión
+        for pedido in camion.pedidos:
+            pedido.numero_camion = idx
+    
+    return {
+        "camiones": [c.to_api_dict() for c in camiones],
+        "pedidos_no_incluidos": [p.to_api_dict(cap_default) for p in pedidos_no_inc],
+        "estadisticas": _compute_stats(camiones, pedidos_no_inc)
+    }
 
-        # Mezcla de flujos
-        permite_mix = getattr(client_config, 'BH_PERMITE_MIX', False)
-        flujo_ok = True if permite_mix else (truck.get('flujo_oc') not in ('MIX',))
 
-        # Ventana VCU: solo revisamos BH_VCU_MAX (NO mínimo)
-        vcu = float(truck.get('vcu_max') or 0.0)
-        vcu_ok = True
-        if hasattr(client_config, 'BH_VCU_MAX'):
-            vcu_ok = vcu_ok and (vcu <= float(client_config.BH_VCU_MAX))
+def _camion_from_dict(cam_dict: Dict[str, Any], capacidades: Dict[TipoCamion, TruckCapacity]) -> Camion:
+    """
+    Reconstruye objeto Camion desde dict.
+    
+    Args:
+        cam_dict: Diccionario con datos del camión
+        capacidades: Dict con capacidades disponibles
+    
+    Returns:
+        Objeto Camion reconstruido
+    """
+    # Convertir pedidos
+    pedidos = [_pedido_from_dict(p) for p in cam_dict.get("pedidos", [])]
+    
+    # Determinar tipo de camión y capacidad
+    try:
+        tipo_camion = TipoCamion(cam_dict.get("tipo_camion", "normal"))
+    except ValueError:
+        tipo_camion = TipoCamion.PAQUETERA
+    
+    capacidad = capacidades.get(tipo_camion, capacidades.get(TipoCamion.PAQUETERA, next(iter(capacidades.values()))))
+    
+    # Ajustar si el camión tiene metadata indicando sin apilamiento
+    if cam_dict.get("metadata", {}).get("sin_apilamiento") or cam_dict.get("sin_apilamiento"):
+        capacidad = capacidad.sin_apilamiento()
+    
+    # Determinar tipo de ruta
+    try:
+        tipo_ruta = TipoRuta(cam_dict.get("tipo_ruta", "normal"))
+    except ValueError:
+        tipo_ruta = TipoRuta.NORMAL
+    
+    # ✅ Reconstruir metadata incluyendo layout_info del nivel raíz
+    metadata = cam_dict.get("metadata", {}).copy()
+    
+    # Si layout_info está en la raíz del dict (formato API), moverlo a metadata
+    if "layout_info" in cam_dict:
+        metadata["layout_info"] = cam_dict["layout_info"]
+    
+    # También preservar otros campos de validación si existen
+    if "altura_validada" in cam_dict:
+        metadata["altura_validada"] = cam_dict["altura_validada"]
+    
+    if "errores_validacion" in cam_dict:
+        metadata["errores_validacion"] = cam_dict["errores_validacion"]
 
-        if ruta_ok and cd_ok and flujo_ok and vcu_ok:
-            opciones.append('bh')
+    return Camion(
+        id=cam_dict["id"],
+        numero=cam_dict.get("numero", 0),
+        tipo_ruta=tipo_ruta,
+        tipo_camion=tipo_camion,
+        cd=cam_dict.get("cd", []),
+        ce=cam_dict.get("ce", []),
+        grupo=cam_dict.get("grupo", ""),
+        capacidad=capacidad,
+        pedidos=pedidos,
+        metadata=metadata
+    )
 
-    # Devolver con el tipo actual primero
-    seen = set()
-    opciones = [o for o in ([actual] + [o for o in opciones if o != actual]) if not (o in seen or seen.add(o))]
-    return {'can_switch': len(opciones) > 1, 'opciones': opciones}
+
+def _pedido_from_dict(p_dict: Dict[str, Any]) -> Pedido:
+    """
+    Reconstruye objeto Pedido desde dict.
+    
+    Args:
+        p_dict: Diccionario con datos del pedido
+    
+    Returns:
+        Objeto Pedido reconstruido con SKUs si existen
+    """
+    # Reconstruir SKUs si existen
+    skus = []
+    if "SKUS" in p_dict and p_dict["SKUS"]:
+        for sku_dict in p_dict["SKUS"]:
+            sku = SKU(
+                sku_id=sku_dict["sku_id"],
+                pedido_id=sku_dict["pedido_id"],
+                cantidad_pallets=float(sku_dict["cantidad_pallets"]),
+                altura_full_pallet_cm=float(sku_dict["altura_full_pallet_cm"]),
+                altura_picking_cm=float(sku_dict["altura_picking_cm"]) if sku_dict.get("altura_picking_cm") else None,
+                peso_kg=float(sku_dict.get("peso_kg", 0)),
+                volumen_m3=float(sku_dict.get("volumen_m3", 0)),
+                valor=float(sku_dict.get("valor", 0)),
+                base=float(sku_dict.get("base", 0)),
+                superior=float(sku_dict.get("superior", 0)),
+                flexible=float(sku_dict.get("flexible", 0)),
+                no_apilable=float(sku_dict.get("no_apilable", 0)),
+                si_mismo=float(sku_dict.get("si_mismo", 0)),
+                max_altura_apilable_cm=float(sku_dict["max_altura_apilable_cm"]) if sku_dict.get("max_altura_apilable_cm") else None,
+                descripcion=sku_dict.get("descripcion")
+            )
+            skus.append(sku)
+    
+    # Campos conocidos que no van en metadata
+    campos_conocidos = {
+        "PEDIDO", "CD", "CE", "PO", "PESO", "VOL", "PALLETS", "VALOR",
+        "VALOR_CAFE", "PALLETS_REAL", "OC", "CHOCOLATES", "VALIOSO", "PDQ",
+        "BAJA_VU", "LOTE_DIR", "BASE", "SUPERIOR", "FLEXIBLE", "NO_APILABLE",
+        "SI_MISMO", "SKUS", "VCU_VOL", "VCU_PESO", "CAMION", "GRUPO",
+        "TIPO_RUTA", "TIPO_CAMION"
+    }
+    
+    # Extraer metadata (campos extra)
+    metadata = {k: v for k, v in p_dict.items() if k not in campos_conocidos}
+
+    return Pedido(
+        pedido=str(p_dict["PEDIDO"]),
+        cd=str(p_dict["CD"]),
+        ce=str(p_dict["CE"]),
+        po=str(p_dict["PO"]),
+        peso=float(p_dict["PESO"]),
+        volumen=float(p_dict["VOL"]),
+        pallets=float(p_dict["PALLETS"]),
+        valor=float(p_dict["VALOR"]),
+        valor_cafe=float(p_dict.get("VALOR_CAFE", 0)),
+        pallets_real=float(p_dict["PALLETS_REAL"]) if p_dict.get("PALLETS_REAL") else None,
+        oc=p_dict.get("OC"),
+        chocolates=str(p_dict.get("CHOCOLATES", "NO")),
+        valioso=bool(p_dict.get("VALIOSO", 0)),
+        pdq=bool(p_dict.get("PDQ", 0)),
+        baja_vu=bool(p_dict.get("BAJA_VU", 0)),
+        lote_dir=bool(p_dict.get("LOTE_DIR", 0)),
+        base=float(p_dict.get("BASE", 0)),
+        superior=float(p_dict.get("SUPERIOR", 0)),
+        flexible=float(p_dict.get("FLEXIBLE", 0)),
+        no_apilable=float(p_dict.get("NO_APILABLE", 0)),
+        si_mismo=float(p_dict.get("SI_MISMO", 0)),
+        skus=skus,
+        metadata=metadata
+    )
+
+
+# ============================================================================
+# API PÚBLICA (mantiene firmas originales para compatibilidad)
+# ============================================================================
+
+def move_orders(
+    state: Dict[str, Any], 
+    pedidos: Optional[List[Dict[str, Any]]], 
+    target_truck_id: Optional[str], 
+    cliente: str, 
+    venta=None
+) -> Dict[str, Any]:
+    """
+    Mueve pedidos entre camiones o a pedidos no incluidos.
+    
+    Args:
+        state: Estado actual (camiones y pedidos_no_incluidos)
+        pedidos: Lista de pedidos a mover
+        target_truck_id: ID del camión destino (None = mover a no incluidos)
+        cliente: Nombre del cliente
+    
+    Returns:
+        Estado actualizado con estadísticas
+    
+    Raises:
+        ValueError: Si la operación no es válida
+    """
+    # 1) Reconstruir estado
+    camiones, pedidos_no_inc, config, cap_default = _rebuild_state(state, cliente, venta)
+    pedidos_obj = [_pedido_from_dict(p) for p in (pedidos or [])]
+    
+    if not pedidos_obj:
+        return _to_response(camiones, pedidos_no_inc, cap_default)
+    
+    # 2) Ejecutar lógica de negocio
+    pedidos_ids = {p.pedido for p in pedidos_obj}
+    
+    # Remover pedidos de sus camiones actuales
+    for cam in camiones:
+        cam.pedidos = [p for p in cam.pedidos if p.pedido not in pedidos_ids]
+    
+    # Remover de pedidos no incluidos
+    pedidos_no_inc = [p for p in pedidos_no_inc if p.pedido not in pedidos_ids]
+    
+    # Asignar al destino
+    if target_truck_id:
+        cam_dest = next((c for c in camiones if c.id == target_truck_id), None)
+        if not cam_dest:
+            raise ValueError("Camión destino no encontrado")
+        
+        # Validar reglas del cliente ANTES de agregar
+        _validar_reglas_cliente_pre_agregar(cam_dest, pedidos_obj, config, cliente, venta)
+
+        # Validar altura ANTES de agregar (simula y valida)
+        _validar_altura_pre_agregar(cam_dest, pedidos_obj, config, cliente, venta)
+        
+        # Agregar pedidos (valida automáticamente capacidad básica)
+        try:
+            cam_dest.agregar_pedidos(pedidos_obj)
+        except ValueError as e:
+            raise ValueError(f"No se pueden agregar pedidos: {e}")
+
+        # Recalcular posiciones de apilabilidad
+        cam_dest.pos_total = calcular_posiciones_apilabilidad(
+            cam_dest.pedidos,
+            cam_dest.capacidad.max_positions
+        )
+
+        # Actualizar metadata derivada
+        _actualizar_opciones_tipo_camion(cam_dest, config, venta)
+    else:
+        # Mover a no incluidos
+        pedidos_no_inc.extend(pedidos_obj)
+    
+    # 3) Revalidar altura de todos los camiones afectados
+    _revalidar_altura_camiones(camiones, config, cliente, venta, operacion="move_orders")
+
+    # RECALCULAR opciones para TODOS los camiones
+    for cam in camiones:
+        _actualizar_opciones_tipo_camion(cam, config, venta)
+
+        # Actualizar alertas de picking para todos (SMU)
+        if cliente.lower() == 'smu':
+            _actualizar_alertas_picking_camion(cam, config, venta)
+    
+    # 4) Devolver respuesta
+    return _to_response(camiones, pedidos_no_inc, cap_default)
+
+
+def add_truck(
+    state: Dict[str, Any], 
+    cd: List[str], 
+    ce: List[str], 
+    ruta: str, 
+    cliente: str, 
+    venta=None
+) -> Dict[str, Any]:
+    """
+    Crea un camión vacío.
+    
+    Args:
+        state: Estado actual
+        cd: Lista de CDs del camión
+        ce: Lista de CEs del camión
+        ruta: Tipo de ruta ("normal", "bh", "multi_cd", etc.)
+        cliente: Nombre del cliente
+    
+    Returns:
+        Estado actualizado con el nuevo camión
+    """
+    # 1) Reconstruir estado
+    camiones, pedidos_no_inc, config, cap_default = _rebuild_state(state, cliente, venta)
+    
+    # 2) Determinar tipo de ruta
+    try:
+        tipo_ruta = TipoRuta(ruta.lower())
+    except ValueError:
+        tipo_ruta = TipoRuta.NORMAL
+    
+    # 3) Obtener tipos de camión permitidos para esta ruta
+    cd_list = cd if isinstance(cd, list) else [cd]
+    ce_list = ce if isinstance(ce, list) else [ce]
+    
+    camiones_permitidos = _obtener_todos_tipos_para_ruta(
+        config, cd_list, ce_list, tipo_ruta.value, venta
+    )
+    
+    # Usar el primer tipo permitido, o PAQUETERA como fallback
+    tipo_inicial = camiones_permitidos[0] if camiones_permitidos else TipoCamion.PAQUETERA
+
+    # Obtener capacidad para el tipo inicial
+    from utils.config_helpers import get_capacity_for_type, ruta_sin_apilamiento_backhaul
+    
+    capacidad_inicial = get_capacity_for_type(config, tipo_inicial, venta)
+    metadata_inicial = {}
+    
+    # Ajustar si es backhaul y la ruta no permite apilamiento
+    if tipo_inicial.es_backhaul:
+        if ruta_sin_apilamiento_backhaul(config, cd_list, ce_list, tipo_ruta.value, venta):
+            capacidad_inicial = capacidad_inicial.sin_apilamiento()
+            metadata_inicial["sin_apilamiento"] = True
+    
+    # 4) Crear camión nuevo
+    nuevo_camion = Camion(
+        id=uuid.uuid4().hex,
+        tipo_ruta=tipo_ruta,
+        tipo_camion=tipo_inicial,
+        cd=cd_list,
+        ce=ce_list,
+        grupo=f"manual__{'-'.join(cd_list)}__{'-'.join(map(str, ce_list))}",
+        capacidad=capacidad_inicial,
+        pedidos=[],
+        metadata=metadata_inicial
+    )
+
+    # Calcular opciones de cambio de tipo
+    _actualizar_opciones_tipo_camion(nuevo_camion, config, venta)
+    
+    camiones.append(nuevo_camion)
+    
+    # 4) Revalidar altura (principalmente para mantener consistencia)
+    _revalidar_altura_camiones(camiones, config, cliente, venta, operacion="add_truck")
+
+    # RECALCULAR opciones para TODOS los camiones
+    for cam in camiones:
+        _actualizar_opciones_tipo_camion(cam, config, venta)
+        if cliente.lower() == 'smu':
+                _actualizar_alertas_picking_camion(cam, config, venta)
+    
+    
+    # 5) Devolver respuesta
+    return _to_response(camiones, pedidos_no_inc, cap_default)
+
+
+def delete_truck(
+    state: Dict[str, Any], 
+    truck_id: Optional[str], 
+    cliente: str, 
+    venta=None
+) -> Dict[str, Any]:
+    """
+    Elimina un camión y mueve sus pedidos a no incluidos.
+    
+    Args:
+        state: Estado actual
+        truck_id: ID del camión a eliminar
+        cliente: Nombre del cliente
+    
+    Returns:
+        Estado actualizado sin el camión eliminado
+    
+    Raises:
+        ValueError: Si el camión no existe
+    """
+    # 1) Reconstruir estado
+    camiones, pedidos_no_inc, config, cap_default = _rebuild_state(state, cliente, venta)
+    
+    if not truck_id:
+        raise ValueError("ID de camión requerido")
+    
+    # 2) Buscar y eliminar camión
+    cam_a_eliminar = next((c for c in camiones if c.id == truck_id), None)
+    
+    if not cam_a_eliminar:
+        raise ValueError("Camión no encontrado")
+    
+    # Mover pedidos a no incluidos
+    pedidos_no_inc.extend(cam_a_eliminar.pedidos)
+    
+    # Remover camión
+    camiones = [c for c in camiones if c.id != truck_id]
+    
+    # 3) Revalidar altura de camiones restantes
+    _revalidar_altura_camiones(camiones, config, cliente, venta, operacion="delete_truck")
+
+    # RECALCULAR opciones para TODOS los camiones
+    for cam in camiones:
+        _actualizar_opciones_tipo_camion(cam, config, venta)
+        
+        if cliente.lower() == 'smu':
+                _actualizar_alertas_picking_camion(cam, config, venta)
+    
+    # 4) Devolver respuesta
+    return _to_response(camiones, pedidos_no_inc, cap_default)
+
+
+def apply_truck_type_change(
+    state: Dict[str, Any], 
+    truck_id: str, 
+    tipo_camion: str, 
+    cliente: str, 
+    venta=None
+) -> Dict[str, Any]:
+    """
+    Cambia el tipo de camión entre los tipos permitidos.
+    
+    Args:
+        state: Estado actual
+        truck_id: ID del camión a modificar
+        tipo_camion: Nuevo tipo ("paquetera", "rampla_directa", "backhaul")
+        cliente: Nombre del cliente
+    
+    Returns:
+        Estado actualizado con el tipo cambiado
+    
+    Raises:
+        ValueError: Si el cambio no es válido
+    """
+    # 1) Reconstruir estado
+    camiones, pedidos_no_inc, config, cap_default = _rebuild_state(state, cliente, venta)
+    
+    #  Inferir venta correctamente
+    capacidades = extract_truck_capacities(config, venta)
+    
+    # 2) Buscar camión
+    camion = next((c for c in camiones if c.id == truck_id), None)
+    if not camion:
+        raise ValueError("Camión no encontrado")
+    
+    # 3) RECALCULAR opciones ANTES de validar
+    _actualizar_opciones_tipo_camion(camion, config, venta)
+
+    # Normalizar tipo (aceptar variantes)
+    tipo_nuevo = tipo_camion.lower().strip()
+    
+    # Mapeo de nombres alternativos
+    tipo_mapping = {
+        'paquetera': 'paquetera',
+        'rampla': 'rampla_directa',
+        'rampla_directa': 'rampla_directa',
+        'backhaul': 'backhaul',
+        'bh': 'backhaul',
+        'backhaul_2': 'backhaul_2'
+    }
+    
+    tipo_nuevo = tipo_mapping.get(tipo_nuevo, tipo_nuevo)
+    
+    # Validar que el cambio sea permitido
+    if tipo_nuevo not in camion.opciones_tipo_camion:
+        raise ValueError(
+            f"Cambio a '{tipo_nuevo}' no permitido para este camión. "
+            f"Tipo actual: '{camion.tipo_camion.value}'. "
+            f"Opciones disponibles: {', '.join(camion.opciones_tipo_camion)}"
+        )
+    
+    # 4) Determinar nueva capacidad
+    try:
+        nuevo_tipo_enum = TipoCamion(tipo_nuevo)
+    except ValueError:
+        raise ValueError(f"Tipo de camión '{tipo_nuevo}' no válido")
+    
+    nueva_capacidad = capacidades.get(nuevo_tipo_enum)
+    if not nueva_capacidad:
+        raise ValueError(f"Sin capacidad definida para tipo '{tipo_nuevo}'")
+    
+    # Ajustar si es backhaul y la ruta no permite apilamiento
+    from utils.config_helpers import ruta_sin_apilamiento_backhaul
+    
+    if nuevo_tipo_enum.es_backhaul:
+        cam_cd = camion.cd if isinstance(camion.cd, list) else [camion.cd]
+        cam_ce = camion.ce if isinstance(camion.ce, list) else [camion.ce]
+        tipo_ruta_str = camion.tipo_ruta.value if hasattr(camion.tipo_ruta, 'value') else str(camion.tipo_ruta)
+        
+        if ruta_sin_apilamiento_backhaul(config, cam_cd, cam_ce, tipo_ruta_str, venta):
+            nueva_capacidad = nueva_capacidad.sin_apilamiento()
+            camion.metadata["sin_apilamiento"] = True
+
+    else:
+        # Limpiar metadata si cambia desde backhaul a otro tipo
+        if "sin_apilamiento" in camion.metadata:
+            del camion.metadata["sin_apilamiento"]
+
+    
+    # Validar que el camión cabe en la nueva capacidad
+    if not camion.valida_capacidad(nueva_capacidad):
+        raise ValueError(f"El camión no cabe en capacidad de tipo '{tipo_nuevo}'")
+    
+    # Validar reglas del cliente
+    _validar_cambio_tipo_cliente(camion, nuevo_tipo_enum, config, cliente, venta)
+    
+    # 5) Guardar estado original ANTES de aplicar cambio
+    tipo_original = camion.tipo_camion
+    capacidad_original = camion.capacidad
+    pos_total_original = camion.pos_total
+    metadata_original = dict(camion.metadata) if camion.metadata else {}
+    tipos_pedidos_original = [p.tipo_camion for p in camion.pedidos]
+    
+    # 6) Aplicar cambio
+    camion.cambiar_tipo(nuevo_tipo_enum, nueva_capacidad)
+    
+    # Recalcular posiciones
+    camion.pos_total = calcular_posiciones_apilabilidad(
+        camion.pedidos,
+        nueva_capacidad.max_positions
+    )
+    
+    # Actualizar tipo en pedidos
+    for p in camion.pedidos:
+        p.tipo_camion = nuevo_tipo_enum.value
+    
+    # 7) Revalidar altura (crítico: cambió la capacidad)
+    _revalidar_altura_camiones(camiones, config, cliente, venta, operacion="change_type")
+
+
+    # 8) Verificar si la validación fue exitosa
+    layout_info = camion.metadata.get('layout_info', {})
+    if not layout_info.get('altura_validada', True):
+        # Revertir cambio: la altura no es válida con el nuevo tipo
+        camion.cambiar_tipo(tipo_original, capacidad_original)
+        camion.pos_total = pos_total_original
+        camion.metadata = metadata_original
+        for p, tipo_orig in zip(camion.pedidos, tipos_pedidos_original):
+            p.tipo_camion = tipo_orig
+        
+        # Re-validar con tipo original
+        _revalidar_altura_camiones(camiones, config, cliente, venta, operacion="change_type_revert")
+        
+        raise ValueError(
+            f"El camión no valida altura con tipo '{tipo_nuevo}' "
+            f"(altura máxima: {nueva_capacidad.altura_cm}cm). "
+            f"Se mantiene como '{tipo_original.value}'."
+        )
+    
+    # Recalcular opciones para TODOS los camiones
+    for cam in camiones:
+        _actualizar_opciones_tipo_camion(cam, config, venta)
+        
+        if cliente.lower() == 'smu':
+                _actualizar_alertas_picking_camion(cam, config, venta)
+
+    # 7) Devolver respuesta
+    return _to_response(camiones, pedidos_no_inc, cap_default)
 
 
 def compute_stats(
-    camiones: Optional[List[Dict[str, Any]]],
-    pedidos_no: Optional[List[Dict[str, Any]]],
-    cliente: Optional[str] = None,
+    camiones: Optional[List[Dict[str, Any]]], 
+    pedidos_no_incluidos: Optional[List[Dict[str, Any]]], 
+    cliente: str, 
+    venta=None
 ) -> Dict[str, Any]:
-    camiones = camiones or []
-    pedidos_no = pedidos_no or []
-
-    cantidad_camiones = len(camiones)
-    cantidad_normal = sum(1 for c in camiones if (c.get("tipo_camion") or "") != "bh")
-    cantidad_bh = cantidad_camiones - cantidad_normal
-
-    cantidad_asig = sum(len(c.get("pedidos") or []) for c in camiones)
-    total_pedidos = cantidad_asig + len(pedidos_no)
-
-    vcu_vals = [(c.get("vcu_max") or 0) for c in camiones]
-    promedio_vcu = (sum(vcu_vals) / cantidad_camiones) if cantidad_camiones else 0
-
-    norm_vals = [v for c in camiones if (c.get("tipo_camion") or "") != "bh" for v in [(c.get("vcu_max") or 0)]]
-    promedio_norm = (sum(norm_vals) / cantidad_normal) if cantidad_normal else 0
-
-    bh_vals = [v for c in camiones if (c.get("tipo_camion") or "") == "bh" for v in [(c.get("vcu_max") or 0)]]
-    promedio_bh = (sum(bh_vals) / cantidad_bh) if cantidad_bh else 0
-
-    valorizado = sum((c.get("valor_total") or 0) for c in camiones)
-
-    return {
-        "cantidad_camiones": cantidad_camiones,
-        "cantidad_camiones_normal": cantidad_normal,
-        "cantidad_camiones_bh": cantidad_bh,
-        "cantidad_pedidos_asignados": cantidad_asig,
-        "total_pedidos": total_pedidos,
-        "promedio_vcu": promedio_vcu,
-        "promedio_vcu_normal": promedio_norm,
-        "promedio_vcu_bh": promedio_bh,
-        "valorizado": valorizado,
-    }
-
-
-def _ceil_div2(x: int) -> int:
-    return (x + 1) // 2
-
-
-def _compute_apilabilidad(pedidos_cam: List[Dict[str, Any]], cliente: Optional[str], tipo_camion: str) -> Dict[str, Any]:
-    """Reproduce la métrica `total_stack` del solver y valida contra el umbral
-    de posiciones del camión según cliente/tipo (normal vs bh).
     """
-    if not (cliente and str(cliente).strip()):
-        return {"ok": False, "motivo": "Falta 'cliente' para validar apilabilidad"}
-
-    cfg = get_client_config(cliente)
-    if isinstance(cfg.TRUCK_TYPES, dict):
-        truck_types = cfg.TRUCK_TYPES
-    else:
-        truck_types = {t.get("type"): t for t in cfg.TRUCK_TYPES}
-
-    tipo = (tipo_camion or "normal").lower()
-    tsel = truck_types.get(tipo) or truck_types.get("normal") or next(iter(truck_types.values()))
-
-    levels = int(tsel.get("levels", 2))
-    max_positions = int(tsel.get("max_positions", 30))
-
-    def s(col: str, default: float = 0.0) -> int:
-        return int(round(sum(float(p.get(col, default) or 0.0) for p in pedidos_cam) * PALLETS_SCALE))
-
-    base_sum = s("BASE")
-    sup_sum = s("SUPERIOR")
-    flex_sum = s("FLEXIBLE")
-    noap_sum = s("NO_APILABLE")
-    self_sum = s("SI_MISMO")
-
-    lim_pos_scaled = max_positions * PALLETS_SCALE
-    if base_sum > lim_pos_scaled:
-        return {"ok": False, "motivo": f"BASE usa {base_sum/PALLETS_SCALE:.2f} > {max_positions} posiciones"}
-    if sup_sum > lim_pos_scaled:
-        return {"ok": False, "motivo": f"SUPERIOR usa {sup_sum/PALLETS_SCALE:.2f} > {max_positions} posiciones"}
-    if noap_sum > lim_pos_scaled:
-        return {"ok": False, "motivo": f"NO_APILABLE usa {noap_sum/PALLETS_SCALE:.2f} > {max_positions} posiciones"}
-    if flex_sum > (max_positions * levels * PALLETS_SCALE):
-        return {"ok": False, "motivo": f"FLEXIBLE usa {flex_sum/PALLETS_SCALE:.2f} > {max_positions*levels} niveles"}
-
-    if base_sum + noap_sum > lim_pos_scaled:
-        return {"ok": False, "motivo": "BASE + NO_APILABLE exceden posiciones"}
-    if sup_sum + noap_sum > lim_pos_scaled:
-        return {"ok": False, "motivo": "SUPERIOR + NO_APILABLE exceden posiciones"}
-
-    diff = base_sum - sup_sum
-    abs_diff = abs(diff)
-
-    m0 = min(base_sum, sup_sum)
-    m1 = min(abs_diff, flex_sum)
-    rem = flex_sum - m1
-    half = _ceil_div2(rem)
-    m2 = max(abs_diff - flex_sum, 0)
-
-    pair_q = self_sum // (2 * PALLETS_SCALE)
-    self_pairs_scaled = pair_q * PALLETS_SCALE
-    self_rem = self_sum - pair_q * (2 * PALLETS_SCALE)
-
-    total_stack = m0 + m1 + half + m2 + noap_sum + self_pairs_scaled + self_rem
-    ok = total_stack <= lim_pos_scaled
-    usado = total_stack / PALLETS_SCALE
-
-    return {"ok": ok, "motivo": (None if ok else f"Usa {usado:.2f} posiciones > {max_positions}"), "pos_usadas": usado, "pos_max": max_positions}
-
-
-def _check_vcu_cap(pedidos_cam: List[Dict[str, Any]]) -> Dict[str, Any]:
-    vvol = sum(p.get("VCU_VOL") or 0 for p in pedidos_cam)
-    vpes = sum(p.get("VCU_PESO") or 0 for p in pedidos_cam)
-    vcu_max = max(vvol, vpes)
-
-    return {
-        "ok": vcu_max <= 1 + 1e-9,
-        "motivo": None if vcu_max <= 1 + 1e-9 else f"VCU excedido: peso {vpes*100:.2f}%, volumen {vvol*100:.2f}% (máx {vcu_max*100:.2f}%)",
-        "vcu_vol": vvol,
-        "vcu_peso": vpes,
-        "vcu_max": vcu_max,
-    }
-
-
-def move_orders(
-    state: Dict[str, Any],
-    pedidos: Optional[List[Dict[str, Any]]],
-    target_truck_id: Optional[str],
-    cliente: str ) -> Dict[str, Any]:
-    """Mueve pedidos entre camiones y valída reglas del cliente"""
-    camiones = [dict(c) for c in (state.get("camiones") or [])]
-    no_incl = list(state.get("pedidos_no_incluidos") or [])
-    pedidos_sel = list(pedidos or [])
-
-    seleccion_ids = {p.get("PEDIDO") for p in pedidos_sel}
-    sim_camiones = []
-    for c in camiones:
-        c2 = dict(c)
-        c2["pedidos"] = [p for p in (c.get("pedidos") or []) if p.get("PEDIDO") not in seleccion_ids]
-        sim_camiones.append(c2)
-    sim_no_incl = [p for p in no_incl if p.get("PEDIDO") not in seleccion_ids]
-
-    if target_truck_id:
-        tgt = next((c for c in sim_camiones if c.get("id") == target_truck_id), None)
-        if not tgt:
-            raise ValueError("Camión destino no encontrado")
-
-        candidatos = (tgt.get("pedidos") or []) + pedidos_sel
-
-        # 0) Regla de Walmart: máximo 10 pedidos por camión en postproceso por CD
-        if (cliente).strip().lower() == "walmart":
-            cfg_wm = get_client_config("Walmart")  # para leer MAX_ORDENES si aplica
-
-            cds_candidatos = [p.get("CD") for p in candidatos if p.get("CD")]
-            cds_unicos = {cd for cd in cds_candidatos if cd not in (None, "")}
-
-            if len(cds_unicos) > 1:
-                conteo_por_cd = Counter(cds_candidatos)
-                for cd, cnt in conteo_por_cd.items():
-                    if cnt > 10:
-                        raise ValueError(f"Walmart (multi_cd): máximo 10 pedidos por CD. CD '{cd}' tiene {cnt}.")
-                total = sum(conteo_por_cd.values())
-                if total > 20:
-                    raise ValueError("Walmart (multi_cd): máximo 20 pedidos por camión (10 por CD).")
-            else:
-                max_ordenes = getattr(cfg_wm, "MAX_ORDENES", 10)
-                if len(candidatos) > max_ordenes:
-                    raise ValueError(f"Walmart: máximo {max_ordenes} pedidos por camión.")
-
-        # 0) Chequeo capacidad de pallets (Cencosud usa PALLETS_REAL)
-        if (cliente).strip().lower() == "cencosud":
-            cfg = get_client_config("Cencosud")
-            tipo_cam = (tgt.get("tipo_camion") or "normal").lower()
-            trucks = cfg.TRUCK_TYPES if isinstance(cfg.TRUCK_TYPES, dict) else {t.get("type"): t for t in cfg.TRUCK_TYPES}
-            tsel = trucks.get(tipo_cam) or trucks.get("normal") or next(iter(trucks.values()))
-            max_pallets = int(tsel.get("max_pallets", 60))
-            pallets_tot = sum((p.get("PALLETS_REAL") if "PALLETS_REAL" in p else p.get("PALLETS") or 0) for p in candidatos)
-            if pallets_tot > max_pallets:
-                raise ValueError(f"Cencosud: pallets totales {pallets_tot} > máximo {max_pallets}.")
-
-        cap_ok = _check_vcu_cap(candidatos)
-        if not cap_ok["ok"]:
-            raise ValueError(cap_ok["motivo"])
-
-        ap_ok = _compute_apilabilidad(candidatos, cliente, tgt.get("tipo_camion") or "normal")
-        if not ap_ok.get("ok"):
-            raise ValueError(ap_ok.get("motivo") or "Apilabilidad inválida")
-
-        tgt["pedidos"] = candidatos
-    else:
-        sim_no_incl.extend(pedidos_sel)
-        # de-duplicar por PEDIDO (por si reingresan)
-        seen = set()
-        sim_no_incl = [p for p in sim_no_incl
-                    if not (p.get("PEDIDO") in seen or seen.add(p.get("PEDIDO")))]
-    # Recalcular atributos por camión
-    for cam in sim_camiones:
-        pedidos_cam = cam.get("pedidos") or []
-        cam["pallets_conf"] = float(sum(p.get("PALLETS") or 0 for p in pedidos_cam))
-        cam["valor_total"] = float(sum(p.get("VALOR") or 0 for p in pedidos_cam))
-        cam["vcu_vol"] = float(sum(p.get("VCU_VOL") or 0 for p in pedidos_cam))
-        cam["vcu_peso"] = float(sum(p.get("VCU_PESO") or 0 for p in pedidos_cam))
-        cam["vcu_max"] = max(cam["vcu_vol"], cam["vcu_peso"])
-        cam["chocolates"] = 1 if any(p.get("CHOCOLATES") == 1 for p in pedidos_cam) else 0
-        cam["valioso"] = any(p.get("VALIOSO") for p in pedidos_cam)
-        cam["pdq"] = any(p.get("PDQ") for p in pedidos_cam)
-        cam["baja_vu"] = any(p.get("BAJA_VU") for p in pedidos_cam)
-        cam["lote_dir"] = any(p.get("LOTE_DIR") for p in pedidos_cam)
-
-        ce_vals = {p.get("CE") for p in pedidos_cam if p.get("CE") not in (None, "")}
-        cd_vals = {p.get("CD") for p in pedidos_cam if p.get("CD") not in (None, "")}
-        if len(ce_vals) > 1:
-            cam["tipo_ruta"] = "multi_ce"
-        elif len(cd_vals) > 1:
-            cam["tipo_ruta"] = "multi_cd"
-        else:
-            cam["tipo_ruta"] = "normal"
-
-        if pedidos_cam:
-            ap_det = _compute_apilabilidad(pedidos_cam, cliente, cam.get("tipo_camion") or "normal")
-            cam["pos_total"] = float(ap_det.get("pos_usadas") or 0.0)
-        else:
-            cam["pos_total"] = 0.0
-
-        oc_vals = {p.get("OC") for p in pedidos_cam if p.get("OC") not in (None, "")}
-        cam["flujo_oc"] = ("" if not oc_vals else (next(iter(oc_vals)) if len(oc_vals) == 1 else "MIX"))
-
-    for idx, cam in enumerate(sim_camiones, start=1):
-        cam["numero"] = idx
-
-    stats = compute_stats(sim_camiones, sim_no_incl, cliente)
-    return {"camiones": sim_camiones, "pedidos_no_incluidos": sim_no_incl, "estadisticas": stats, "cliente": cliente}
-
-
-def apply_truck_type_change(state: Dict[str, Any], truck_id: str, new_type: str, cliente: str) -> Dict[str, Any]:
-    """
-    Cambia el tipo de camión reusando compute_stats para estadísticas.
-    Valida que el cambio sea permitido y que 'quepa' con el nuevo tipo
-    (peso, volumen, pallets, posiciones y reglas del cliente).
-    *NO* valida VCU mínimo por tu requerimiento.
-    """
-    camiones = state.get("camiones") or []
-    pni      = state.get("pedidos_no_incluidos") or []
-    if new_type not in ("normal", "bh"):
-        raise ValueError("tipo_camion inválido (use 'normal' o 'bh').")
-
-    # 1) localizar camión
-    truck = next((t for t in camiones if t.get("id") == truck_id), None)
-    if truck is None:
-        raise ValueError("Camión no encontrado.")
+    Recalcula estadísticas sin modificar estado.
     
-    # Obtener config y asegurar opciones antes de validar
-    client_config = get_client_config(cliente)
-    try:
-        sw_calc = _compute_switch_options(truck, client_config)
-        if sw_calc:
-            truck.setdefault("can_switch_tipo_camion", sw_calc["can_switch"])
-            truck.setdefault("opciones_tipo_camion",   sw_calc["opciones"])
-    except Exception:
-        pass
+    Args:
+        camiones: Lista de camiones (dicts)
+        pedidos_no_incluidos: Lista de pedidos no asignados (dicts)
+        cliente: Nombre del cliente
+    
+    Returns:
+        Dict con estadísticas
+    """
+    state = {
+        "camiones": camiones or [],
+        "pedidos_no_incluidos": pedidos_no_incluidos or []
+    }
+    
+    # Reconstruir objetos para calcular estadísticas
+    camiones_obj, pedidos_obj, config, cap_default = _rebuild_state(state, cliente, venta)
+    
+    return _compute_stats(camiones_obj, pedidos_obj)
 
-    # 2) validar permiso básico (opciones calculadas previamente)
-    opciones = truck.get("opciones_tipo_camion") or []
-    can_switch = bool(truck.get("can_switch_tipo_camion", False))
-    if opciones and new_type not in opciones:
-        raise ValueError("Cambio no permitido para este camión.")
-    if not opciones and not can_switch and new_type != truck.get("tipo_camion"):
-        raise ValueError("Este camión no permite cambio de tipo.")
 
-    # 3) capacidades del nuevo tipo
-    if isinstance(client_config.TRUCK_TYPES, dict):
-        tdict = client_config.TRUCK_TYPES
-    else:
-        tdict = {t.get('type'): t for t in client_config.TRUCK_TYPES}
-    tsel  = tdict.get(new_type) or tdict.get('normal') or next(iter(tdict.values()))
-    tnorm = tdict.get('normal') or tsel
+# ============================================================================
+# VALIDACIÓN DE ALTURA (REFACTORIZADO)
+# ============================================================================
 
-    cap_weight    = float(tsel.get('cap_weight', tnorm['cap_weight']))
-    cap_volume    = float(tsel.get('cap_volume', tnorm['cap_volume']))
-    max_positions = int(tsel.get('max_positions', 30))
-    max_pallets   = int(tsel.get('max_pallets', getattr(client_config, 'MAX_PALLETS_CONF', 60)))
-    # vcu_min       = float(tsel.get('vcu_min', getattr(client_config, 'BH_VCU_MIN' if new_type=='bh' else 'VCU_MIN', 0.85)))  # <- ya no se usa
-    vcu_max       = float(getattr(client_config, 'BH_VCU_MAX', 1.0)) if new_type == 'bh' else 1.0
+def _revalidar_altura_camiones(
+    camiones: List[Camion], 
+    config, 
+    cliente: str,
+    venta: str = None,
+    operacion: str = "operacion"
+) -> None:
+    """
+    Revalidación paralela (para operaciones de postproceso).
+    
+    ✅ REFACTORIZADO: Usa TruckValidator del módulo optimization.validation
+    en lugar de _validar_altura_camiones_paralelo del orchestrator.
+    """
+    
+    from utils.config_helpers import get_effective_config
+    
+    effective = get_effective_config(config, venta)
 
-    # 4) totalizadores (usar camión o re-sumar desde pedidos)
-    def _sum_from_orders(trk: Dict[str, Any], key_truck: str, key_order: str) -> float:
-        if trk.get(key_truck) is not None:
-            return float(trk[key_truck])
-        return float(sum((p.get(key_order) or 0) for p in trk.get('pedidos', [])))
+    validator = TruckValidator(config)
+    validator.validar_camiones(camiones, operacion=operacion, effective_config=effective, venta=venta)
 
-    vol_total    = _sum_from_orders(truck, 'vol_total',  'VOL')
-    peso_total   = _sum_from_orders(truck, 'peso_total', 'PESO')
-    pallets_conf = truck.get('pallets_conf')
-    if pallets_conf is None:
-        pallets_conf = sum((p.get('PALLETS') or 0) for p in truck.get('pedidos', []))
-    pos_total    = truck.get('pos_total', 0)
 
-    # 5) VALIDACIONES compactas (sin helpers extra)
-    # Capacidad dura por tipo
-    if peso_total > cap_weight + 1e-6:
-        raise ValueError("El peso total del camión excede la capacidad del nuevo tipo.")
-    if vol_total > cap_volume + 1e-6:
-        raise ValueError("El volumen total del camión excede la capacidad del nuevo tipo.")
-    if float(pallets_conf) > float(max_pallets) + 1e-6:
-        raise ValueError("El total de pallets del camión excede el máximo permitido para el nuevo tipo.")
-    if int(pos_total) > int(max_positions):
-        raise ValueError("Las posiciones ocupadas exceden el máximo permitido para el nuevo tipo.")
+def _validar_altura_pre_agregar(
+    camion: Camion,
+    pedidos_a_agregar: List[Pedido],
+    config,
+    cliente: str,
+    venta: str = None
+) -> None:
+    """
+    Valida que agregar los pedidos no viole restricciones de altura.
+    Simula el agregado y valida sin modificar el estado real.
+    
+    Raises:
+        ValueError: Si agregar los pedidos violaría restricciones de altura
+    """
+    from copy import deepcopy
+    from utils.config_helpers import get_effective_config, get_consolidacion_config
+    from optimization.validation.height_validator import HeightValidator
+    
+    # Crear copia del camión con los pedidos agregados
+    camion_simulado = deepcopy(camion)
 
-    # Reglas especiales Walmart
-    if getattr(client_config, '__name__', '') == 'WalmartConfig':
-        lista_p = truck.get('pedidos', [])
-        if truck.get('tipo_ruta') == 'multi_cd':
-            # 10 por CD y 20 total
-            por_cd = {}
-            for p in lista_p:
-                cd = p.get('CD')
-                if cd is None:
-                    continue
-                por_cd[cd] = por_cd.get(cd, 0) + 1
-            for cd, cnt in por_cd.items():
-                if cnt > 10:
-                    raise ValueError(f"Camión excede 10 órdenes para el CD {cd} (Walmart multi_cd).")
-            if len(lista_p) > 20:
-                raise ValueError("Camión excede 20 órdenes totales (Walmart multi_cd).")
+    camion_simulado.pedidos = camion.pedidos + pedidos_a_agregar
+    
+    # Verificar si tiene SKUs para validar
+    tiene_skus = any(p.tiene_skus for p in camion_simulado.pedidos)
+    if not tiene_skus:
+        return  # Sin SKUs, no hay validación de altura
+    
+    # Obtener configuración
+    effective = get_effective_config(config, venta)
+    
+    # Verificar si la validación de altura está habilitada
+    if not effective.get('VALIDAR_ALTURA', True):
+        return
+    
+    # Obtener altura máxima del camión
+    altura_maxima = camion_simulado.capacidad.altura_cm
+    if hasattr(config, 'get_altura_maxima'):
+        subcliente = ""
+        if camion_simulado.pedidos:
+            subcliente = camion_simulado.pedidos[0].metadata.get("SUBCLIENTE", "")
+        altura_maxima = config.get_altura_maxima(subcliente, altura_maxima)
+    
+    # Obtener configuración de consolidación (incluye ALTURA_MAX_PICKING_APILADO_CM)
+    subcliente = None
+    oc = None
+    if camion_simulado.pedidos:
+        primer_pedido = camion_simulado.pedidos[0]
+        subcliente = primer_pedido.metadata.get("SUBCLIENTE") if primer_pedido.metadata else None
+        oc = primer_pedido.oc
+    
+    consolidacion = get_consolidacion_config(config, subcliente=subcliente, oc=oc, venta=venta)
+    
+    # Crear validador
+    validator = HeightValidator(
+        altura_maxima_cm=altura_maxima,
+        permite_consolidacion=consolidacion["PERMITE_CONSOLIDACION"],
+        max_skus_por_pallet=consolidacion["MAX_SKUS_POR_PALLET"],
+        max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM")
+    )
+    
+    # Ejecutar validación
+    es_valido, errores, layout, debug_info = validator.validar_camion_rapido(camion_simulado)
+    
+    if not es_valido:
+        # Construir mensaje de error descriptivo
+        errores_limpios = [str(e) for e in errores if e]
+        
+        if errores_limpios:
+            msg = "No se pueden agregar los pedidos: " + "; ".join(errores_limpios)
         else:
-            max_ordenes = getattr(client_config, 'MAX_ORDENES', None)
-            if max_ordenes is not None and len(lista_p) > int(max_ordenes):
-                raise ValueError(f"Camión excede {int(max_ordenes)} órdenes (Walmart).")
+            # Si no hay errores específicos, dar mensaje genérico
+            msg = "No se pueden agregar los pedidos: excede las restricciones de altura del camión"
+            
+            # Agregar info de altura máxima de picking si aplica
+            altura_picking_max = consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM")
+            if altura_picking_max:
+                msg += f" (máximo {altura_picking_max}cm cuando hay picking)"
+        
+        raise ValueError(msg)
 
-    # Reglas BH (sin VCU mínimo)
-    if new_type == 'bh':
-        rutas_bh = getattr(client_config, 'RUTAS_POSIBLES', {}).get('bh', [])
-        if not _ruta_coincide_con_bh(truck.get('cd'), truck.get('ce'), rutas_bh):
-            raise ValueError("La ruta del camión no está habilitada para BH según la configuración del cliente.")
-        if hasattr(client_config, 'CD_CON_BH'):
-            for cd in (truck.get('cd') or []):
-                if cd not in client_config.CD_CON_BH:
-                    raise ValueError(f"El CD {cd} no admite BH para este cliente.")
-        permite_mix = getattr(client_config, 'BH_PERMITE_MIX', False)
-        if (not permite_mix) and (truck.get('flujo_oc') == 'MIX'):
-            raise ValueError("BH no permite mezcla de flujos OC para este cliente.")
+# ============================================================================
+# HELPERS INTERNOS
+# ============================================================================
+
+def _obtener_todos_tipos_para_ruta(client_config, cds, ces, tipo_ruta: str, venta: str = None) -> List[TipoCamion]:
+    """
+    Obtiene TODOS los tipos de camión permitidos para una ruta,
+    combinando todos los flujos (OCs) posibles.
+    """
+    from utils.config_helpers import get_effective_config, _normalize_cd_list, _normalize_ce_list
+    
+    effective = get_effective_config(client_config, venta)
+    rutas_posibles = effective.get("RUTAS_POSIBLES", {})
+    rutas_tipo = rutas_posibles.get(tipo_ruta, [])
+    
+    cds_busqueda = _normalize_cd_list(cds or [])
+    ces_busqueda = _normalize_ce_list(ces or [])
+    
+    todos_tipos = set()
+    
+    for ruta in rutas_tipo:
+        if isinstance(ruta, dict):
+            ruta_cds = _normalize_cd_list(ruta.get('cds', []))
+            ruta_ces = _normalize_ce_list(ruta.get('ces', []))
+            
+            # Match por CD y CE (ignorando OC)
+            if ruta_cds == cds_busqueda and ruta_ces == ces_busqueda:
+                tipos_str = ruta.get('camiones_permitidos', [])
+                for t in tipos_str:
+                    try:
+                        todos_tipos.add(TipoCamion(t))
+                    except ValueError:
+                        pass
+    
+    # Si no encontró nada, usar default
+    if not todos_tipos:
+        todos_tipos = {TipoCamion.PAQUETERA, TipoCamion.RAMPLA_DIRECTA}
+    
+    return list(todos_tipos)
 
 
-    # 6) Recalcular VCU del camión con capacidades del tipo nuevo (sin chequear mínimo)
-    vcu_vol  = vol_total  / cap_volume if cap_volume > 0 else 0.0
-    vcu_peso = peso_total / cap_weight if cap_weight > 0 else 0.0
-    vcu_maxv = max(vcu_vol, vcu_peso)
-    # if vcu_maxv < vcu_min:  # <- Eliminado por requerimiento
-    #     raise ValueError("VCU por debajo del mínimo del tipo destino.")
-    if new_type == 'bh' and vcu_maxv > vcu_max + 1e-9:
-        raise ValueError("El VCU del camión excede el máximo permitido para BH.")
+def _actualizar_opciones_tipo_camion(camion: Camion, client_config, venta: str = None):
+    """
+    Calcula y actualiza las opciones de tipo de camión disponibles.
+    Modifica camion.opciones_tipo_camion in-place.
+    
+    Lógica:
+    - Siempre incluye el tipo actual del camión
+    - Verifica si puede cambiar a otros tipos según rutas y capacidad
+    """
+    from utils.config_helpers import get_camiones_permitidos_para_ruta
+    
+    opciones = set()
+    
+    # Siempre incluir el tipo actual (CRÍTICO)
+    opciones.add(camion.tipo_camion.value)
+    
+    # Obtener tipo_ruta del camión
+    tipo_ruta = camion.tipo_ruta.value if hasattr(camion, 'tipo_ruta') and camion.tipo_ruta else "normal"
+    
+    # Obtener OC del camión (desde el primer pedido si existe)
+    oc_camion = None
+    if camion.pedidos:
+        oc_camion = getattr(camion.pedidos[0], 'oc', None)
 
-    # 7) Aplicar el cambio y refrescar métricas
-    truck['tipo_camion'] = new_type
-    truck['vcu_vol']     = vcu_vol
-    truck['vcu_peso']    = vcu_peso
-    truck['vcu_max']     = vcu_maxv
+    # Si NO hay pedidos, obtener tipos de TODOS los flujos para esta ruta
+    if not camion.pedidos:
+        camiones_permitidos = _obtener_todos_tipos_para_ruta(
+            client_config, camion.cd, camion.ce, tipo_ruta, venta
+        )
+    else:
+        # Obtener camiones permitidos para esta ruta
+        try:
+            camiones_permitidos = get_camiones_permitidos_para_ruta(client_config, camion.cd, camion.ce, tipo_ruta,venta, oc_camion)
+        except Exception as e:
+            # Fallback: usar solo el tipo actual
+            camiones_permitidos = [camion.tipo_camion]
+    
+    capacidades = extract_truck_capacities(client_config, venta)
+    
+    for tipo in camiones_permitidos:
+        try:
+            cap = capacidades.get(tipo)
+            if not cap:
+                continue
+            
+            # Verificar si el camión actual cabe en esta capacidad
+            if camion.valida_capacidad(cap):
+                opciones.add(tipo.value)
+        except Exception as e:
+            if DEBUG_VALIDATION:
+                print(f"[DEBUG] ⚠️ Error validando tipo '{tipo.value}': {e}")
+    
+    # Convertir a lista ordenada
+    orden = ['pequeño','mediano','paquetera', 'rampla_directa', 'backhaul', 'backhaul_2']
+    opciones_ordenadas = [t for t in orden if t in opciones]
+    
+    # Agregar cualquier otro tipo no estándar que pueda estar
+    for tipo in opciones:
+        if tipo not in opciones_ordenadas:
+            opciones_ordenadas.append(tipo)
+    
+    # Si opciones_ordenadas está vacía, al menos incluir el tipo actual
+    if not opciones_ordenadas:
+        opciones_ordenadas = [camion.tipo_camion.value]
+    
+    camion.opciones_tipo_camion = opciones_ordenadas
 
-    # Rescatar opciones tras el cambio
-    try:
-        sw = _compute_switch_options(truck, client_config)
-        truck['can_switch_tipo_camion'] = sw['can_switch']
-        truck['opciones_tipo_camion']   = sw['opciones']
-    except Exception:
+
+def _validar_cambio_tipo_cliente(
+    camion: Camion, 
+    nuevo_tipo: TipoCamion, 
+    config, 
+    cliente: str,
+    venta: str = None
+):
+    """
+    Validaciones específicas del cliente para cambio de tipo.
+    Lanza ValueError si no cumple.
+    """
+    from utils.config_helpers import get_camiones_permitidos_para_ruta
+    
+    # Verificar que el nuevo tipo esté permitido para esta ruta
+    tipo_ruta = camion.tipo_ruta.value if hasattr(camion, 'tipo_ruta') and camion.tipo_ruta else "normal"
+    
+    # Obtener OC del camión (desde el primer pedido si existe)
+    oc_camion = None
+    if camion.pedidos:
+        oc_camion = getattr(camion.pedidos[0], 'oc', None)
+
+    # Si el camión NO tiene pedidos, obtener todos los tipos de todos los flujos
+    if not camion.pedidos:
+        camiones_permitidos = _obtener_todos_tipos_para_ruta(
+            config, camion.cd, camion.ce, tipo_ruta, venta
+        )
+    else:
+        camiones_permitidos = get_camiones_permitidos_para_ruta(
+            config,
+            camion.cd,
+            camion.ce,
+            tipo_ruta,
+            venta,
+            oc_camion
+        )
+    
+    if nuevo_tipo not in camiones_permitidos:
+        raise ValueError(
+            f"Tipo '{nuevo_tipo.value}' no permitido para ruta "
+            f"CD={camion.cd}, CE={camion.ce}, tipo_ruta={tipo_ruta}. "
+            f"Tipos permitidos: {[t.value for t in camiones_permitidos]}"
+        )
+    
+    # Validaciones específicas por cliente
+    if cliente.lower() == "cencosud":
+        pass
+    elif cliente.lower() == "walmart":
+        pass
+    elif cliente.lower() == "disvet":
         pass
 
-    # 8) Recalcular estadísticas globales con la misma función de siempre
-    stats = compute_stats(camiones, pni, cliente)
-    return {"camiones": camiones, "pedidos_no_incluidos": pni, "estadisticas": stats}
 
-
-def add_truck(state: Dict[str, Any], cd: List[str], ce: List[int], ruta: str, cliente: str) -> Dict[str, Any]:
+def _validar_reglas_cliente_pre_agregar(
+    camion: Camion, 
+    pedidos_a_agregar: List[Pedido],
+    config, 
+    cliente: str,
+    venta: str = None
+):
     """
-    Crea un camión vacío para la combinación CD/CE/ruta indicada.
-    Ahora incluye can_switch_tipo_camion y opciones_tipo_camion si la ruta lo permite.
+    Valida reglas del cliente ANTES de agregar pedidos.
+    Lanza ValueError si agregar los pedidos violaría alguna regla.
+    
+    Args:
+        camion: Camión destino
+        pedidos_a_agregar: Pedidos que se quieren agregar
+        config: Configuración del cliente
+        cliente: Nombre del cliente
+    
+    Raises:
+        ValueError: Si agregar los pedidos violaría alguna regla
     """
-    camiones = state.get("camiones") or []
-    pni      = state.get("pedidos_no_incluidos") or []
+    if cliente.lower() == "walmart":
+        # Obtener effective_config para MAX_ORDENES
+        effective = _get_effective_config_para_postprocess(config, [camion], venta)
+        max_ordenes = effective.get('MAX_ORDENES', 10)
 
-    client_config = get_client_config(cliente)
+        n_actual = len(camion.pedidos)
+        n_a_agregar = len(pedidos_a_agregar)
+        n_total = n_actual + n_a_agregar
+        
+        if n_total > max_ordenes:
+            raise ValueError(
+                f"Walmart permite máximo {max_ordenes} pedidos por camión. "
+                f"El camión tiene {n_actual} y se intentan agregar {n_a_agregar} "
+                f"(total: {n_total})."
+            )
+    
+    # Validación SMU: no mezclar flujos OC
+    elif cliente.lower() == "smu":
+        from utils.config_helpers import get_camiones_permitidos_para_ruta
 
-    # Nuevo camión (vacío)
-    nuevo = {
-        "id": str(uuid.uuid4()),
-        "cd": cd if isinstance(cd, list) else [cd],
-        "ce": ce if isinstance(ce, list) else [ce],
-        "tipo_ruta": ruta or "normal",
-        "tipo_camion": "normal",
-        "pedidos": [],
-        "vcu_vol": 0.0,
-        "vcu_peso": 0.0,
-        "vcu_max": 0.0,
-        "pallets_conf": 0.0,
-        "pos_total": 0,
-        "valor_total": 0.0,
-        "valor_cafe": 0.0,
-        # flujo_oc: None/‘MIX’/OC específico si lo determinas después
+        # Obtener flujos actuales del camión
+        flujos_actuales = set()
+        for pedido in camion.pedidos:
+            flujo = getattr(pedido, 'oc', None) or getattr(pedido, 'flujo_oc', None)
+            if flujo:
+                flujos_actuales.add(flujo.upper())
+        
+        # Obtener flujos de pedidos a agregar
+        flujos_nuevos = set()
+        for pedido in pedidos_a_agregar:
+            flujo = getattr(pedido, 'oc', None) or getattr(pedido, 'flujo_oc', None)
+            if flujo:
+                flujos_nuevos.add(flujo.upper())
+        
+        # Verificar mezcla de flujos
+        if flujos_actuales and flujos_nuevos:
+            todos_flujos = flujos_actuales | flujos_nuevos
+            if len(todos_flujos) > 1:
+                raise ValueError(
+                    f"SMU no permite mezclar flujos en un camión. "
+                )
+
+        # Validar que el tipo de camión sea válido para el flujo del pedido
+        tipo_ruta = camion.tipo_ruta.value if camion.tipo_ruta else "normal"
+        for pedido in pedidos_a_agregar:
+            oc_pedido = getattr(pedido, 'oc', None)
+            if oc_pedido:
+                camiones_permitidos = get_camiones_permitidos_para_ruta(
+                    config, camion.cd, camion.ce, tipo_ruta, venta, oc_pedido
+                )
+                if camion.tipo_camion not in camiones_permitidos:
+                    raise ValueError(
+                        f"El tipo de camión '{camion.tipo_camion.value}' no está permitido "
+                        f"para el flujo '{oc_pedido}'. "
+                        f"Tipos permitidos: {[c.value for c in camiones_permitidos]}"
+                    )
+
+def _compute_stats(
+    camiones: List[Camion], 
+    pedidos_no_inc: List[Pedido]
+) -> Dict[str, Any]:
+    """
+    Calcula estadísticas del estado actual.
+    
+    ✅ SIEMPRE se ejecuta, independientemente de qué camiones fueron validados.
+    
+    Returns:
+        Dict con estadísticas agregadas en formato compatible con frontend
+    """
+    from collections import Counter
+    
+    total_pedidos = len(pedidos_no_inc) + sum(len(c.pedidos) for c in camiones)
+    pedidos_asignados = total_pedidos - len(pedidos_no_inc)
+    
+    # Contadores por tipo de camión
+    tipos_camion = Counter(c.tipo_camion.value for c in camiones)
+    cantidad_paquetera = tipos_camion.get('paquetera', 0)
+    cantidad_rampla = tipos_camion.get('rampla_directa', 0)
+    cantidad_backhaul = tipos_camion.get('backhaul', 0) + tipos_camion.get('backhaul_28', 0)
+    
+    # Camiones Nestlé = paquetera + rampla_directa
+    cantidad_nestle = cantidad_paquetera + cantidad_rampla
+    
+    # VCU promedios
+    vcu_total = sum(c.vcu_max for c in camiones) / len(camiones) if camiones else 0
+    
+    # VCU promedio de camiones Nestlé (paquetera + rampla_directa)
+    camiones_nestle = [c for c in camiones if c.tipo_camion.es_nestle]
+    vcu_nestle = sum(c.vcu_max for c in camiones_nestle) / len(camiones_nestle) if camiones_nestle else 0
+    
+    # VCU promedio de camiones Backhaul
+    camiones_bh = [c for c in camiones if c.tipo_camion.es_backhaul]
+    vcu_bh = sum(c.vcu_max for c in camiones_bh) / len(camiones_bh) if camiones_bh else 0
+    
+    # Valorizado
+    valorizado = sum(
+        sum(p.valor for p in c.pedidos)
+        for c in camiones
+    )
+    
+    return {
+        "promedio_vcu": round(vcu_total, 3),
+        "promedio_vcu_nestle": round(vcu_nestle, 3),
+        "promedio_vcu_backhaul": round(vcu_bh, 3),
+        "cantidad_camiones": len(camiones),
+        "cantidad_camiones_nestle": cantidad_nestle,
+        "cantidad_camiones_paquetera": cantidad_paquetera,
+        "cantidad_camiones_rampla_directa": cantidad_rampla,
+        "cantidad_camiones_backhaul": cantidad_backhaul,
+        "cantidad_pedidos_asignados": pedidos_asignados,
+        "total_pedidos": total_pedidos,
+        "valorizado": valorizado
     }
 
-    # Calcular opciones de cambio basadas en la configuración del cliente
-    sw = _compute_switch_options(nuevo, client_config)
-    nuevo['can_switch_tipo_camion'] = sw['can_switch']
-    nuevo['opciones_tipo_camion']   = sw['opciones']
 
-    # Insertar al final (o donde corresponda en tu UI)
-    camiones.append(nuevo)
-
-    # Recalcular estadísticas globales
-    stats = compute_stats(camiones, pni, cliente)
-    for idx, cam in enumerate(camiones, start=1):
-        cam["numero"] = idx
-    return {"camiones": camiones, "pedidos_no_incluidos": pni, "estadisticas": stats}
-
-
-def delete_truck(state: Dict[str, Any], truck_id: Optional[str], cliente: str) -> Dict[str, Any]:
-    camiones = state.get("camiones") or []
-    no_incl = state.get("pedidos_no_incluidos") or []
-
-    if truck_id:
-        eliminado = next((c for c in camiones if c.get("id") == truck_id), None)
-        if eliminado:
-            camiones = [c for c in camiones if c.get("id") != truck_id]
-            no_incl.extend(eliminado.get("pedidos") or [])
-
-    return move_orders({"camiones": camiones, "pedidos_no_incluidos": no_incl}, [], None, cliente)
-
-
-def enforce_bh_target(
-    camiones: List[Dict[str, Any]],
-    pedidos_no_incluidos: List[Dict[str, Any]],
-    cliente: str,
-    target_ratio: float,
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+def _get_effective_config_para_postprocess(config, camiones: List[Camion], venta: str = None):
     """
-    Intenta alcanzar al menos 'target_ratio' de camiones BH convirtiendo
-    camiones 'normal' a 'bh' cuando las reglas lo permiten.
-    No fuerza nada imposible: si no hay candidatos, deja tal cual.
-
-    Prioriza cambiar camiones con menor VCU (para minimizar riesgo).
+    Obtiene effective_config inferiendo venta desde metadata de camiones.
+    
+    Args:
+        config: Configuración del cliente
+        camiones: Lista de camiones (para inferir venta)
+    
+    Returns:
+        effective_config dict
     """
-    try:
-        cfg = get_client_config(cliente)
-    except Exception:
-        return camiones, pedidos_no_incluidos
+    from utils.config_helpers import get_effective_config
+    
+    return get_effective_config(config, venta)
 
-    if not camiones or not getattr(cfg, "PERMITE_BH", False):
-        return camiones, pedidos_no_incluidos
-    if not (isinstance(target_ratio, (int, float)) and target_ratio > 0):
-        return camiones, pedidos_no_incluidos
 
-    total = len(camiones)
-    deseado = int(math.ceil(target_ratio * total))
-    actuales_bh = sum(1 for c in camiones if (c.get("tipo_camion") or "normal") == "bh")
-    faltan = max(0, deseado - actuales_bh)
-    if faltan == 0:
-        return camiones, pedidos_no_incluidos
-
-    # Candidatos: camiones normales que PUEDEN cambiar a BH según las reglas
-    candidatos = []
-    for c in camiones:
-        if (c.get("tipo_camion") or "normal") == "bh":
+def _actualizar_alertas_picking_camion(camion: Camion, config, venta: str = None) -> None:
+    """
+    Detecta y asigna alertas de picking duplicado a un camión específico.
+    """
+    from collections import defaultdict
+    
+    effective = _get_effective_config_para_postprocess(config, [camion], venta)
+    if not effective.get('PROHIBIR_PICKING_DUPLICADO', False):
+        return
+    
+    alertas = []
+    skus_picking: Dict[str, List[tuple]] = defaultdict(list)
+    
+    for pedido in camion.pedidos:
+        if not hasattr(pedido, 'skus') or not pedido.skus:
             continue
-        sw = _compute_switch_options(c, cfg)
-        if "bh" in (sw.get("opciones") or []):
-            candidatos.append(c)
-
-    if not candidatos:
-        return camiones, pedidos_no_incluidos
-
-    # Orden simple: menor VCU primero (cambio “más seguro” para BH)
-    candidatos.sort(key=lambda x: float(x.get("vcu_max") or 0.0))
-
-    state = {"camiones": camiones, "pedidos_no_incluidos": pedidos_no_incluidos}
-    for c in candidatos:
-        if faltan <= 0:
-            break
-        try:
-            state = apply_truck_type_change(state, c["id"], "bh", cliente)
-            faltan -= 1
-        except Exception:
-            # si no se pudo cambiar (regla puntual), seguimos con otro
-            continue
-
-    return state.get("camiones", camiones), state.get("pedidos_no_incluidos", pedidos_no_incluidos)
+        
+        for sku in pedido.skus:
+            if sku.cantidad_pallets % 1 > 0.001:
+                skus_picking[sku.sku_id].append((pedido.pedido, sku.cantidad_pallets))
+    
+    for sku_id, pedidos_info in skus_picking.items():
+        if len(pedidos_info) > 1:
+            alertas.append({
+                'tipo': 'PICKING_DUPLICADO',
+                'sku_id': sku_id,
+                'pedidos': [
+                    {'pedido_id': pid, 'cajas': round(cant, 3)}
+                    for pid, cant in pedidos_info
+                ]
+            })
+    
+    if alertas:
+        camion.metadata['alertas_picking'] = alertas
+    elif 'alertas_picking' in camion.metadata:
+        del camion.metadata['alertas_picking']  # Limpiar si ya no hay conflictos

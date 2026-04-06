@@ -11,12 +11,10 @@ from fastapi import FastAPI, UploadFile, File, Path, HTTPException, Body, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, Field
 
-# Mantener contratos públicos e imports
-from services import optimizer as optimizer
-from services.postprocess import move_orders, add_truck, delete_truck, compute_stats, apply_truck_type_change
-
+from models.api import (PostProcessRequest, PostProcessResponse)
+from optimization.orchestrator import procesar
+from services.postprocess import (move_orders, add_truck, delete_truck, compute_stats, apply_truck_type_change)
 
 # ----------------------------------------------------------------------------
 # App & Middlewares
@@ -36,7 +34,7 @@ app.add_middleware(GZipMiddleware, minimum_size=int(os.getenv("GZIP_MIN_SIZE", "
 # ----------------------------------------------------------------------------
 # Concurrencia
 # ----------------------------------------------------------------------------
-REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "150"))
+REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "500"))
 CPU_COUNT = os.cpu_count() or 4
 MAX_WORKERS = max(CPU_COUNT - 1, 1)
 MAX_CONCURRENT = max(1, MAX_WORKERS)
@@ -65,29 +63,6 @@ def root() -> str:
     return "<h2>Backend de FastAPI funcionando</h2>"
 
 
-# ----------------------------------------------------------------------------
-# Modelos de Postproceso (se preservan nombres y campos)
-# ----------------------------------------------------------------------------
-class PostProcessRequest(BaseModel):
-    camiones: List[Dict[str, Any]] = Field(default_factory=list)
-    pedidos_no_incluidos: List[Dict[str, Any]] = Field(default_factory=list)
-    pedidos: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
-    target_truck_id: Optional[str] = None
-    cd: Optional[List[str]] = Field(default_factory=list)
-    ce: Optional[List[str]] = Field(default_factory=list)
-    ruta: Optional[str] = None
-    cliente: str
-
-
-class PostProcessResponse(BaseModel):
-    camiones: List[Dict[str, Any]]
-    pedidos_no_incluidos: List[Dict[str, Any]]
-    estadisticas: Dict[str, Any]
-
-
-# ----------------------------------------------------------------------------
-# Endpoints públicos (contratos mantenidos)
-# ----------------------------------------------------------------------------
 @app.post("/optimizar/{cliente}/{venta}")
 async def optimizar(
     cliente: str = Path(...),
@@ -95,6 +70,7 @@ async def optimizar(
     file: UploadFile = File(...),
     vcuTarget: Optional[int] = Form(default=None),
     vcuTargetBH: Optional[int] = Form(default=None),
+    fase: Optional[str] = Form(default=None),
 ) -> Dict[str, Any]:
     """Orquesta el proceso de optimización, aplicando timeout y control de concurrencia.
 
@@ -132,7 +108,7 @@ async def optimizar(
         result = await asyncio.wait_for(
             loop.run_in_executor(
                 executor,
-                optimizer.procesar,
+                procesar,
                 content,
                 file.filename,
                 cliente,
@@ -140,6 +116,7 @@ async def optimizar(
                 REQUEST_TIMEOUT,
                 vcuTarget,
                 vcuTargetBH,
+                fase
             ),
             timeout=REQUEST_TIMEOUT,
         )
@@ -178,7 +155,7 @@ async def api_move_orders(req: PostProcessRequest = Body(...)) -> Dict[str, Any]
         raise HTTPException(status_code=429, detail="Servicio ocupado: demasiadas operaciones en curso.")
 
     try:
-        return await asyncio.to_thread(move_orders, state, req.pedidos, req.target_truck_id, req.cliente)
+        return await asyncio.to_thread(move_orders, state, req.pedidos, req.target_truck_id, req.cliente, req.venta)
     except Exception as e:  # por validaciones de negocio
         raise HTTPException(status_code=400, detail=str(e))
     finally:
@@ -191,6 +168,7 @@ async def api_update_truck_type(
     cliente: str = Body(...),
     truck_id: str = Body(...),
     tipo_camion: str = Body(...),
+    venta: str = Body(default=None),
 ) -> Dict[str, Any]:
     """
     Cambia el tipo de un camión delegando toda la validación y el recálculo
@@ -213,6 +191,7 @@ async def api_update_truck_type(
             truck_id,
             (tipo_camion or "").lower(),
             cliente,
+            venta
         )
         return updated
 
@@ -220,6 +199,10 @@ async def api_update_truck_type(
         # Errores de negocio (no cabe / no permitido / regla del cliente, etc.)
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        import traceback
+        error_detail = traceback.format_exc()
+        print(f"\n❌ ERROR EN UPDATE_TRUCK_TYPE:")
+        print(error_detail)
         raise HTTPException(status_code=500, detail=f"Error interno: {e}")
     finally:
         semaphore.release()
@@ -233,7 +216,7 @@ async def api_add_truck(req: PostProcessRequest = Body(...)) -> Dict[str, Any]:
     except asyncio.TimeoutError:
         raise HTTPException(status_code=429, detail="Servicio ocupado: demasiadas operaciones en curso.")
     try:
-        return await asyncio.to_thread(add_truck, state, req.cd, req.ce, req.ruta, req.cliente)
+        return await asyncio.to_thread(add_truck, state, req.cd, req.ce, req.ruta, req.cliente, req.venta)
     finally:
         semaphore.release()
 
@@ -246,7 +229,7 @@ async def api_delete_truck(req: PostProcessRequest = Body(...)) -> Dict[str, Any
     except asyncio.TimeoutError:
         raise HTTPException(status_code=429, detail="Servicio ocupado: demasiadas operaciones en curso.")
     try:
-        return await asyncio.to_thread(delete_truck, state, req.target_truck_id, req.cliente)
+        return await asyncio.to_thread(delete_truck, state, req.target_truck_id, req.cliente, req.venta)
     finally:
         semaphore.release()
 
@@ -258,6 +241,6 @@ async def api_compute_stats(req: PostProcessRequest = Body(...)) -> Dict[str, An
     except asyncio.TimeoutError:
         raise HTTPException(status_code=429, detail="Servicio ocupado: demasiadas operaciones en curso.")
     try:
-        return await asyncio.to_thread(compute_stats, req.camiones, req.pedidos_no_incluidos, req.cliente)
+        return await asyncio.to_thread(compute_stats, req.camiones, req.pedidos_no_incluidos, req.cliente, req.venta)
     finally:
         semaphore.release()

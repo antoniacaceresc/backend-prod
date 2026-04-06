@@ -1,0 +1,122 @@
+
+class CencosudConfig:
+    HEADER_ROW = 0
+
+    # Mapeo de columnas
+    COLUMN_MAPPING = {
+        "Secos": {   
+            "CANAL_VENTA": "Canal de venta",
+            "CD": "CD",
+            "PO": "Número PO",
+            "PEDIDO": "N° Pedido",
+            "CE": "Ce.",
+            "PALLETS": "Pal. Conf.",
+            "PALLETS_REAL": "Pal. Conf. Real",
+            "PESO": "Peso neto Conf.",
+            "VOL": "Vol. Conf.",
+            "VALOR": "$$ Conf.",
+            "CHOCOLATES": "Chocolates",
+            "VALOR_CAFE": "Valor Cafe",
+            "BASE": "Base",
+            "SUPERIOR": "Superior",
+            "FLEXIBLE": "Flexible",
+            "NO_APILABLE": "No Apilable",
+            "SI_MISMO": "Apilable si mismo",
+            "VALIOSO": "Valioso Cencosud",
+            "PDQ": "PDQ",
+            "SKU": "SKU",
+            "ALTURA_PICKING": "Altura Picking",
+            "ALTURA_FULL_PALLET": "Altura full Pallet",
+            "APILABLE_BASE": "Apilable Base",
+            "MONTADO": "Montado",  
+        }
+    }
+
+    EXTRA_MAPPING = {
+        "Solic.":   "Solic.",
+        "Cant. Sol.": "Cj. Solic.",
+        "CJ Conf.": "Cj. Conf.",
+        "Suma de Sol (Pallet)": "Pal. Solic.",
+        "Suma de Conf (Pallet)": "Pal. Conf.",
+        "Suma de Valor neto CONF": "$$ Conf.",
+        "%NS": "%NS",
+        "Fecha preferente de entrega": "Fecha prefer/entrega",
+        "Fecha documento": "Fecha documento",
+    }
+
+
+    # Configuración por canal de venta
+    CHANNEL_CONFIG = {
+        "Secos": {
+            "USA_OC": False,
+            "AGRUPAR_POR_PO": False,
+            "MIX_GRUPOS": [],
+            
+            "ADHERENCIA_BACKHAUL": 0.50,
+            "MODO_ADHERENCIA": "post_convert",
+            
+            "VALIDAR_ALTURA": False,
+            "PERMITE_CONSOLIDACION": False,
+            "MAX_SKUS_POR_PALLET": 4,
+
+            "MIX_CANAL_CDS": ["N794 Bodega Chillan"],
+
+            "TRUCK_TYPES": {
+                'paquetera':        {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.8, 'max_pallets': 60, 'altura_cm': 280},
+                'rampla_directa':   {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.8, 'max_pallets': 56, 'altura_cm': 270},
+                'backhaul':         {'cap_weight': 22000, 'cap_volume': 60000, 'max_positions': 26, 'levels': 2, 'vcu_min': 0.55, 'max_pallets': 52, 'altura_cm': 230},
+                'backhaul_28':      {'cap_weight': 22000, 'cap_volume': 60000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.55, 'max_pallets': 56, 'altura_cm': 250}
+            },
+            
+            # Backhaul especial: 1 camión de 28 posiciones por CE por ruteo
+            "backhaul_28_POR_CE": 1,
+
+            "RUTAS_POSIBLES": {
+                "normal": [
+                    # N725 Bodega Noviciado
+                    {"cds": ["N725 Bodega Noviciado"], "ces": ["0079"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul", "backhaul_28"]},
+                    {"cds": ["N725 Bodega Noviciado"], "ces": ["0080"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul", "backhaul_28"]},
+                    {"cds": ["N725 Bodega Noviciado"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul", "backhaul_28"]},
+                    {"cds": ["N725 Bodega Noviciado"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul", "backhaul_28"]},
+                    {"cds": ["N725 Bodega Noviciado"], "ces": ["3598"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul", "backhaul_28"]},
+                    {"cds": ["N725 Bodega Noviciado"], "ces": ["8150"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul", "backhaul_28"]},
+
+                    # N641 Bodega Noviciado PYP
+                    {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["0079"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul", "backhaul_28"], "sin_apilamiento_backhaul": True},
+                    {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["0080"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul", "backhaul_28"], "sin_apilamiento_backhaul": True},
+                    {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul", "backhaul_28"], "sin_apilamiento_backhaul": True},
+                    {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul", "backhaul_28"], "sin_apilamiento_backhaul": True},
+                    {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["3598"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul", "backhaul_28"], "sin_apilamiento_backhaul": True},
+                    {"cds": ["N641 Bodega Noviciado PYP"], "ces": ["8150"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul", "backhaul_28"], "sin_apilamiento_backhaul": True},
+
+                    # N794 Bodega Chillan - Solo Nestlé
+                    {"cds": ["N794 Bodega Chillan"], "ces": ["0079"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["N794 Bodega Chillan"], "ces": ["0080"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["N794 Bodega Chillan"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["N794 Bodega Chillan"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["N794 Bodega Chillan"], "ces": ["3598"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["N794 Bodega Chillan"], "ces": ["8150"], "camiones_permitidos": ["paquetera", "rampla_directa"]}
+                ],
+
+                "multi_ce": [
+                    # Solo Nestlé
+                    {"cds": ["N794 Bodega Chillan"], "ces": ["0088", "0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["N794 Bodega Chillan"], "ces": ["0088", "8150"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["N794 Bodega Chillan"], "ces": ["0103", "8150"], "camiones_permitidos": ["paquetera", "rampla_directa"]}
+                
+                
+                ]
+            }
+        },
+    }
+
+    @classmethod
+    def get_channel_config(cls, venta: str) -> dict:
+        """Retorna configuración específica del canal, con fallback a Secos."""
+        return cls.CHANNEL_CONFIG.get(venta, cls.CHANNEL_CONFIG["Secos"])
+
+
+
+
+
+
