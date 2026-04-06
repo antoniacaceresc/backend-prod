@@ -272,7 +272,7 @@ def _crear_pedido_desde_dict(p_dict: Dict[str, Any], client_config) -> Pedido:
     campos_conocidos = {
         "PEDIDO", "CD", "CE", "PO", "PESO", "VOL", "PALLETS", "VALOR",
         "VALOR_CAFE", "OC", "CHOCOLATES", "VALIOSO", "PDQ", "BAJA_VU",
-        "LOTE_DIR", "BASE", "SUPERIOR", "FLEXIBLE", "NO_APILABLE",
+        "LOTE_DIR", "ES_PURINA", "BASE", "SUPERIOR", "FLEXIBLE", "NO_APILABLE",
         "SI_MISMO", "_skus", "SUBCLIENTE"
     }
     
@@ -325,6 +325,7 @@ def _crear_pedido_desde_dict(p_dict: Dict[str, Any], client_config) -> Pedido:
         pdq=bool(p_dict.get("PDQ", 0)),
         baja_vu=bool(p_dict.get("BAJA_VU", 0)),
         lote_dir=bool(p_dict.get("LOTE_DIR", 0)),
+        es_purina=bool(p_dict.get("ES_PURINA", False)),
         base=float(p_dict.get("BASE", 0)),
         superior=float(p_dict.get("SUPERIOR", 0)),
         flexible=float(p_dict.get("FLEXIBLE", 0)),

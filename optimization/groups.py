@@ -35,16 +35,17 @@ def _generar_grupos_para_tipo(
     
     usa_oc = effective_config.get("USA_OC", False)
     mix_grupos = effective_config.get("MIX_GRUPOS", [])
+    mix_canal_cds = effective_config.get("MIX_CANAL_CDS", None)
     
     grupos = []
     # Generar grupos según el tipo
     if tipo == "normal":
         grupos_tipo, _ = _build_normal_groups(
-            pedidos_disponibles, rutas, mix_grupos, usa_oc
+            pedidos_disponibles, rutas, mix_grupos, usa_oc, mix_canal_cds
         )
     else:
         grupos_tipo, _ = _build_other_groups(
-            pedidos_disponibles, rutas, tipo, usa_oc, mix_grupos
+            pedidos_disponibles, rutas, tipo, usa_oc, mix_grupos, mix_canal_cds
         )
 
     return grupos_tipo
@@ -68,14 +69,16 @@ def generar_grupos_optimizacion(
     """
     usa_oc = effective_config.get("USA_OC", False)
     mix_grupos = effective_config.get("MIX_GRUPOS", [])
+    mix_canal_cds = effective_config.get("MIX_CANAL_CDS", None)
     
-    # ✅ Caso especial: solo generar grupos normales
+    # Caso especial: solo generar grupos normales
     if modo == "normal":
         rutas_normal = effective_config.get("RUTAS_POSIBLES", {}).get("normal", [])
         if rutas_normal:
-            grupos, _ = _build_normal_groups(pedidos, rutas_normal, mix_grupos, usa_oc)
+            grupos, _ = _build_normal_groups(pedidos, rutas_normal, mix_grupos, usa_oc, mix_canal_cds)
             return grupos
         return []
+
     # Determinar tipos de ruta según modo
     if modo == "binpacking":
         tipos_ruta = effective_config.get("BINPACKING_TIPOS_RUTA", ["normal"]) or ["normal"]
@@ -96,11 +99,11 @@ def generar_grupos_optimizacion(
     for tipo, rutas in fases:
         if tipo == "normal":
             grupos_fase, pedidos_restantes = _build_normal_groups(
-                pedidos_restantes, rutas, mix_grupos, usa_oc
+                pedidos_restantes, rutas, mix_grupos, usa_oc, mix_canal_cds
             )
         else:
             grupos_fase, pedidos_restantes = _build_other_groups(
-                pedidos_restantes, rutas, tipo, usa_oc, mix_grupos
+                pedidos_restantes, rutas, tipo, usa_oc, mix_grupos, mix_canal_cds
             )
         
         grupos.extend(grupos_fase)
@@ -111,7 +114,8 @@ def _build_normal_groups(
     pedidos: List[Pedido],
     rutas,  # Puede ser List[Dict] o List[Tuple]
     mix_grupos: List[List[str]],
-    usa_oc: bool
+    usa_oc: bool,
+    mix_canal_cds: list = None
 ) -> Tuple[List[Tuple[ConfiguracionGrupo, List[Pedido]]], List[Pedido]]:
     """
     Construye grupos para rutas normales sin solapamiento.
@@ -128,21 +132,33 @@ def _build_normal_groups(
             and p.ce in ces
             and _match_oc(p.oc, oc)
         ]
-        
         if not pedidos_grupo:
             continue
         
         oc_str = _format_oc_str(oc)
-        cfg = ConfiguracionGrupo(
-            id=f"normal__{'-'.join(cds)}__{'-'.join(map(str, ces))}{oc_str}",
-            tipo=TipoRuta.NORMAL,
-            cd=cds,
-            ce=ces,
-            oc=oc
+        cd_permite_mix = (
+            mix_canal_cds is None or
+            all(cd in mix_canal_cds for cd in cds)
         )
-        
-        grupos.append((cfg, pedidos_grupo))
-        asignados.update(p.pedido for p in pedidos_grupo)
+
+        if cd_permite_mix:
+            cfg = ConfiguracionGrupo(
+                id=f"normal__{'-'.join(cds)}__{'-'.join(map(str, ces))}{oc_str}",
+                tipo=TipoRuta.NORMAL, cd=cds, ce=ces, oc=oc
+            )
+            grupos.append((cfg, pedidos_grupo))
+            asignados.update(p.pedido for p in pedidos_grupo)
+        else:
+            for es_p, canal_tag in [(False, "secos"), (True, "purina")]:
+                sub = [p for p in pedidos_grupo if p.es_purina == es_p]
+                if not sub:
+                    continue
+                cfg = ConfiguracionGrupo(
+                    id=f"normal__{'-'.join(cds)}__{'-'.join(map(str, ces))}{oc_str}__{canal_tag}",
+                    tipo=TipoRuta.NORMAL, cd=cds, ce=ces, oc=oc
+                )
+                grupos.append((cfg, sub))
+                asignados.update(p.pedido for p in sub)
     
     pedidos_restantes = [p for p in pedidos if p.pedido not in asignados]
     return grupos, pedidos_restantes
@@ -153,7 +169,8 @@ def _build_other_groups(
     rutas: List[Tuple[List[str], List[str]]],
     tipo: str,
     usa_oc: bool,
-    mix_grupos: List[List[str]]
+    mix_grupos: List[List[str]],
+    mix_canal_cds: list = None
 ) -> Tuple[List[Tuple[ConfiguracionGrupo, List[Pedido]]], List[Pedido]]:
     """
     Construye grupos para otros tipos de ruta.
@@ -190,8 +207,26 @@ def _build_other_groups(
                 oc=oc
             )
             
-            grupos.append((cfg, pedidos_grupo))
-            asignados.update(p.pedido for p in pedidos_grupo)
+            cd_permite_mix = (
+                mix_canal_cds is None or
+                all(cd in mix_canal_cds for cd in cds)
+            )
+
+            if cd_permite_mix:
+                grupos.append((cfg, pedidos_grupo))
+                asignados.update(p.pedido for p in pedidos_grupo)
+            else:
+                for es_p, canal_tag in [(False, "secos"), (True, "purina")]:
+                    sub = [p for p in pedidos_grupo if p.es_purina == es_p]
+                    if not sub:
+                        continue
+                    cfg_sub = ConfiguracionGrupo(
+                        id=f"{cfg.id}__{canal_tag}",
+                        tipo=cfg.tipo, cd=cfg.cd, ce=cfg.ce, oc=cfg.oc
+                    )
+                    grupos.append((cfg_sub, sub))
+                    asignados.update(p.pedido for p in sub)
+
     
     except Exception as e:
         import traceback

@@ -406,7 +406,6 @@ class VCUPipeline(OptimizationPipeline):
                     if ruta_sin_apilamiento_backhaul(self.config, cfg.cd, cfg.ce, cfg.tipo.value, self.venta):
                         cap = cap.sin_apilamiento()
                         grupo_sin_apilamiento = True
-                
                 grupos_preparados.append((cfg, pedidos_no_asignados, cap, tipo_camion))
         
         # Procesar grupos Alvi CRR con pasadas múltiples
@@ -445,7 +444,7 @@ class VCUPipeline(OptimizationPipeline):
         from utils.config_helpers import get_camiones_permitidos_para_ruta, get_capacity_for_type
         
         grupos = _generar_grupos_para_tipo(pedidos, self.effective_config, tipo_ruta)
-        
+
         if not grupos:
             return PipelineResult()
         
@@ -500,7 +499,7 @@ class VCUPipeline(OptimizationPipeline):
             res = optimizar_grupo_vcu(
                 pedidos_no_asignados, cfg, self.effective_config, cap_a_usar, tiempo_grupo, TipoCamion.BACKHAUL
             )
-            
+
             if res.get("status") in ("OPTIMAL", "FEASIBLE"):
                 camiones = res.get("camiones", [])
                 nuevos = res.get("pedidos_asignados_ids", [])
@@ -565,7 +564,6 @@ class VCUPipeline(OptimizationPipeline):
                 
                 try:
                     res, tipo_camion, grupo_id, n_pedidos = future.result()
-                    
                     if res.get("status") in ("OPTIMAL", "FEASIBLE"):
                         camiones = res.get("camiones", [])
                         nuevos = res.get("pedidos_asignados_ids", [])
@@ -578,6 +576,8 @@ class VCUPipeline(OptimizationPipeline):
                     if DEBUG_VALIDATION:
                         print(f"[VCU] Error en grupo: {e}")
         
+
+
         return PipelineResult(
             camiones=all_camiones,
             pedidos_asignados=pedidos_asignados
@@ -665,7 +665,7 @@ class VCUPipeline(OptimizationPipeline):
             res = optimizar_grupo_vcu(
                 pedidos_no_asignados, cfg, self.effective_config, capacidad, tiempo_grupo, tipo_camion
             )
-            
+
             if res.get("status") in ("OPTIMAL", "FEASIBLE"):
                 camiones = res.get("camiones", [])
                 nuevos = res.get("pedidos_asignados_ids", [])

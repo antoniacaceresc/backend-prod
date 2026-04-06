@@ -34,6 +34,9 @@ def get_effective_config(client_config, venta: str = None) -> dict:
             "PERMITE_CONSOLIDACION": channel.get("PERMITE_CONSOLIDACION", getattr(client_config, 'PERMITE_CONSOLIDACION', False)),
             "MAX_SKUS_POR_PALLET": channel.get("MAX_SKUS_POR_PALLET", getattr(client_config, 'MAX_SKUS_POR_PALLET', 3)),
             
+            # CD que permite sinergizado: purina y secos en cencosud
+            "MIX_CANAL_CDS": channel.get("MIX_CANAL_CDS", getattr(client_config, 'MIX_CANAL_CDS', None)),
+
             # Modo dos fases (Helados/Refrigerados)
             "MODO_DOS_FASES": channel.get("MODO_DOS_FASES", False),
             "COL_PALLETS_ESTIMADO": channel.get("COL_PALLETS_ESTIMADO", "Pal. Estimado"),
@@ -73,6 +76,7 @@ def get_effective_config(client_config, venta: str = None) -> dict:
         "MAX_SKUS_POR_PALLET": getattr(client_config, 'MAX_SKUS_POR_PALLET', 3),
         "MAX_SKUS_CRR": channel.get("MAX_SKUS_CRR", getattr(client_config, 'MAX_SKUS_CRR', None)),
         "MAX_CAJAS_CRR": channel.get("MAX_CAJAS_CRR", getattr(client_config, 'MAX_CAJAS_CRR', None)),
+        "MIX_CANAL_CDS": getattr(client_config, 'MIX_CANAL_CDS', None),
         "ADHERENCIA_BACKHAUL": getattr(client_config, 'ADHERENCIA_BACKHAUL', None),
         "MODO_ADHERENCIA": getattr(client_config, 'MODO_ADHERENCIA', None),
         "PROHIBIR_PICKING_DUPLICADO": getattr(client_config, 'PROHIBIR_PICKING_DUPLICADO', False),

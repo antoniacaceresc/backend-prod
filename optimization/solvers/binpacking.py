@@ -82,7 +82,6 @@ def optimizar_grupo_binpacking(
     
     # Continuar SOLO con válidos
     pedidos = pedidos_validos
-    
     # Preparar datos
     datos = preparar_datos_solver(pedidos, capacidad)
     pedidos_ids = [p.pedido for p in pedidos]
@@ -138,7 +137,6 @@ def optimizar_grupo_binpacking(
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = float(tiempo_max_seg)
     solver.parameters.num_search_workers = 8
-    
     t0 = time.time()
     resultado = solver.Solve(model)
     t1 = time.time()

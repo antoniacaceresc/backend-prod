@@ -82,7 +82,7 @@ def optimizar_grupo_vcu(
     
     # Continuar SOLO con válidos
     pedidos = pedidos_validos
-    
+
     # Preparar datos
     datos = preparar_datos_solver(pedidos, capacidad)
     pedidos_ids = [p.pedido for p in pedidos]
@@ -140,8 +140,12 @@ def optimizar_grupo_vcu(
     # VCU máximo por camión
     vcu_max_int = {}
     for j in range(n_cam):
+        v_vol = model.NewIntVar(0, SCALE_VCU, f"vcu_vol_var_{j}")
+        v_peso = model.NewIntVar(0, SCALE_VCU, f"vcu_peso_var_{j}")
+        model.Add(v_vol == vol_cam_int[j])
+        model.Add(v_peso == peso_cam_int[j])
         v = model.NewIntVar(0, SCALE_VCU, f"vcu_max_int_{j}")
-        model.AddMaxEquality(v, [vol_cam_int[j], peso_cam_int[j]])
+        model.AddMaxEquality(v, [v_vol, v_peso])
         vcu_max_int[j] = v
     
     # Restricciones DURAS de capacidad (VCU ≤ 100%)
@@ -155,7 +159,7 @@ def optimizar_grupo_vcu(
         model, x, y_truck, vcu_max_int, pedidos_ids, datos,
         n_cam, capacidad, effective_config, grupo_cfg
     )
-    
+
     # Función objetivo
     _definir_objetivo_vcu(model, x, y_truck, vcu_max_int, n_cam)
     
@@ -163,11 +167,11 @@ def optimizar_grupo_vcu(
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = float(tiempo_max_seg)
     solver.parameters.num_search_workers = 8
-    
+
     t0 = time.time()
     resultado = solver.Solve(model)
     t1 = time.time()
-    
+
     status_map = {cp_model.OPTIMAL: 'OPTIMAL', cp_model.FEASIBLE: 'FEASIBLE'}
     estado = status_map.get(resultado, 'NO_SOLUTION')
     

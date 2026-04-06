@@ -49,13 +49,13 @@ class CencosudConfig:
     CHANNEL_CONFIG = {
         "Secos": {
             "USA_OC": False,
-            "AGRUPAR_POR_PO": True,
+            "AGRUPAR_POR_PO": False,
             "MIX_GRUPOS": [],
             
             "ADHERENCIA_BACKHAUL": 0.50,
             "MODO_ADHERENCIA": "post_convert",
             
-            "VALIDAR_ALTURA": True,
+            "VALIDAR_ALTURA": False,
             "PERMITE_CONSOLIDACION": False,
             "MAX_SKUS_POR_PALLET": 4,
 

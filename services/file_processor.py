@@ -237,12 +237,6 @@ def _limpiar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int).clip(0, 1)
         else:
             df[col] = 0
-
-    # Derivar ES_PURINA desde canal de venta
-    if "CANAL_VENTA" in df.columns:
-        df["ES_PURINA"] = (df["CANAL_VENTA"].astype(str).str.strip().str.upper() == "CL25").astype(int)
-    else:
-        df["ES_PURINA"] = 0
     
     # Chocolates (especial: SI/NO -> 1/0 para MAX, luego volver a SI/NO)
     if "CHOCOLATES" in df.columns:
@@ -402,7 +396,7 @@ def _validar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
     """
     errores = []
     
-    # ✅ CAMBIO: Validar altura - puede ser 0 si es picking vacío
+    #  Validar altura - puede ser 0 si es picking vacío
     # Solo validamos que NO sea negativa
     skus_altura_negativa = df[df["ALTURA_FULL_PALLET"] < 0]
     if len(skus_altura_negativa) > 0:
@@ -411,7 +405,7 @@ def _validar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
             f"Ejemplos: {skus_altura_negativa['SKU'].head(3).tolist()}"
         )
     
-    # ✅ CAMBIO: Advertir (no error) si altura = 0
+    #  Advertir si altura = 0
     skus_altura_cero = df[df["ALTURA_FULL_PALLET"] == 0]
     
     # Validar que cada SKU tenga al menos una categoría de apilabilidad
@@ -521,7 +515,16 @@ def _agregar_skus_a_pedidos(
     for col in campos_identidad:
         if col in df_skus.columns:
             agg_rules[col] = "first"
-    
+
+    # Derivar ES_PURINA desde canal de venta
+    if "CANAL_VENTA" in df_skus.columns:
+        df_skus["ES_PURINA"] = (df_skus["CANAL_VENTA"].astype(str).str.strip().str.upper() == "CL25").astype(int)
+    else:
+        df_skus["ES_PURINA"] = 0
+
+    if "ES_PURINA" in df_skus.columns:
+        agg_rules["ES_PURINA"] = "first"
+
     # Agrupar por PEDIDO
     df_pedidos = df_skus.groupby("PEDIDO", as_index=False).agg(agg_rules)
 

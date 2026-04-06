@@ -81,10 +81,6 @@ class BinPackingPipeline(OptimizationPipeline):
         pedidos_asignados: Set[str] = set()
         
         for cfg, pedidos_grupo in grupos:
-            if context.timeout_cercano():
-                if DEBUG_VALIDATION:
-                    print(f"[BP] Timeout cercano, deteniendo")
-                break
             
             if not pedidos_grupo:
                 continue

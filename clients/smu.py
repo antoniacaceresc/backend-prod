@@ -93,7 +93,7 @@ class SmuConfig:
                 'rampla_directa':   {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.7, 'max_pallets': 56, 'altura_cm': 270},
                 'backhaul':         {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.6, 'max_pallets': 56, 'altura_cm': 240},
                 'mediano':          {'cap_weight': 10000, 'cap_volume': 18000, 'max_positions': 12, 'levels': 2, 'vcu_min': 0.5, 'max_pallets': 12, 'altura_cm': 230},
-                'pequeño':          {'cap_weight':  5000, 'cap_volume': 13000, 'max_positions':  3, 'levels': 2, 'vcu_min': 0.5, 'max_pallets':  3, 'altura_cm': 230},
+                'pequeño':          {'cap_weight':  5000, 'cap_volume': 13000, 'max_positions':  3, 'levels': 2, 'vcu_min': 0.5, 'max_pallets':  6, 'altura_cm': 230},
             },
 
             "RUTAS_POSIBLES": {
@@ -179,7 +179,12 @@ class SmuConfig:
                     {"cds": ["Alvi Canastas"], "ces": ["8150"], "ocs": ["CRR"], "camiones_permitidos": ["pequeño", "mediano", "rampla_directa", "paquetera"]},
                 ],
 
-                "multi_ce": [],
+                "multi_ce": [
+                    {"cds": ["Bodega Concepción"], "ces": ["0088", "0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Bodega Coquimbo 2"], "ces": ["0088", "0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Bodega Antofagasta 2"], "ces": ["0088", "0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Bodega Puerto Montt"], "ces": ["0088", "0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                ],
 
                 "multi_cd": [
                     # Solo Nestlé
