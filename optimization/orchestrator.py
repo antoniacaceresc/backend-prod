@@ -460,7 +460,7 @@ def _aplicar_overrides_vcu(config, vcuTarget, vcuTargetBH, venta: str = None):
     # VCU target para Nestlé (todos excepto backhaul)
     if vcuTarget is not None:
         vcu_decimal = vcuTarget / 100.0
-        for tipo in ['paquetera', 'rampla_directa', 'mediano', 'pequeño']:
+        for tipo in ['paquetera', 'rampla_directa', 'mediano', 'pequeño', 'chico']:
             if tipo in truck_types:
                 truck_types[tipo]['vcu_min'] = vcu_decimal
     

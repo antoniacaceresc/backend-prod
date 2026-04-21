@@ -38,6 +38,7 @@ class HeightValidator:
         permite_consolidacion: bool = True,
         max_skus_por_pallet: int = 3,
         max_altura_picking_apilado_cm: float = None,
+        altura_maxima_mismo_sku_cm: Optional[float] = None,
     ):
         """
         Args:
@@ -49,6 +50,8 @@ class HeightValidator:
         self.permite_consolidacion = permite_consolidacion
         self.max_skus_por_pallet = max_skus_por_pallet
         self.max_altura_picking_apilado_cm = max_altura_picking_apilado_cm
+        self.altura_maxima_mismo_sku_cm: Optional[float] = altura_maxima_mismo_sku_cm
+
     
     def validar_camion_rapido(
         self,
@@ -460,8 +463,13 @@ class HeightValidator:
                     if len(posicion.pallets_apilados) >= camion.capacidad.levels:
                         continue
                     
-                    # Verificar altura
-                    if posicion.altura_usada_cm + frag.altura_cm > self.altura_maxima_cm:
+                    # Verificar altura — permitir límite extendido si todos los SKUs en la posición son el mismo
+                    altura_limite = self.altura_maxima_cm
+                    if self.altura_maxima_mismo_sku_cm is not None:
+                        skus_en_pos = {f.sku_id for p in posicion.pallets_apilados for f in p.fragmentos}
+                        if skus_en_pos == {frag.sku_id}:
+                            altura_limite = self.altura_maxima_mismo_sku_cm
+                    if posicion.altura_usada_cm + frag.altura_cm > altura_limite:
                         continue
                     
                     # Crear nuevo pallet en esta posición
@@ -479,7 +487,21 @@ class HeightValidator:
                         'sku_match': frag.sku_id
                     })
                     
-                    if posicion.apilar(pallet_nuevo, max_niveles=camion.capacidad.levels):
+                    # Si usamos límite extendido, bypassear el check interno de altura de posicion.apilar
+                    usar_limite_extendido = (
+                        self.altura_maxima_mismo_sku_cm is not None and 
+                        altura_limite == self.altura_maxima_mismo_sku_cm
+                    )
+
+                    if usar_limite_extendido:
+                        # Insertar directamente sin el check de espacio_disponible_cm de PosicionCamion
+                        pallet_nuevo.nivel = len(posicion.pallets_apilados)
+                        posicion.pallets_apilados.append(pallet_nuevo)
+                        exito = True
+                    else:
+                        exito = posicion.apilar(pallet_nuevo, max_niveles=camion.capacidad.levels)
+
+                    if exito:
                         pallet_id_counter += 1
                         colocado = True
                         intento_info['exito'] = True
@@ -587,6 +609,11 @@ class HeightValidator:
                 if not colocado and frag.es_picking and not posicion.esta_vacia:
                     pickings_actuales = self._contar_pickings_en_posicion(posicion)
                     max_pickings = self._max_pickings_para_posicion(posicion)
+
+                    # pre-chequeo de altura antes de intentar apilar
+                    if self.max_altura_picking_apilado_cm:
+                        if posicion.altura_usada_cm + frag.altura_cm > self.max_altura_picking_apilado_cm:
+                            continue  # ya excedería el límite de picking apilado
                     
                     if pickings_actuales < max_pickings:
                         # Verificar altura
@@ -605,8 +632,8 @@ class HeightValidator:
                         if posicion.apilar(pallet_nuevo, max_niveles=self.max_skus_por_pallet + 1):
                             # Validar altura picking si aplica
                             if self.max_altura_picking_apilado_cm:
-                                altura_picking = self._calcular_altura_picking_posicion(posicion)
-                                if altura_picking > self.max_altura_picking_apilado_cm:
+                                picking_valido, altura_picking = self._validar_altura_picking_posicion(posicion)
+                                if not picking_valido:
                                     posicion.pallets_apilados.remove(pallet_nuevo)
                                     continue
                             

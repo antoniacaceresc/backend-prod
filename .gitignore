@@ -10,3 +10,4 @@ htmlcov/
 # Entornos virtuales (si aplica)
 venv/
 .env/
+.env

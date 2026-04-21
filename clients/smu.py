@@ -1,3 +1,4 @@
+from typing import Optional
 
 class SmuConfig:
     HEADER_ROW = 0
@@ -65,6 +66,8 @@ class SmuConfig:
 
             # Restricciones RENDIC
             "RENDIC_ALTURA_MAX_CM": 240, #universal
+            "RENDIC_ALTURA_MAX_MISMO_SKU_CM": 264, # altura permitida si todos los SKUs en la posición son iguales
+
 
             # CDs sin apilamiento permitido
             "CDS_SIN_APILAMIENTO": ["Bodega Noviciado"],
@@ -78,8 +81,7 @@ class SmuConfig:
                     },
                     "CRR": {
                         "PERMITE_CONSOLIDACION": True,
-                        "MAX_SKUS_POR_PALLET": 2,
-                        "PASADAS_CAMIONES": ["pequeño", "mediano"],  # Primero pequeños, luego medianos
+                        "MAX_SKUS_POR_PALLET": 6,
                     },
                 },
                 "Rendic": {
@@ -92,8 +94,9 @@ class SmuConfig:
                 'paquetera':        {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.7, 'max_pallets': 60, 'altura_cm': 280},
                 'rampla_directa':   {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.7, 'max_pallets': 56, 'altura_cm': 270},
                 'backhaul':         {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.6, 'max_pallets': 56, 'altura_cm': 240},
-                'mediano':          {'cap_weight': 10000, 'cap_volume': 18000, 'max_positions': 12, 'levels': 2, 'vcu_min': 0.5, 'max_pallets': 12, 'altura_cm': 230},
-                'pequeño':          {'cap_weight':  5000, 'cap_volume': 13000, 'max_positions':  3, 'levels': 2, 'vcu_min': 0.5, 'max_pallets':  6, 'altura_cm': 230},
+                'mediano':          {'cap_weight': 10000, 'cap_volume': 18000, 'max_positions': 12, 'levels': 2, 'vcu_min': 0.5, 'max_pallets': 15, 'altura_cm': 230},
+                'pequeño':          {'cap_weight':  5000, 'cap_volume': 13000, 'max_positions':  8, 'levels': 2, 'vcu_min': 0.5, 'max_pallets':  8, 'altura_cm': 220},
+                'chico':            {'cap_weight':  1500, 'cap_volume':  5000, 'max_positions':  3, 'levels': 2, 'vcu_min': 0.5, 'max_pallets':  3, 'altura_cm': 190},
             },
 
             "RUTAS_POSIBLES": {
@@ -155,12 +158,13 @@ class SmuConfig:
                     {"cds": ["Alvi Aeroparque 2"], "ces": ["8150"], "ocs": ["INV"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
                     
                     # Alvi - aeroparque CRR
-                    {"cds": ["Alvi Aeroparque 2"], "ces": ["0080"], "ocs": ["CRR"], "camiones_permitidos": ["pequeño", "mediano", "rampla_directa", "paquetera"]},
-                    {"cds": ["Alvi Aeroparque 2"], "ces": ["0088"], "ocs": ["CRR"], "camiones_permitidos": ["pequeño", "mediano", "rampla_directa", "paquetera"]},
-                    {"cds": ["Alvi Aeroparque 2"], "ces": ["0097"], "ocs": ["CRR"], "camiones_permitidos": ["pequeño", "mediano", "rampla_directa", "paquetera"]},
-                    {"cds": ["Alvi Aeroparque 2"], "ces": ["0103"], "ocs": ["CRR"], "camiones_permitidos": ["pequeño", "mediano", "rampla_directa", "paquetera"]},
-                    {"cds": ["Alvi Aeroparque 2"], "ces": ["3598"], "ocs": ["CRR"], "camiones_permitidos": ["pequeño", "mediano", "rampla_directa", "paquetera"]},
-                    {"cds": ["Alvi Aeroparque 2"], "ces": ["8150"], "ocs": ["CRR"], "camiones_permitidos": ["pequeño", "mediano", "rampla_directa", "paquetera"]},
+                    {"cds": ["Alvi Aeroparque 2"], "ces": ["0080"], "ocs": ["CRR"], "camiones_permitidos": ["chico", "pequeño", "mediano", "rampla_directa", "paquetera"]},
+                    {"cds": ["Alvi Aeroparque 2"], "ces": ["0080"], "ocs": ["CRR"], "camiones_permitidos": ["chico", "pequeño", "mediano", "rampla_directa", "paquetera"]},
+                    {"cds": ["Alvi Aeroparque 2"], "ces": ["0088"], "ocs": ["CRR"], "camiones_permitidos": ["chico", "pequeño", "mediano", "rampla_directa", "paquetera"]},
+                    {"cds": ["Alvi Aeroparque 2"], "ces": ["0097"], "ocs": ["CRR"], "camiones_permitidos": ["chico", "pequeño", "mediano", "rampla_directa", "paquetera"]},
+                    {"cds": ["Alvi Aeroparque 2"], "ces": ["0103"], "ocs": ["CRR"], "camiones_permitidos": ["chico", "pequeño", "mediano", "rampla_directa", "paquetera"]},
+                    {"cds": ["Alvi Aeroparque 2"], "ces": ["3598"], "ocs": ["CRR"], "camiones_permitidos": ["chico", "pequeño", "mediano", "rampla_directa", "paquetera"]},
+                    {"cds": ["Alvi Aeroparque 2"], "ces": ["8150"], "ocs": ["CRR"], "camiones_permitidos": ["chico", "pequeño", "mediano", "rampla_directa", "paquetera"]},
 
                     # Alvi - canastas INV
                     {"cds": ["Alvi Canastas"], "ces": ["0080"], "ocs": ["INV"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
@@ -171,12 +175,12 @@ class SmuConfig:
                     {"cds": ["Alvi Canastas"], "ces": ["8150"], "ocs": ["INV"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
 
                     # Alvi - canastas CRR
-                    {"cds": ["Alvi Canastas"], "ces": ["0080"], "ocs": ["CRR"], "camiones_permitidos": ["pequeño", "mediano", "rampla_directa", "paquetera"]},
-                    {"cds": ["Alvi Canastas"], "ces": ["0088"], "ocs": ["CRR"], "camiones_permitidos": ["pequeño", "mediano", "rampla_directa", "paquetera"]},
-                    {"cds": ["Alvi Canastas"], "ces": ["0097"], "ocs": ["CRR"], "camiones_permitidos": ["pequeño", "mediano", "rampla_directa", "paquetera"]},
-                    {"cds": ["Alvi Canastas"], "ces": ["0103"], "ocs": ["CRR"], "camiones_permitidos": ["pequeño", "mediano", "rampla_directa", "paquetera"]},
-                    {"cds": ["Alvi Canastas"], "ces": ["3598"], "ocs": ["CRR"], "camiones_permitidos": ["pequeño", "mediano", "rampla_directa", "paquetera"]},
-                    {"cds": ["Alvi Canastas"], "ces": ["8150"], "ocs": ["CRR"], "camiones_permitidos": ["pequeño", "mediano", "rampla_directa", "paquetera"]},
+                    {"cds": ["Alvi Canastas"], "ces": ["0088"], "ocs": ["CRR"], "camiones_permitidos": ["chico", "pequeño", "mediano", "rampla_directa", "paquetera"]},
+                    {"cds": ["Alvi Canastas"], "ces": ["0097"], "ocs": ["CRR"], "camiones_permitidos": ["chico", "pequeño", "mediano", "rampla_directa", "paquetera"]},
+                    {"cds": ["Alvi Canastas"], "ces": ["0080"], "ocs": ["CRR"], "camiones_permitidos": ["chico", "pequeño", "mediano", "rampla_directa", "paquetera"]},
+                    {"cds": ["Alvi Canastas"], "ces": ["0103"], "ocs": ["CRR"], "camiones_permitidos": ["chico", "pequeño", "mediano", "rampla_directa", "paquetera"]},
+                    {"cds": ["Alvi Canastas"], "ces": ["3598"], "ocs": ["CRR"], "camiones_permitidos": ["chico", "pequeño", "mediano", "rampla_directa", "paquetera"]},
+                    {"cds": ["Alvi Canastas"], "ces": ["8150"], "ocs": ["CRR"], "camiones_permitidos": ["chico", "pequeño", "mediano", "rampla_directa", "paquetera"]},
                 ],
 
                 "multi_ce": [
@@ -232,12 +236,22 @@ class SmuConfig:
     
     @classmethod
     def get_altura_maxima(cls, subcliente: str, altura_default: float, venta: str = "Secos") -> float:
-        """Retorna altura máxima según subcliente (Alvi=230cm, Rendic=240cm)"""
+        """Retorna altura máxima según subcliente (Alvi=230cm, Rendic=240cm).
+        Si el camión es físicamente más bajo que el límite del cliente, se respeta su altura real."""
         channel = cls.get_channel_config(venta)
         if cls.es_alvi(subcliente):
-            return channel.get("ALVI_ALTURA_MAX_CM", 230)
-        # Rendic u otros subclientes SMU
-        return channel.get("RENDIC_ALTURA_MAX_CM", 240)
+            limite = channel.get("ALVI_ALTURA_MAX_CM", 230)
+        else:
+            limite = channel.get("RENDIC_ALTURA_MAX_CM", 240)
+        return min(limite, altura_default)
+
+    @classmethod
+    def get_altura_maxima_mismo_sku(cls, subcliente: str, venta: str = "Secos") -> Optional[float]:
+        """Retorna altura máxima extendida para Rendic cuando todos los SKUs en posición son iguales."""
+        channel = cls.get_channel_config(venta)
+        if cls.es_rendic(subcliente) or (not cls.es_alvi(subcliente)):
+            return channel.get("RENDIC_ALTURA_MAX_MISMO_SKU_CM", None)
+        return None
 
     @classmethod
     def get_config_por_subcliente(cls, subcliente: str, oc: str = None, venta: str = "Secos") -> dict:

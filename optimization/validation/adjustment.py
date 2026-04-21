@@ -49,13 +49,13 @@ class PostValidationAdjuster:
     MAX_ITERACIONES = 3
     MAX_COMBO_SIZE = 4  # Máximo pedidos a considerar en combinación
     
-    def __init__(self, client_config):
+    def __init__(self, client_config, venta: str = None):
         """
         Args:
             client_config: Configuración del cliente
         """
         self.config = client_config
-        # Se inicializarán con effective_config en ajustar_camiones
+        self.venta = venta
         self.permite_consolidacion = False
         self.max_skus_por_pallet = 1
     
@@ -329,13 +329,18 @@ class PostValidationAdjuster:
             subcliente = primer_pedido.metadata.get("SUBCLIENTE") if primer_pedido.metadata else None
             oc = getattr(primer_pedido, 'oc', None)
 
-        consolidacion = get_consolidacion_config(self.config, subcliente=subcliente, oc=oc)
+        consolidacion = get_consolidacion_config(self.config, subcliente=subcliente, oc=oc, venta=self.venta)
+
+        altura_maxima_mismo_sku_cm = None
+        if hasattr(self.config, 'get_altura_maxima_mismo_sku'):
+            altura_maxima_mismo_sku_cm = self.config.get_altura_maxima_mismo_sku(subcliente or "")
 
         validator = HeightValidator(
             altura_maxima_cm=altura_maxima,
             permite_consolidacion=consolidacion.get("PERMITE_CONSOLIDACION", self.permite_consolidacion),
             max_skus_por_pallet=consolidacion.get("MAX_SKUS_POR_PALLET", self.max_skus_por_pallet),
-            max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM")
+            max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM"),
+            altura_maxima_mismo_sku_cm=altura_maxima_mismo_sku_cm,
         )
         
         es_valido, errores, layout, debug_info = validator.validar_camion_rapido(cam)

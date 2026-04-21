@@ -144,7 +144,7 @@ class SmuTruckSelector(TruckSelector):
     Selector para SMU (Alvi/Rendic).
     
     Reglas especiales:
-    - Alvi CRR: prioriza pequeño > mediano > paquetera > rampla
+    - Alvi CRR: prioriza chico > pequeño > mediano > paquetera > rampla
     - Alvi INV: solo paquetera/rampla
     - Rendic: paquetera/rampla/backhaul según ruta
     """
@@ -171,6 +171,8 @@ class SmuTruckSelector(TruckSelector):
         
         # Alvi con CRR: priorizar pequeño > mediano
         if es_alvi and oc and oc.upper() == 'CRR':
+            if TipoCamion.CHICO in camiones_permitidos:
+                return TipoCamion.CHICO
             if TipoCamion.PEQUEÑO in camiones_permitidos:
                 return TipoCamion.PEQUEÑO
             if TipoCamion.MEDIANO in camiones_permitidos:

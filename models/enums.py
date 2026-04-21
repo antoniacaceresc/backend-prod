@@ -15,13 +15,14 @@ class TipoCamion(str, Enum):
     BACKHAUL = "backhaul"
     BACKHAUL_28 = "backhaul_28" # Sólo para Cencosud
     MEDIANO = "mediano"
-    PEQUEÑO = "pequeño" 
+    PEQUEÑO = "pequeño"
+    CHICO = "chico"
 
     @property
     def es_nestle(self) -> bool:
         """Indica si es camión de Nestlé (paquetera o rampla)"""
         return self in (TipoCamion.PAQUETERA, TipoCamion.RAMPLA_DIRECTA,
-                        TipoCamion.MEDIANO, TipoCamion.PEQUEÑO)
+                        TipoCamion.MEDIANO, TipoCamion.PEQUEÑO, TipoCamion.CHICO)
     
     @property
     def es_backhaul(self) -> bool:

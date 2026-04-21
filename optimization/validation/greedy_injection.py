@@ -72,7 +72,7 @@ class GreedyInjector:
             altura_maxima_cm=self.altura_maxima,
             permite_consolidacion=self.permite_consolidacion,
             max_skus_por_pallet=self.max_skus_por_pallet,
-            max_altura_picking_apilado_cm=self.max_altura_picking
+            max_altura_picking_apilado_cm=effective_config.get("ALTURA_MAX_PICKING_APILADO_CM") if effective_config else None,
         )
     
     def inyectar(
@@ -414,11 +414,16 @@ class GreedyInjector:
         
         consolidacion = get_consolidacion_config(self.config, subcliente=subcliente, oc=oc, venta=self.venta)
         
+        altura_maxima_mismo_sku_cm = None
+        if hasattr(self.config, 'get_altura_maxima_mismo_sku'):
+            altura_maxima_mismo_sku_cm = self.config.get_altura_maxima_mismo_sku(subcliente or "")
+
         validator = HeightValidator(
             altura_maxima_cm=altura_maxima,
             permite_consolidacion=consolidacion.get("PERMITE_CONSOLIDACION", False),
             max_skus_por_pallet=consolidacion.get("MAX_SKUS_POR_PALLET", 1),
-            max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM")
+            max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM"),
+            altura_maxima_mismo_sku_cm=altura_maxima_mismo_sku_cm,
         )
         
         es_valido, errores, layout, debug_info = validator.validar_camion_rapido(camion_temp)
@@ -464,11 +469,16 @@ class GreedyInjector:
         
         consolidacion = get_consolidacion_config(self.config, subcliente=subcliente, oc=oc, venta=self.venta)
         
+        altura_maxima_mismo_sku_cm = None
+        if hasattr(self.config, 'get_altura_maxima_mismo_sku'):
+            altura_maxima_mismo_sku_cm = self.config.get_altura_maxima_mismo_sku(subcliente or "")
+
         validator = HeightValidator(
             altura_maxima_cm=altura_maxima,
             permite_consolidacion=consolidacion.get("PERMITE_CONSOLIDACION", False),
             max_skus_por_pallet=consolidacion.get("MAX_SKUS_POR_PALLET", 1),
-            max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM")
+            max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM"),
+            altura_maxima_mismo_sku_cm=altura_maxima_mismo_sku_cm,
         )
         
         es_valido, errores, layout, debug_info = validator.validar_camion_rapido(camion)

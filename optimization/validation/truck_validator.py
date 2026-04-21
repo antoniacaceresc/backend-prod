@@ -165,9 +165,6 @@ class TruckValidator:
         error_msg = None
         
         try:
-            # Obtener altura máxima según configuración
-            altura_maxima = self._get_altura_maxima(cam)
-
             # Obtener consolidación específica para este camión (SMU)
             subcliente = None
             oc = None
@@ -175,6 +172,14 @@ class TruckValidator:
                 primer_pedido = cam.pedidos[0]
                 subcliente = primer_pedido.metadata.get("SUBCLIENTE") if primer_pedido.metadata else None
                 oc = getattr(primer_pedido, 'oc', None)
+            
+            # Obtener altura máxima según configuración
+            altura_maxima = self._get_altura_maxima(cam)
+
+            altura_maxima_mismo_sku_cm = None
+            if hasattr(self.config, 'get_altura_maxima_mismo_sku'):
+                altura_maxima_mismo_sku_cm = self.config.get_altura_maxima_mismo_sku(subcliente or "")
+            
             
             consolidacion = get_consolidacion_config(
                 self.config, 
@@ -188,7 +193,8 @@ class TruckValidator:
                 altura_maxima_cm=altura_maxima,
                 permite_consolidacion=consolidacion.get("PERMITE_CONSOLIDACION", self.permite_consolidacion),
                 max_skus_por_pallet=consolidacion.get("MAX_SKUS_POR_PALLET", self.max_skus_por_pallet),
-                max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM")
+                max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM"),
+                altura_maxima_mismo_sku_cm=altura_maxima_mismo_sku_cm,
             )
             
             # Ejecutar validación

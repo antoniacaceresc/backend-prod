@@ -318,8 +318,29 @@ def _definir_objetivo_vcu(
 
 
 def _pedido_a_dict_excluido(pedido: Pedido, capacidad: TruckCapacity) -> Dict[str, Any]:
-    """Convierte pedido excluido a dict para salida"""
     vcu_peso, vcu_vol, _ = pedido.calcular_vcu(capacidad)
+    
+    # Serializar SKUs si existen
+    skus_serializados = []
+    if pedido.tiene_skus:
+        for sku in pedido.skus:
+            skus_serializados.append({
+                "sku_id": sku.sku_id,
+                "pedido_id": sku.pedido_id,
+                "cantidad_pallets": sku.cantidad_pallets,
+                "altura_full_pallet_cm": sku.altura_full_pallet_cm,
+                "altura_picking_cm": sku.altura_picking_cm,
+                "peso_kg": sku.peso_kg,
+                "volumen_m3": sku.volumen_m3,
+                "valor": sku.valor,
+                "base": sku.base,
+                "superior": sku.superior,
+                "flexible": sku.flexible,
+                "no_apilable": sku.no_apilable,
+                "si_mismo": sku.si_mismo,
+                "max_altura_apilable_cm": sku.max_altura_apilable_cm,
+                "descripcion": sku.descripcion,
+            })
     
     return {
         'PEDIDO': pedido.pedido,
@@ -331,5 +352,6 @@ def _pedido_a_dict_excluido(pedido: Pedido, capacidad: TruckCapacity) -> Dict[st
         'PO': pedido.po,
         'PALLETS': pedido.pallets,
         'VALOR': pedido.valor,
+        'SKUS': skus_serializados,   # ← NUEVO
         **pedido.metadata
     }

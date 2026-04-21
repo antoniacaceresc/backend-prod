@@ -230,11 +230,17 @@ class NestleReclassifier:
             sub = subcliente or ""
             altura_maxima = self.config.get_altura_maxima(sub, altura_maxima)
 
+        altura_maxima_mismo_sku_cm = None
+        if hasattr(self.config, 'get_altura_maxima_mismo_sku'):
+            altura_maxima_mismo_sku_cm = self.config.get_altura_maxima_mismo_sku(subcliente or "")
+
+
         validator = HeightValidator(
             altura_maxima_cm=altura_maxima,
             permite_consolidacion=consolidacion.get("PERMITE_CONSOLIDACION", True),
             max_skus_por_pallet=consolidacion.get("MAX_SKUS_POR_PALLET", 3),
-            max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM")
+            max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM"),
+            altura_maxima_mismo_sku_cm=altura_maxima_mismo_sku_cm,
         )
         
         # Ejecutar validación de altura

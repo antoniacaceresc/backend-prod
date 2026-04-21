@@ -689,12 +689,17 @@ def _validar_altura_pre_agregar(
     
     consolidacion = get_consolidacion_config(config, subcliente=subcliente, oc=oc, venta=venta)
     
+    altura_maxima_mismo_sku_cm = None
+    if hasattr(config, 'get_altura_maxima_mismo_sku'):
+        altura_maxima_mismo_sku_cm = config.get_altura_maxima_mismo_sku(subcliente or "")
+
     # Crear validador
     validator = HeightValidator(
         altura_maxima_cm=altura_maxima,
         permite_consolidacion=consolidacion["PERMITE_CONSOLIDACION"],
         max_skus_por_pallet=consolidacion["MAX_SKUS_POR_PALLET"],
-        max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM")
+        max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM"),
+        altura_maxima_mismo_sku_cm=altura_maxima_mismo_sku_cm,
     )
     
     # Ejecutar validación
@@ -811,7 +816,7 @@ def _actualizar_opciones_tipo_camion(camion: Camion, client_config, venta: str =
                 print(f"[DEBUG] ⚠️ Error validando tipo '{tipo.value}': {e}")
     
     # Convertir a lista ordenada
-    orden = ['pequeño','mediano','paquetera', 'rampla_directa', 'backhaul', 'backhaul_2']
+    orden = ['chico', 'pequeño','mediano','paquetera', 'rampla_directa', 'backhaul', 'backhaul_2']
     opciones_ordenadas = [t for t in orden if t in opciones]
     
     # Agregar cualquier otro tipo no estándar que pueda estar

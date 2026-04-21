@@ -84,7 +84,7 @@ class ValidationCycle:
         
         # Componentes internos
         self.validator = TruckValidator(client_config)
-        self.adjuster = PostValidationAdjuster(client_config)
+        self.adjuster = PostValidationAdjuster(client_config, venta= self.venta)
     
     def ejecutar(
         self,
@@ -109,6 +109,7 @@ class ValidationCycle:
         """
         self.effective_config = effective_config
         self.venta = venta
+        self.adjuster.venta = venta
         self.recovery = PedidoRecovery(self.config, venta)
 
         if not camiones:

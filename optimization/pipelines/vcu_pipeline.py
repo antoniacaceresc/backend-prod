@@ -747,7 +747,7 @@ class VCUPipeline(OptimizationPipeline):
         context: PhaseContext
     ) -> PipelineResult:
         """
-        Procesa grupos Alvi CRR con pasadas múltiples: mediano → pequeño.
+        Procesa grupos Alvi CRR con pasadas múltiples: mediano → pequeño → chico.
         """
         from utils.config_helpers import get_capacity_for_type
         from models.enums import TipoCamion
@@ -756,7 +756,7 @@ class VCUPipeline(OptimizationPipeline):
         pedidos_asignados = set()
         
         # Orden de pasadas: mediano primero, luego pequeño
-        pasadas = [TipoCamion.MEDIANO, TipoCamion.PEQUEÑO, TipoCamion.PAQUETERA]
+        pasadas = [TipoCamion.PAQUETERA, TipoCamion.MEDIANO, TipoCamion.PEQUEÑO, TipoCamion.CHICO]
         
         for tipo_camion in pasadas:
             for cfg, pedidos_grupo, camiones_permitidos in grupos:

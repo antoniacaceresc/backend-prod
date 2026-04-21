@@ -129,6 +129,10 @@ def extract_truck_capacities(client_config, venta: str = None) -> Dict[TipoCamio
     if 'pequeño' in truck_types:
         capacidades[TipoCamion.PEQUEÑO] = TruckCapacity.from_config(truck_types['pequeño'])
     
+    # Capacidad chico
+    if 'chico' in truck_types:
+        capacidades[TipoCamion.CHICO] = TruckCapacity.from_config(truck_types['chico'])
+    
     # Fallback: si no hay ningún tipo definido, usar el primero disponible para todos
     if not capacidades and truck_types:
         first_type = next(iter(truck_types.values()))
@@ -217,8 +221,6 @@ def get_camiones_permitidos_para_ruta(
                 return [TipoCamion(t) for t in tipos_str]
     
     # Si no se encuentra, retornar todos los tipos Nestlé por defecto
-    print(f"[DEBUG RUTA] ⚠️ No se encontró match exacto para cds={cds_busqueda}, ces={ces_busqueda}, oc={oc}")
-    print(f"[DEBUG RUTA]   Usando default: PAQUETERA + RAMPLA_DIRECTA")
     return [TipoCamion.PAQUETERA, TipoCamion.RAMPLA_DIRECTA]
 
 def es_ruta_solo_backhaul(client_config, cd: str, ce: str, tipo_ruta: str = "normal", venta: str = None, oc:str = None) -> bool:
