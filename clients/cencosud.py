@@ -55,7 +55,7 @@ class CencosudConfig:
             "ADHERENCIA_BACKHAUL": 0.50,
             "MODO_ADHERENCIA": "post_convert",
             
-            "VALIDAR_ALTURA": False,
+            "VALIDAR_ALTURA": True,
             "PERMITE_CONSOLIDACION": False,
             "MAX_SKUS_POR_PALLET": 4,
 

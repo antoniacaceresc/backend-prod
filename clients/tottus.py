@@ -57,14 +57,14 @@ class TottusConfig:
             "TRUCK_TYPES": {
                 'paquetera':        {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 30, 'levels': 2, 'vcu_min': 0.7, 'max_pallets': 60, 'altura_cm': 280},
                 'rampla_directa':   {'cap_weight': 23000, 'cap_volume': 70000, 'max_positions': 28, 'levels': 2, 'vcu_min': 0.7, 'max_pallets': 56, 'altura_cm': 270},
-                'pequeño':          {'cap_weight': 10000, 'cap_volume': 18000, 'max_positions': 12, 'levels': 2, 'vcu_min': 0.7, 'max_pallets': 12, 'altura_cm': 230},
+                'mediano':          {'cap_weight': 10000, 'cap_volume': 18000, 'max_positions': 12, 'levels': 2, 'vcu_min': 0.5, 'max_pallets': 15, 'altura_cm': 230},
             },
 
             "RUTAS_POSIBLES": {
                 "normal": [
                     # todo a la farfana
-                    {"cds": ["La Farfana"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa", "pequeño"]},
-                    {"cds": ["La Farfana"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa", "pequeño"]},
+                    {"cds": ["La Farfana"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa", "mediano"]},
+                    {"cds": ["La Farfana"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa", "mediano"]},
                     
                 ],
 

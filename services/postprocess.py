@@ -235,6 +235,7 @@ def move_orders(
     Raises:
         ValueError: Si la operación no es válida
     """
+
     # 1) Reconstruir estado
     camiones, pedidos_no_inc, config, cap_default = _rebuild_state(state, cliente, venta)
     pedidos_obj = [_pedido_from_dict(p) for p in (pedidos or [])]
@@ -660,7 +661,7 @@ def _validar_altura_pre_agregar(
     camion_simulado.pedidos = camion.pedidos + pedidos_a_agregar
     
     # Verificar si tiene SKUs para validar
-    tiene_skus = any(p.tiene_skus for p in camion_simulado.pedidos)
+    tiene_skus = any(p.tiene_skus for p in camion_simulado.pedidos) or any(p.tiene_skus for p in camion.pedidos)
     if not tiene_skus:
         return  # Sin SKUs, no hay validación de altura
     
