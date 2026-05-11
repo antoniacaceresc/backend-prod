@@ -9,6 +9,7 @@ class TottusConfig:
             "PO": "Número PO",
             "PEDIDO": "N° Pedido",
             "CE": "Ce.",
+            "OC": "Flujo OC", 
             "PALLETS": "Pal. Conf.",
             "PESO": "Peso neto Conf.",
             "VOL": "Vol. Conf.",
