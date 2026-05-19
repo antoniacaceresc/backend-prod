@@ -14,7 +14,7 @@ NOTA: Este archivo reemplaza al orchestrator.py original (~2125 líneas → ~200
 from __future__ import annotations
 
 import os
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 
 import pandas as pd
 

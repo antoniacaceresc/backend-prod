@@ -12,6 +12,7 @@ from clients.cencosud import CencosudConfig
 from clients.disvet import DisvetConfig
 from clients.smu import SmuConfig
 from clients.tottus import TottusConfig
+from clients.ims import IMSConfig
 
 # Registro de clientes
 _CLIENT_REGISTRY: Dict[str, Any] = {
@@ -19,7 +20,8 @@ _CLIENT_REGISTRY: Dict[str, Any] = {
     "cencosud": CencosudConfig,
     "disvet": DisvetConfig,
     "smu": SmuConfig,
-    "tottus": TottusConfig
+    "tottus": TottusConfig,
+    "ims": IMSConfig,
 }
 
 
