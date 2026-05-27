@@ -548,10 +548,6 @@ class HeightValidator:
                                 
                                 # Mover SUPERIOR a nivel 1
                                 pallet_existente.nivel = 1
-
-                                print(f"[DEBUG VALOR] Insertando FLEXIBLE bajo SUPERIOR: "
-                                      f"frag {frag.sku_id} valioso={frag.es_valioso}, "
-                                      f"existente valioso={any(f.es_valioso for f in pallet_existente.fragmentos)}")
                                       
                                 # Insertar FLEXIBLE al inicio
                                 posicion.pallets_apilados.insert(0, pallet_flexible)
