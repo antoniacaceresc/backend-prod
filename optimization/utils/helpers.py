@@ -207,6 +207,14 @@ def preparar_datos_solver(
         datos[pid]['flexible_int'] = int(round(pedido.flexible * SCALE_PALLETS))
         datos[pid]['no_apil_int'] = int(round(pedido.no_apilable * SCALE_PALLETS))
         datos[pid]['si_mismo_int'] = int(round(pedido.si_mismo * SCALE_PALLETS))
+
+        # Apilabilidad separada por valor (para SEPARAR_APILABILIDAD_POR_VALOR)
+        for suf in ('val', 'noval'):
+            datos[pid][f'base_{suf}_int']     = int(round(getattr(pedido, f'base_{suf}', 0) * SCALE_PALLETS))
+            datos[pid][f'superior_{suf}_int'] = int(round(getattr(pedido, f'superior_{suf}', 0) * SCALE_PALLETS))
+            datos[pid][f'flexible_{suf}_int'] = int(round(getattr(pedido, f'flexible_{suf}', 0) * SCALE_PALLETS))
+            datos[pid][f'no_apil_{suf}_int']  = int(round(getattr(pedido, f'no_apilable_{suf}', 0) * SCALE_PALLETS))
+            datos[pid][f'si_mismo_{suf}_int'] = int(round(getattr(pedido, f'si_mismo_{suf}', 0) * SCALE_PALLETS))
     
     return datos
 

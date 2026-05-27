@@ -188,7 +188,8 @@ class HeightValidator:
                                 categoria=CategoriaApilamiento(sku.categoria_apilamiento_dominante),
                                 max_altura_apilable_cm=sku.max_altura_apilable_cm,
                                 descripcion=sku.descripcion,
-                                es_picking=True
+                                es_picking=True,
+                                es_valioso=sku.valioso
                             )
                             fragmentos.append(frag)
                             continue
@@ -220,7 +221,8 @@ class HeightValidator:
                                 categoria=CategoriaApilamiento(sku.categoria_apilamiento_dominante),
                                 max_altura_apilable_cm=sku.max_altura_apilable_cm,
                                 descripcion=sku.descripcion,
-                                es_picking=False
+                                es_picking=False,
+                                es_valioso=sku.valioso
                             )
                             fragmentos.append(frag)
                         
@@ -246,7 +248,8 @@ class HeightValidator:
                                 categoria=CategoriaApilamiento(sku.categoria_apilamiento_dominante),
                                 max_altura_apilable_cm=sku.max_altura_apilable_cm,
                                 descripcion=sku.descripcion,
-                                es_picking=True
+                                es_picking=True,
+                                es_valioso=sku.valioso,
                             )
                             fragmentos.append(frag_picking)
                     
@@ -298,7 +301,8 @@ class HeightValidator:
             categoria=categoria,
             max_altura_apilable_cm=None,
             descripcion=f"Pedido legacy {pedido.pedido}",
-            es_picking=False
+            es_picking=False,
+            es_valioso=pedido.valioso
         )
     
     def _agrupar_por_categoria(
@@ -471,6 +475,11 @@ class HeightValidator:
                             altura_limite = self.altura_maxima_mismo_sku_cm
                     if posicion.altura_usada_cm + frag.altura_cm > altura_limite:
                         continue
+
+                    # Regla Cencosud: no mezclar valiosos con no-valiosos
+                    pos_val = any(f.es_valioso for p in posicion.pallets_apilados for f in p.fragmentos)
+                    if frag.es_valioso != pos_val:
+                        continue
                     
                     # Crear nuevo pallet en esta posición
                     pallet_nuevo = PalletFisico(
@@ -522,6 +531,11 @@ class HeightValidator:
                         cat_existente = self._categoria_dominante_pallet(pallet_existente)
                         
                         if cat_existente == CategoriaApilamiento.SUPERIOR:
+                            # Regla Cencosud: no mezclar valiosos con no-valiosos
+                            existente_val = any(f.es_valioso for f in pallet_existente.fragmentos)
+                            if frag.es_valioso != existente_val:
+                                continue
+
                             altura_nueva_total = frag.altura_cm + pallet_existente.altura_total_cm
                             if altura_nueva_total <= posicion.altura_maxima_cm:
                                 # Crear pallet FLEXIBLE en nivel 0
@@ -534,7 +548,11 @@ class HeightValidator:
                                 
                                 # Mover SUPERIOR a nivel 1
                                 pallet_existente.nivel = 1
-                                
+
+                                print(f"[DEBUG VALOR] Insertando FLEXIBLE bajo SUPERIOR: "
+                                      f"frag {frag.sku_id} valioso={frag.es_valioso}, "
+                                      f"existente valioso={any(f.es_valioso for f in pallet_existente.fragmentos)}")
+                                      
                                 # Insertar FLEXIBLE al inicio
                                 posicion.pallets_apilados.insert(0, pallet_flexible)
                                 

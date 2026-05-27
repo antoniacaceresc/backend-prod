@@ -166,7 +166,8 @@ def _pedido_from_dict(p_dict: Dict[str, Any]) -> Pedido:
                 no_apilable=float(sku_dict.get("no_apilable", 0)),
                 si_mismo=float(sku_dict.get("si_mismo", 0)),
                 max_altura_apilable_cm=float(sku_dict["max_altura_apilable_cm"]) if sku_dict.get("max_altura_apilable_cm") else None,
-                descripcion=sku_dict.get("descripcion")
+                descripcion=sku_dict.get("descripcion"),
+                valioso=bool(sku_dict.get("valioso", False)),
             )
             skus.append(sku)
     

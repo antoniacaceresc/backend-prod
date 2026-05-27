@@ -44,6 +44,9 @@ def get_effective_config(client_config, venta: str = None) -> dict:
             # Adherencia backhaul
             "ADHERENCIA_BACKHAUL": channel.get("ADHERENCIA_BACKHAUL", getattr(client_config, 'ADHERENCIA_BACKHAUL', None)),
             "MODO_ADHERENCIA": channel.get("MODO_ADHERENCIA", getattr(client_config, 'MODO_ADHERENCIA', None)),
+
+            # Restricciones específicas Cencosud
+            "SEPARAR_APILABILIDAD_POR_VALOR": channel.get("SEPARAR_APILABILIDAD_POR_VALOR", getattr(client_config, 'SEPARAR_APILABILIDAD_POR_VALOR', False)),
             
             # Restricciones específicas SMU
             "PROHIBIR_PICKING_DUPLICADO": channel.get("PROHIBIR_PICKING_DUPLICADO", getattr(client_config, 'PROHIBIR_PICKING_DUPLICADO', False)),
@@ -74,14 +77,15 @@ def get_effective_config(client_config, venta: str = None) -> dict:
         "VALIDAR_ALTURA": getattr(client_config, 'VALIDAR_ALTURA', True),
         "PERMITE_CONSOLIDACION": getattr(client_config, 'PERMITE_CONSOLIDACION', False),
         "MAX_SKUS_POR_PALLET": getattr(client_config, 'MAX_SKUS_POR_PALLET', 3),
-        "MAX_SKUS_CRR": channel.get("MAX_SKUS_CRR", getattr(client_config, 'MAX_SKUS_CRR', None)),
-        "MAX_CAJAS_CRR": channel.get("MAX_CAJAS_CRR", getattr(client_config, 'MAX_CAJAS_CRR', None)),
+        "MAX_SKUS_CRR": getattr(client_config, 'MAX_SKUS_CRR', None),
+        "MAX_CAJAS_CRR": getattr(client_config, 'MAX_CAJAS_CRR', None),
         "MIX_CANAL_CDS": getattr(client_config, 'MIX_CANAL_CDS', None),
         "ADHERENCIA_BACKHAUL": getattr(client_config, 'ADHERENCIA_BACKHAUL', None),
         "MODO_ADHERENCIA": getattr(client_config, 'MODO_ADHERENCIA', None),
         "PROHIBIR_PICKING_DUPLICADO": getattr(client_config, 'PROHIBIR_PICKING_DUPLICADO', False),
         "ALTURA_MAX_PICKING_APILADO_CM": getattr(client_config, 'ALTURA_MAX_PICKING_APILADO_CM', None),
         "CDS_SIN_APILAMIENTO": getattr(client_config, 'CDS_SIN_APILAMIENTO', []),
+        "SEPARAR_APILABILIDAD_POR_VALOR": getattr(client_config, 'SEPARAR_APILABILIDAD_POR_VALOR', False),
         "ALVI_ALTURA_MAX_CM": getattr(client_config, 'ALVI_ALTURA_MAX_CM', 230),
         "ALVI_ELIMINAR_SKU_DUPLICADO": getattr(client_config, 'ALVI_ELIMINAR_SKU_DUPLICADO', False),
         "ALVI_FLUJOS_SEPARADOS": getattr(client_config, 'ALVI_FLUJOS_SEPARADOS', False),

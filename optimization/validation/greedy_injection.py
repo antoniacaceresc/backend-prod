@@ -527,6 +527,7 @@ class GreedyInjector:
                                     'altura_cm': frag.altura_cm,
                                     'categoria': frag.categoria.value,
                                     'es_picking': frag.es_picking,
+                                    'es_valioso': frag.es_valioso,
                                     'descripcion': frag.descripcion
                                 }
                                 for frag in pallet.fragmentos

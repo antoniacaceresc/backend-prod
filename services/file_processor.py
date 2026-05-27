@@ -237,7 +237,7 @@ def _limpiar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int).clip(0, 1)
         else:
             df[col] = 0
-    
+        
     # Chocolates (especial: SI/NO -> 1/0 para MAX, luego volver a SI/NO)
     if "CHOCOLATES" in df.columns:
         chocolates_str = df["CHOCOLATES"].astype(str).str.upper().str.strip()
@@ -442,6 +442,14 @@ def _validar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
     
     df = df.drop(columns=["SUMA_APILABILIDAD", "EXCEDE_PALLETS"])
     
+    # Separar apilabilidad por valor (valioso / no valioso) a nivel SKU.
+    # Solo se poblarán de forma útil cuando el cliente use SEPARAR_APILABILIDAD_POR_VALOR, para el resto quedan en 0 y no afectan nada.
+    apilabilidad_cols = ["BASE", "SUPERIOR", "FLEXIBLE", "NO_APILABLE", "SI_MISMO"]
+    es_val = df["VALIOSO"] == 1
+    for col in apilabilidad_cols:
+        df[f"{col}_VAL"] = df[col].where(es_val, 0.0)
+        df[f"{col}_NOVAL"] = df[col].where(~es_val, 0.0)
+    
     if errores:
         raise ValueError(f"Errores de validación:\n" + "\n".join(errores))
     
@@ -467,7 +475,9 @@ def _agregar_skus_a_pedidos(
     # Campos que se suman
     campos_suma = [
         "PALLETS", "PESO", "VOL", "VALOR", "VALOR_CAFE",
-        "BASE", "SUPERIOR", "FLEXIBLE", "NO_APILABLE", "SI_MISMO", "PALLETS_ESTIMADO"
+        "BASE", "SUPERIOR", "FLEXIBLE", "NO_APILABLE", "SI_MISMO", "PALLETS_ESTIMADO",
+        "BASE_VAL", "SUPERIOR_VAL", "FLEXIBLE_VAL", "NO_APILABLE_VAL", "SI_MISMO_VAL",
+        "BASE_NOVAL", "SUPERIOR_NOVAL", "FLEXIBLE_NOVAL", "NO_APILABLE_NOVAL", "SI_MISMO_NOVAL",
     ]
     
     # Campos que se toman con MAX (flags)

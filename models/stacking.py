@@ -47,6 +47,8 @@ class FragmentoSKU:
     # Apilabilidad
     categoria: CategoriaApilamiento
     max_altura_apilable_cm: Optional[float] = None  # Solo para SI_MISMO
+
+    es_valioso: bool = False
     
     # Metadata
     descripcion: Optional[str] = None
@@ -212,6 +214,7 @@ class PosicionCamion:
         Returns:
             (puede_apilar, razon_si_no)
         """
+
         # Si max_niveles es 1, no permitir apilamiento
         if max_niveles <= 1 and len(self.pallets_apilados) >= 1:
             return False, "Camión con 1 nivel no permite apilamiento"
@@ -226,6 +229,12 @@ class PosicionCamion:
         # 2. Si posición vacía, cualquier pallet puede ir
         if self.esta_vacia:
             return True, None
+        
+        # 2b. Regla Cencosud: no mezclar valiosos con no-valiosos
+        entrante_val = any(f.es_valioso for f in pallet.fragmentos)
+        inferior_val = any(f.es_valioso for f in self.pallets_apilados[-1].fragmentos)
+        if entrante_val != inferior_val:
+            return False, "No se permite apilar pallets valiosos con no-valiosos"
         
         # 3. Validar reglas de apilamiento con pallet inferior
         pallet_inferior = self.pallets_apilados[-1]
@@ -250,6 +259,11 @@ class PosicionCamion:
         Returns:
             (es_valido, razon_si_no)
         """
+        inf_val = any(f.es_valioso for f in inferior.fragmentos)
+        sup_val = any(f.es_valioso for f in superior.fragmentos)
+        if inf_val != sup_val:
+            return False, "No se permite apilar pallets valiosos con no-valiosos"
+        
         # Obtener categorías dominantes
         cat_inf = self._categoria_dominante(inferior)
         cat_sup = self._categoria_dominante(superior)
@@ -493,7 +507,8 @@ class LayoutCamion:
                                     'altura_cm': round(f.altura_cm, 1),
                                     'peso_kg': round(f.peso_kg, 1),
                                     'categoria': f.categoria.value,
-                                    'es_picking': f.es_picking
+                                    'es_picking': f.es_picking,
+                                    'es_valioso': f.es_valioso,
                                 }
                                 for f in pallet.fragmentos
                             ]

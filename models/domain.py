@@ -80,6 +80,7 @@ class SKU:
     no_apilable: float = 0.0       # Columna: "No Apilable"
     si_mismo: float = 0.0          # Columna: "Apilable por si mismo"
 
+    valioso: bool = False
     
     pallets_estimados: Optional[float] = None
     pallets_solicitados: Optional[float] = None
@@ -158,7 +159,8 @@ class SKU:
             categoria=categoria,
             max_altura_apilable_cm=self.max_altura_apilable_cm,
             descripcion=self.descripcion,
-            es_picking=self.es_picking
+            es_picking=self.es_picking,
+            es_valioso=self.valioso,
         )
     
     def validar_integridad(self) -> tuple[bool, Optional[str]]:
@@ -247,6 +249,18 @@ class Pedido:
     flexible: float = 0.0
     no_apilable: float = 0.0
     si_mismo: float = 0.0
+
+    # ========== Apilabilidad Valiosos y no ==========
+    base_val: float = 0.0
+    superior_val: float = 0.0
+    flexible_val: float = 0.0
+    no_apilable_val: float = 0.0
+    si_mismo_val: float = 0.0
+    base_noval: float = 0.0
+    superior_noval: float = 0.0
+    flexible_noval: float = 0.0
+    no_apilable_noval: float = 0.0
+    si_mismo_noval: float = 0.0
     
     # ========== Asignación (None si no está asignado) ==========
     camion_id: Optional[str] = None
@@ -435,6 +449,17 @@ class Pedido:
             flexible=float(row.get("FLEXIBLE", 0)),
             no_apilable=float(row.get("NO_APILABLE", 0)),
             si_mismo=float(row.get("SI_MISMO", 0)),
+
+            base_val=float(row.get("BASE_VAL", 0)),
+            superior_val=float(row.get("SUPERIOR_VAL", 0)),
+            flexible_val=float(row.get("FLEXIBLE_VAL", 0)),
+            no_apilable_val=float(row.get("NO_APILABLE_VAL", 0)),
+            si_mismo_val=float(row.get("SI_MISMO_VAL", 0)),
+            base_noval=float(row.get("BASE_NOVAL", 0)),
+            superior_noval=float(row.get("SUPERIOR_NOVAL", 0)),
+            flexible_noval=float(row.get("FLEXIBLE_NOVAL", 0)),
+            no_apilable_noval=float(row.get("NO_APILABLE_NOVAL", 0)),
+            si_mismo_noval=float(row.get("SI_MISMO_NOVAL", 0)),
             
             # Metadata (todo lo que no usamos arriba)
             skus = [],
@@ -511,7 +536,8 @@ class Pedido:
                     "no_apilable": sku.no_apilable,
                     "si_mismo": sku.si_mismo,
                     "max_altura_apilable_cm": sku.max_altura_apilable_cm,
-                    "descripcion": sku.descripcion
+                    "descripcion": sku.descripcion,
+                    "valioso": sku.valioso,
                 }
                 for sku in self.skus
             ]

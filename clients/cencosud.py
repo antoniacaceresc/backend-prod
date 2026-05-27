@@ -55,6 +55,8 @@ class CencosudConfig:
             "ADHERENCIA_BACKHAUL": 0.50,
             "MODO_ADHERENCIA": "post_convert",
             
+            "SEPARAR_APILABILIDAD_POR_VALOR": True, # Separa el cálculo de apilabilidad en universos valioso/no-valioso
+            
             "VALIDAR_ALTURA": True,
             "PERMITE_CONSOLIDACION": False,
             "MAX_SKUS_POR_PALLET": 4,

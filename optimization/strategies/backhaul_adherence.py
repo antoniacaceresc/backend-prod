@@ -283,7 +283,8 @@ class BackhaulAdherenceManager:
                                 'pedido_id': frag.pedido_id,
                                 'altura_cm': frag.altura_cm,
                                 'categoria': frag.categoria.value,
-                                'es_picking': frag.es_picking
+                                'es_picking': frag.es_picking,
+                                'es_valioso': frag.es_valioso,
                             }
                             for frag in pallet.fragmentos
                         ]

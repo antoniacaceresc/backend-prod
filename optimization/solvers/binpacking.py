@@ -248,7 +248,8 @@ def _agregar_restricciones_generales_binpacking(
         if permite_apilamiento:
             agregar_restricciones_apilabilidad(
                 model, x, datos, pedidos_ids, j, y_truck[j],
-                capacidad.max_positions, capacidad.levels, datos['PALLETS_SCALE']
+                capacidad.max_positions, capacidad.levels, datos['PALLETS_SCALE'],
+                separar_por_valor=effective_config.get("SEPARAR_APILABILIDAD_POR_VALOR", False)
             )
 
         # Restricción de pedidos divididos (misma PO) no van en el mismo camión
