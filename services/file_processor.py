@@ -226,7 +226,10 @@ def _limpiar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
     apilabilidad_cols = ["BASE", "SUPERIOR", "FLEXIBLE", "NO_APILABLE", "SI_MISMO"]
     for col in apilabilidad_cols:
         if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+            df[col] = pd.to_numeric(
+                df[col].astype(str).str.replace(",", ".", regex=False),
+                errors="coerce"
+            ).fillna(0)
         else:
             df[col] = 0.0
 
@@ -449,7 +452,6 @@ def _validar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
     for col in apilabilidad_cols:
         df[f"{col}_VAL"] = df[col].where(es_val, 0.0)
         df[f"{col}_NOVAL"] = df[col].where(~es_val, 0.0)
-    
     if errores:
         raise ValueError(f"Errores de validación:\n" + "\n".join(errores))
     
