@@ -259,6 +259,21 @@ def _limpiar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
         (df["SKU"].notnull())
     ].copy()
     
+    # Antes de filtrar, acumular Cant. Sol. de líneas sin stock por pedido
+    # para que el %NS final considere todas las unidades solicitadas
+    if "Cant. Sol." in df.columns and "PEDIDO" in df.columns:
+        cant_sol_sin_stock = (
+            df[df["PALLETS"] <= 0]
+            .groupby("PEDIDO")["Cant. Sol."]
+            .sum()
+            .rename("_CANT_SOL_SIN_STOCK")
+        )
+        df = df.join(cant_sol_sin_stock, on="PEDIDO")
+        # Propagar el total sin stock a todas las filas del pedido (para que al agrupar se tome bien)
+        df["_CANT_SOL_SIN_STOCK"] = df["_CANT_SOL_SIN_STOCK"].fillna(0)
+    else:
+        df["_CANT_SOL_SIN_STOCK"] = 0.0
+
     # Filtrar filas con pallets = 0
     df = df[df["PALLETS"] > 0].copy()
 
@@ -267,6 +282,10 @@ def _limpiar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
     for col in campos_extra_numericos:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+    # Asegurar que _CANT_SOL_SIN_STOCK sea numérico
+    if "_CANT_SOL_SIN_STOCK" in df.columns:
+        df["_CANT_SOL_SIN_STOCK"] = pd.to_numeric(df["_CANT_SOL_SIN_STOCK"], errors="coerce").fillna(0)
 
     return df
 
@@ -511,10 +530,10 @@ def _agregar_skus_a_pedidos(
     for col in campos_extra_suma:
         if col in df_skus.columns:
             agg_rules[col] = "sum"
-    
-    # Campos extra - promedio
-    if "%NS" in df_skus.columns:
-        agg_rules["%NS"] = "mean"
+
+    # _CANT_SOL_SIN_STOCK: sumar por pedido (solo necesitamos el total una vez)
+    if "_CANT_SOL_SIN_STOCK" in df_skus.columns:
+        agg_rules["_CANT_SOL_SIN_STOCK"] = "sum"
     
     for col in campos_suma:
         if col in df_skus.columns:
@@ -539,6 +558,16 @@ def _agregar_skus_a_pedidos(
 
     # Agrupar por PEDIDO
     df_pedidos = df_skus.groupby("PEDIDO", as_index=False).agg(agg_rules)
+
+    # Recalcular %NS correctamente:
+    # denominador = Cant. Sol. confirmadas + Cant. Sol. de líneas sin stock
+    if "Cant. Sol." in df_pedidos.columns and "CJ Conf." in df_pedidos.columns:
+        cant_sol_sin_stock = df_pedidos.get("_CANT_SOL_SIN_STOCK", 0)
+        cant_sol_total = df_pedidos["Cant. Sol."] + cant_sol_sin_stock
+        df_pedidos["%NS"] = (
+            df_pedidos["CJ Conf."] / cant_sol_total.replace(0, float("nan"))
+        ).fillna(0).clip(0, 1)
+        df_pedidos = df_pedidos.drop(columns=["_CANT_SOL_SIN_STOCK"], errors="ignore")
 
     # Normalizar SUBCLIENTE a "Alvi" o "Rendic"
     if "SUBCLIENTE" in df_pedidos.columns:
