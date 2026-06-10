@@ -132,6 +132,27 @@ class HeightValidator:
             
             return False, errores, None, debug_info
 
+    def _categorias_por_pallet(self, sku) -> list:
+        """
+        Genera lista de categorías para cada pallet completo del SKU,
+        respetando la distribución real (ej: 1 SUPERIOR + 6 SI_MISMO → [SUPERIOR, SI_MISMO, SI_MISMO, ...]).
+        
+        El orden es: NO_APILABLE → BASE → SUPERIOR → SI_MISMO → FLEXIBLE
+        (los más restrictivos primero, para que se coloquen antes en el layout)
+        """
+        categorias = []
+        orden = [
+            ("no_apilable", CategoriaApilamiento.NO_APILABLE),
+            ("base",        CategoriaApilamiento.BASE),
+            ("superior",    CategoriaApilamiento.SUPERIOR),
+            ("si_mismo",    CategoriaApilamiento.SI_MISMO),
+            ("flexible",    CategoriaApilamiento.FLEXIBLE),
+        ]
+        for attr, cat_enum in orden:
+            cantidad = int(getattr(sku, attr, 0))
+            categorias.extend([cat_enum] * cantidad)
+        return categorias
+
     def _extraer_fragmentos_batch(
         self,
         pedidos: List[Pedido]
@@ -210,7 +231,9 @@ class HeightValidator:
                             print(f"[WARN] SKU {sku.sku_id}: sin altura full, usando 100cm")
                         
                         # Pallets completos (full pallet)
-                        for _ in range(pallets_completos):
+                        categorias_lista = self._categorias_por_pallet(sku)
+                        for i in range(pallets_completos):
+                            cat = categorias_lista[i] if i < len(categorias_lista) else CategoriaApilamiento(sku.categoria_apilamiento_dominante)
                             frag = FragmentoSKU(
                                 sku_id=sku.sku_id,
                                 pedido_id=pedido.pedido,
@@ -218,13 +241,19 @@ class HeightValidator:
                                 altura_cm=altura_full_usar,
                                 peso_kg=sku.peso_kg / cantidad_pallets,
                                 volumen_m3=sku.volumen_m3 / cantidad_pallets,
-                                categoria=CategoriaApilamiento(sku.categoria_apilamiento_dominante),
+                                categoria=cat,
                                 max_altura_apilable_cm=sku.max_altura_apilable_cm,
                                 descripcion=sku.descripcion,
-                                es_picking=False,
-                                es_valioso=sku.valioso
+                                es_picking=False
                             )
                             fragmentos.append(frag)
+                        
+                        # Categoría del picking: la siguiente en la lista tras los pallets completos
+                        cat_picking = (
+                            categorias_lista[pallets_completos]
+                            if pallets_completos < len(categorias_lista)
+                            else CategoriaApilamiento(sku.categoria_apilamiento_dominante)
+                        )
                         
                         # PICKING: fracción sobrante
                         if fraccion_picking > 0.01:
@@ -245,7 +274,7 @@ class HeightValidator:
                                 altura_cm=altura_picking,
                                 peso_kg=sku.peso_kg * fraccion_picking / cantidad_pallets,
                                 volumen_m3=sku.volumen_m3 * fraccion_picking / cantidad_pallets,
-                                categoria=CategoriaApilamiento(sku.categoria_apilamiento_dominante),
+                                categoria=cat_picking,
                                 max_altura_apilable_cm=sku.max_altura_apilable_cm,
                                 descripcion=sku.descripcion,
                                 es_picking=True,

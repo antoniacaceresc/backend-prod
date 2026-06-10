@@ -181,7 +181,6 @@ def _process_dataframe_con_skus(
         altura_maxima = truck_types['paquetera'].get('altura_cm', 270)
         
     df_skus = _optimizar_apilabilidad_skus(df_skus, altura_maxima)
-    
     # 3. Validar datos de SKU
     df_skus = _validar_datos_skus(df_skus)
     
