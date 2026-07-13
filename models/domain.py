@@ -20,6 +20,7 @@ class TruckCapacity:
     levels: int = 2
     vcu_min: float = 0.85
     altura_cm: float = 270
+    cap_volume_vcu: float = None
     
     @classmethod
     def from_config(cls, config_dict: Dict[str, Any]) -> TruckCapacity:
@@ -31,13 +32,20 @@ class TruckCapacity:
             max_pallets=int(config_dict.get('max_pallets', 60)),
             levels=int(config_dict.get('levels', 2)),
             vcu_min=float(config_dict.get('vcu_min', 0.85)),
-            altura_cm=float(config_dict.get('altura_cm', 270))
+            altura_cm=float(config_dict.get('altura_cm', 270)),
+            cap_volume_vcu=float(config_dict['cap_volume_vcu']) if 'cap_volume_vcu' in config_dict else None
+
         )
+    
+    @property
+    def volume_for_vcu(self) -> float:
+        """Volumen denominador para cálculo de VCU (puede diferir del límite de capacidad)."""
+        return self.cap_volume_vcu if self.cap_volume_vcu is not None else self.cap_volume
     
     def calcular_vcu(self, peso: float, volumen: float) -> tuple[float, float, float]:
         """Calcula VCU de peso, volumen y máximo para valores dados"""
         vcu_peso = peso / self.cap_weight if self.cap_weight > 0 else 0.0
-        vcu_vol = volumen / self.cap_volume if self.cap_volume > 0 else 0.0
+        vcu_vol = volumen / self.volume_for_vcu if self.volume_for_vcu > 0 else 0.0
         vcu_max = max(vcu_peso, vcu_vol)
         return vcu_peso, vcu_vol, vcu_max
     
@@ -50,7 +58,8 @@ class TruckCapacity:
             levels=1,  # Sin apilamiento = 1 nivel
             vcu_min=self.vcu_min,
             max_pallets=self.max_positions,  # Solo posiciones base
-            altura_cm=self.altura_cm
+            altura_cm=self.altura_cm,
+            cap_volume_vcu=self.cap_volume_vcu
         )
 
 
@@ -659,7 +668,7 @@ class Camion:
         """VCU de volumen (calculado on-demand, cacheado)"""
         if self._vcu_vol is None:
             total_vol = sum(p.volumen for p in self.pedidos)
-            self._vcu_vol = total_vol / self.capacidad.cap_volume if self.capacidad.cap_volume > 0 else 0.0
+            self._vcu_vol = total_vol / self.capacidad.volume_for_vcu if self.capacidad.volume_for_vcu > 0 else 0.0
         return self._vcu_vol
     
     @property
@@ -991,7 +1000,8 @@ class Camion:
             max_pallets=self.max_positions,  # Solo 1 nivel
             levels=1,
             vcu_min=self.vcu_min,
-            altura_cm=self.altura_cm
+            altura_cm=self.altura_cm,
+            cap_volume_vcu=self.cap_volume_vcu
         )
 
 
@@ -1008,7 +1018,7 @@ class Camion:
         pedidos_dicts = [
             p.to_api_dict_fast(
                 vcu_peso=p.peso / self.capacidad.cap_weight,
-                vcu_vol=p.volumen / self.capacidad.cap_volume
+                vcu_vol=p.volumen / self.capacidad.volume_for_vcu
             )
             for p in self.pedidos
         ]

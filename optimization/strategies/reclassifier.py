@@ -140,7 +140,7 @@ class NestleReclassifier:
         
         if cabe_en_rampla:
             vcu_peso_rampla = peso_total / cap_rampla.cap_weight if cap_rampla.cap_weight > 0 else 0
-            vcu_vol_rampla = volumen_total / cap_rampla.cap_volume if cap_rampla.cap_volume > 0 else 0
+            vcu_vol_rampla = volumen_total / cap_rampla.volume_for_vcu if cap_rampla.volume_for_vcu > 0 else 0
             vcu_max_rampla = max(vcu_peso_rampla, vcu_vol_rampla)
             
             if vcu_max_rampla >= cap_rampla.vcu_min:
@@ -187,7 +187,7 @@ class NestleReclassifier:
             
             # Verificar que cumple VCU target
             vcu_peso_rampla = peso_total / cap_rampla.cap_weight if cap_rampla.cap_weight > 0 else 0
-            vcu_vol_rampla = volumen_total / cap_rampla.cap_volume if cap_rampla.cap_volume > 0 else 0
+            vcu_vol_rampla = volumen_total / cap_rampla.volume_for_vcu if cap_rampla.volume_for_vcu > 0 else 0
             vcu_max_rampla = max(vcu_peso_rampla, vcu_vol_rampla)
             
             if vcu_max_rampla >= cap_rampla.vcu_min:
@@ -272,7 +272,7 @@ class NestleReclassifier:
                 'altura_maxima_usada_cm': round(layout.altura_maxima_usada, 1),
                 'altura_promedio_usada': round(layout.altura_promedio_usada, 1),
                 'posiciones_usadas': layout.posiciones_usadas,
-                'posiciones_disponibles': cap_rampla.max_positions,
+                'posiciones_disponibles': cap_rampla.max_positions - layout.posiciones_usadas,
                 'total_pallets_fisicos': layout.total_pallets,
                 'aprovechamiento_altura': round(layout.aprovechamiento_altura * 100, 1),
                 'aprovechamiento_posiciones': round((layout.posiciones_usadas / cap_rampla.max_positions) * 100, 1),

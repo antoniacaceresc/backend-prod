@@ -301,7 +301,7 @@ class PostValidationAdjuster:
         
         cap = camion.capacidad
         vcu_peso = peso_rest / cap.cap_weight if cap.cap_weight > 0 else 0
-        vcu_vol = vol_rest / cap.cap_volume if cap.cap_volume > 0 else 0
+        vcu_vol = vol_rest / cap.volume_for_vcu if cap.volume_for_vcu > 0 else 0
         
         return max(vcu_peso, vcu_vol) >= cap.vcu_min
     
