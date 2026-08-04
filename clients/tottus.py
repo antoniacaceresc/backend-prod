@@ -23,6 +23,7 @@ class TottusConfig:
             "FLEXIBLE": "Flexible",
             "NO_APILABLE": "No Apilable",
             "SI_MISMO": "Apilable si mismo",
+            "PDQ": "PDQ",
             "SKU": "SKU",
             "ALTURA_PICKING": "Altura Picking",
             "ALTURA_FULL_PALLET": "Altura full Pallet",

@@ -244,7 +244,8 @@ class HeightValidator:
                                 categoria=cat,
                                 max_altura_apilable_cm=sku.max_altura_apilable_cm,
                                 descripcion=sku.descripcion,
-                                es_picking=False
+                                es_picking=False,
+                                es_valioso=sku.valioso,
                             )
                             fragmentos.append(frag)
                         
