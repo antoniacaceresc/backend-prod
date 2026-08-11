@@ -49,6 +49,8 @@ class FragmentoSKU:
     max_altura_apilable_cm: Optional[float] = None  # Solo para SI_MISMO
 
     es_valioso: bool = False
+    cajas: float = 0.0  # Cajas confirmadas de este fragmento
+    flujo: Optional[str] = None   # "INV" | "CRR" | (None = no aplica)
     
     # Metadata
     descripcion: Optional[str] = None
@@ -235,6 +237,12 @@ class PosicionCamion:
         inferior_val = any(f.es_valioso for f in self.pallets_apilados[-1].fragmentos)
         if entrante_val != inferior_val:
             return False, "No se permite apilar pallets valiosos con no-valiosos"
+
+        # 2c. Regla Tottus: no mezclar flujos en misma posición
+        flujos_entrantes = {f.flujo for f in pallet.fragmentos if f.flujo}
+        flujos_inferior = {f.flujo for f in self.pallets_apilados[-1].fragmentos if f.flujo}
+        if flujos_entrantes and flujos_inferior and flujos_entrantes != flujos_inferior:
+            return False, f"No se pueden mezclar flujos en misma posición: {flujos_entrantes} vs {flujos_inferior}"
         
         # 3. Validar reglas de apilamiento con pallet inferior
         pallet_inferior = self.pallets_apilados[-1]
@@ -259,10 +267,17 @@ class PosicionCamion:
         Returns:
             (es_valido, razon_si_no)
         """
+        # Cencosud: No apilar valiosos con no valiosos
         inf_val = any(f.es_valioso for f in inferior.fragmentos)
         sup_val = any(f.es_valioso for f in superior.fragmentos)
         if inf_val != sup_val:
             return False, "No se permite apilar pallets valiosos con no-valiosos"
+
+        # Tottus: no mezclar flujos en la misma posición
+        flujos_inf = {f.flujo for f in inferior.fragmentos if f.flujo}
+        flujos_sup = {f.flujo for f in superior.fragmentos if f.flujo}
+        if flujos_inf and flujos_sup and flujos_inf != flujos_sup:
+            return False, f"No se pueden mezclar flujos en misma posición: {flujos_inf} vs {flujos_sup}"
         
         # Obtener categorías dominantes
         cat_inf = self._categoria_dominante(inferior)
@@ -509,6 +524,8 @@ class LayoutCamion:
                                     'categoria': f.categoria.value,
                                     'es_picking': f.es_picking,
                                     'es_valioso': f.es_valioso,
+                                    'flujo': f.flujo,
+                                    "cajas_conf": f.cajas_conf,
                                 }
                                 for f in pallet.fragmentos
                             ]

@@ -14,6 +14,7 @@ from models.domain import Camion, Pedido, TruckCapacity, TipoCamion
 from models.enums import TipoRuta
 from optimization.validation.height_validator import HeightValidator
 from optimization.utils.helpers import calcular_posiciones_apilabilidad
+from optimization.validation.layout_serialization import metricas_layout
 
 
 # Flag para activar/desactivar prints de debug
@@ -58,6 +59,7 @@ class PostValidationAdjuster:
         self.venta = venta
         self.permite_consolidacion = False
         self.max_skus_por_pallet = 1
+        self.flujo_config: dict = {}
     
     def ajustar_camiones(
         self,
@@ -78,6 +80,7 @@ class PostValidationAdjuster:
         if effective_config:
             self.permite_consolidacion = effective_config.get('PERMITE_CONSOLIDACION', False)
             self.max_skus_por_pallet = effective_config.get('MAX_SKUS_POR_PALLET', 1)
+            self.flujo_config = effective_config.get('FLUJO_CONFIG', {}) or {}
 
         # Identificar camiones inválidos
         camiones_invalidos = [
@@ -341,6 +344,7 @@ class PostValidationAdjuster:
             max_skus_por_pallet=consolidacion.get("MAX_SKUS_POR_PALLET", self.max_skus_por_pallet),
             max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM"),
             altura_maxima_mismo_sku_cm=altura_maxima_mismo_sku_cm,
+            flujo_config=self.flujo_config,
         )
         
         es_valido, errores, layout, debug_info = validator.validar_camion_rapido(cam)
@@ -355,52 +359,9 @@ class PostValidationAdjuster:
         
         if layout is not None:
             cam.pos_total = layout.posiciones_usadas
-            nuevo_layout_info.update({
-                'posiciones_usadas': layout.posiciones_usadas,
-                'posiciones_disponibles': layout.posiciones_disponibles,
-                'altura_maxima_cm': layout.altura_maxima_cm,
-                'total_pallets_fisicos': layout.total_pallets,
-                'altura_maxima_usada_cm': round(layout.altura_maxima_usada, 1),
-                'altura_promedio_usada': round(layout.altura_promedio_usada, 1),
-                'aprovechamiento_altura': round(layout.aprovechamiento_altura * 100, 1),
-                'aprovechamiento_posiciones': round(layout.aprovechamiento_posiciones * 100, 1),
-                'posiciones': self._serializar_posiciones(layout)
-            })
+            nuevo_layout_info.update(metricas_layout(layout))
         
         cam.metadata['layout_info'] = nuevo_layout_info
-    
-    def _serializar_posiciones(self, layout) -> List[Dict[str, Any]]:
-        """Serializa las posiciones del layout a diccionarios."""
-        return [
-            {
-                'id': pos.id,
-                'altura_usada_cm': pos.altura_usada_cm,
-                'altura_disponible_cm': pos.espacio_disponible_cm,
-                'num_pallets': pos.num_pallets,
-                'pallets': [
-                    {
-                        'id': pallet.id,
-                        'nivel': pallet.nivel,
-                        'altura_cm': pallet.altura_total_cm,
-                        'skus': [
-                            {
-                                'sku_id': frag.sku_id,
-                                'pedido_id': frag.pedido_id,
-                                'altura_cm': frag.altura_cm,
-                                'categoria': frag.categoria.value,
-                                'es_picking': frag.es_picking,
-                                'es_valioso': frag.es_valioso,
-                                'descripcion': frag.descripcion 
-                            }
-                            for frag in pallet.fragmentos
-                        ]
-                    }
-                    for pallet in pos.pallets_apilados
-                ]
-            }
-            for pos in layout.posiciones
-            if not pos.esta_vacia
-        ]
 
 
 class PedidoRecovery:

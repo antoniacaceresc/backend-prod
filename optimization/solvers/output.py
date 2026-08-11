@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from models.domain import Pedido, Camion, TruckCapacity, ConfiguracionGrupo
 from models.enums import TipoCamion
 from optimization.utils.helpers import calcular_posiciones_apilabilidad
+from optimization.utils.helpers import pedido_a_dict_excluido
 
 def construir_camiones_desde_solver(
     solver: cp_model.CpSolver,
@@ -94,7 +95,7 @@ def construir_camiones_desde_solver(
     # Pedidos excluidos
     pedidos_excluidos_ids = [pid for pid in pedidos_ids if pid not in pedidos_incluidos_ids]
     pedidos_excluidos = [
-        _pedido_a_dict_excluido(pedidos_map[pid], capacidad)
+        pedido_a_dict_excluido(pedidos_map[pid], capacidad)
         for pid in pedidos_excluidos_ids
     ]
     
@@ -134,24 +135,6 @@ def _pedido_a_dict_asignado(pedido: Pedido, camion: Camion, capacidad: TruckCapa
         'LOTE_DIR': int(pedido.lote_dir),
         'PO': pedido.po,
         'OC': pedido.oc,
-        'PALLETS': pedido.pallets,
-        'VALOR': pedido.valor,
-        **pedido.metadata
-    }
-
-
-def _pedido_a_dict_excluido(pedido: Pedido, capacidad: TruckCapacity) -> Dict[str, Any]:
-    """Convierte pedido excluido a dict para salida"""
-    vcu_peso, vcu_vol, _ = pedido.calcular_vcu(capacidad)
-    
-    return {
-        'PEDIDO': pedido.pedido,
-        'CE': pedido.ce,
-        'CD': pedido.cd,
-        'OC': pedido.oc,
-        'VCU_VOL': vcu_vol,
-        'VCU_PESO': vcu_peso,
-        'PO': pedido.po,
         'PALLETS': pedido.pallets,
         'VALOR': pedido.valor,
         **pedido.metadata

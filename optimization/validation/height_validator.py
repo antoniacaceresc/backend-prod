@@ -39,6 +39,8 @@ class HeightValidator:
         max_skus_por_pallet: int = 3,
         max_altura_picking_apilado_cm: float = None,
         altura_maxima_mismo_sku_cm: Optional[float] = None,
+        flujo_config: Optional[dict] = None,
+        separar_por_flujo: bool = False,
     ):
         """
         Args:
@@ -51,6 +53,8 @@ class HeightValidator:
         self.max_skus_por_pallet = max_skus_por_pallet
         self.max_altura_picking_apilado_cm = max_altura_picking_apilado_cm
         self.altura_maxima_mismo_sku_cm: Optional[float] = altura_maxima_mismo_sku_cm
+        self.flujo_config: dict = flujo_config or {}
+        self.separar_por_flujo = separar_por_flujo
 
     
     def validar_camion_rapido(
@@ -210,7 +214,9 @@ class HeightValidator:
                                 max_altura_apilable_cm=sku.max_altura_apilable_cm,
                                 descripcion=sku.descripcion,
                                 es_picking=True,
-                                es_valioso=sku.valioso
+                                es_valioso=sku.valioso,
+                                flujo=pedido.oc,
+                                cajas=sku.cajas_conf,
                             )
                             fragmentos.append(frag)
                             continue
@@ -246,6 +252,8 @@ class HeightValidator:
                                 descripcion=sku.descripcion,
                                 es_picking=False,
                                 es_valioso=sku.valioso,
+                                flujo=pedido.oc,
+                                cajas=sku.cajas_conf / cantidad_pallets,
                             )
                             fragmentos.append(frag)
                         
@@ -280,6 +288,8 @@ class HeightValidator:
                                 descripcion=sku.descripcion,
                                 es_picking=True,
                                 es_valioso=sku.valioso,
+                                flujo=pedido.oc,
+                                cajas=sku.cajas_conf * fraccion_picking / cantidad_pallets,
                             )
                             fragmentos.append(frag_picking)
                     
@@ -332,7 +342,9 @@ class HeightValidator:
             max_altura_apilable_cm=None,
             descripcion=f"Pedido legacy {pedido.pedido}",
             es_picking=False,
-            es_valioso=pedido.valioso
+            es_valioso=pedido.valioso,
+            flujo=pedido.oc,
+            cajas=getattr(pedido, 'cajas_conf', 0.0),
         )
     
     def _agrupar_por_categoria(
@@ -510,7 +522,13 @@ class HeightValidator:
                     pos_val = any(f.es_valioso for p in posicion.pallets_apilados for f in p.fragmentos)
                     if frag.es_valioso != pos_val:
                         continue
-                    
+
+                    # Regla Tottus: no mezclar flujos en misma posición
+                    if frag.flujo:
+                        flujos_pos = {f.flujo for p in posicion.pallets_apilados for f in p.fragmentos if f.flujo}
+                        if flujos_pos and frag.flujo not in flujos_pos:
+                            continue
+
                     # Crear nuevo pallet en esta posición
                     pallet_nuevo = PalletFisico(
                         id=f"pallet_{pallet_id_counter}",
@@ -565,6 +583,12 @@ class HeightValidator:
                             existente_val = any(f.es_valioso for f in pallet_existente.fragmentos)
                             if frag.es_valioso != existente_val:
                                 continue
+
+                            # Regla Tottus: no mezclar flujos
+                            if frag.flujo:
+                                flujos_existente = {f.flujo for f in pallet_existente.fragmentos if f.flujo}
+                                if flujos_existente and frag.flujo not in flujos_existente:
+                                    continue
 
                             altura_nueva_total = frag.altura_cm + pallet_existente.altura_total_cm
                             if altura_nueva_total <= posicion.altura_maxima_cm:
@@ -802,20 +826,39 @@ class HeightValidator:
         
         Reglas:
         - Si NO permite consolidación:
-          - Solo 1 SKU por pallet físico
-          - Pickings NO pueden consolidarse con nada
+        - Solo 1 SKU por pallet físico
+        - Pickings NO pueden consolidarse con nada
         - Si SÍ permite consolidación:
-          - Máximo N SKUs diferentes por pallet
-          - Solo pickings del mismo tipo de apilamiento
+        - Máximo N SKUs diferentes por pallet
+        - Solo pickings del mismo tipo de apilamiento
+        - Tottus: no consolidar flujos distintos + respetar altura/max_skus por flujo
         """
         # Si pallet vacío, siempre se puede agregar
         if not pallet.fragmentos:
             return True
-        
+
+        # Regla Tottus: no mezclar flujos en un mismo pallet físico
+        if fragmento.flujo:
+            flujos_pallet = {f.flujo for f in pallet.fragmentos if f.flujo}
+            if flujos_pallet and fragmento.flujo not in flujos_pallet:
+                return False
+
+        # Regla Tottus: altura máxima por flujo
+        flujo_cfg = self.flujo_config.get(fragmento.flujo, {}) if fragmento.flujo else {}
+        altura_max_flujo = flujo_cfg.get("ALTURA_MAX_PALLET_CM")
+        if altura_max_flujo and (pallet.altura_total_cm + fragmento.altura_cm) > altura_max_flujo:
+            return False
+
+        # Regla Tottus: max SKUs por flujo (solo aplica cuando el fragmento aporta un SKU nuevo)
+        max_skus_flujo = flujo_cfg.get("MAX_SKUS_POR_PALLET")
+        if max_skus_flujo and fragmento.sku_id not in pallet.skus_unicos:
+            if len(pallet.skus_unicos) >= max_skus_flujo:
+                return False
+
         # Solo permitir mismo SKU en full pallets
         if fragmento.sku_id not in pallet.skus_unicos:
             return False
-            
+
         return True
 
     def _validar_altura_picking_posicion(self, posicion: PosicionCamion) -> tuple[bool, float]:

@@ -19,6 +19,7 @@ from models.domain import Camion, Pedido, TruckCapacity
 from optimization.validation.truck_validator import TruckValidator
 from optimization.validation.adjustment import PostValidationAdjuster, PedidoRecovery, AdjustmentResult
 from optimization.validation.greedy_injection import inyectar_pedidos_greedy
+from optimization.utils.helpers import detectar_alertas_picking_camion
 
 
 # Flag para activar/desactivar prints de debug
@@ -230,7 +231,7 @@ class ValidationCycle:
         # Actualizar alertas de picking post-validación (SMU)
         if self.effective_config.get('PROHIBIR_PICKING_DUPLICADO', False):
             for camion in camiones:
-                self._actualizar_alertas_picking_camion(camion)
+                detectar_alertas_picking_camion(camion)
 
         return ValidationCycleResult(
             camiones_validos=all_camiones,
@@ -238,41 +239,6 @@ class ValidationCycle:
             pedidos_no_recuperados=pedidos_removidos,
             iteraciones=intento
         )
-
-
-    def _actualizar_alertas_picking_camion(self, camion: Camion) -> None:
-        """
-        Detecta y asigna alertas de picking duplicado basándose en los pedidos ACTUALES.
-        """
-        from collections import defaultdict
-        
-        alertas = []
-        skus_picking: dict = defaultdict(list)
-        
-        for pedido in camion.pedidos:
-            if not hasattr(pedido, 'skus') or not pedido.skus:
-                continue
-            
-            for sku in pedido.skus:
-                # Solo pickings (cantidad fraccionaria)
-                if sku.cantidad_pallets % 1 > 0.001:
-                    skus_picking[sku.sku_id].append((pedido.pedido, sku.cantidad_pallets))
-        
-        for sku_id, pedidos_info in skus_picking.items():
-            if len(pedidos_info) > 1:
-                alertas.append({
-                    'tipo': 'PICKING_DUPLICADO',
-                    'sku_id': sku_id,
-                    'pedidos': [
-                        {'pedido_id': pid, 'cajas': round(cant, 3)}
-                        for pid, cant in pedidos_info
-                    ]
-                })
-        
-        if alertas:
-            camion.metadata['alertas_picking'] = alertas
-        elif 'alertas_picking' in camion.metadata:
-            del camion.metadata['alertas_picking']
 
 
 # Función de conveniencia para uso simple

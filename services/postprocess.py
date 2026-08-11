@@ -22,6 +22,8 @@ from optimization.utils.helpers import calcular_posiciones_apilabilidad
 from core.config import get_client_config
 from optimization.validation.height_validator import HeightValidator
 from optimization.validation import TruckValidator
+from optimization.utils.helpers import detectar_alertas_picking_camion
+
 
 
 # ============================================================================
@@ -168,6 +170,7 @@ def _pedido_from_dict(p_dict: Dict[str, Any]) -> Pedido:
                 max_altura_apilable_cm=float(sku_dict["max_altura_apilable_cm"]) if sku_dict.get("max_altura_apilable_cm") else None,
                 descripcion=sku_dict.get("descripcion"),
                 valioso=bool(sku_dict.get("valioso", False)),
+                cajas_conf=float(sku_dict.get("cajas_conf", 0) or 0),
             )
             skus.append(sku)
     
@@ -702,6 +705,7 @@ def _validar_altura_pre_agregar(
         max_skus_por_pallet=consolidacion["MAX_SKUS_POR_PALLET"],
         max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM"),
         altura_maxima_mismo_sku_cm=altura_maxima_mismo_sku_cm,
+        flujo_config=effective.get("FLUJO_CONFIG", {})
     )
     
     # Ejecutar validación
@@ -1040,35 +1044,11 @@ def _actualizar_alertas_picking_camion(camion: Camion, config, venta: str = None
     """
     Detecta y asigna alertas de picking duplicado a un camión específico.
     """
-    from collections import defaultdict
     
     effective = _get_effective_config_para_postprocess(config, [camion], venta)
     if not effective.get('PROHIBIR_PICKING_DUPLICADO', False):
         return
+    detectar_alertas_picking_camion(camion)
     
-    alertas = []
-    skus_picking: Dict[str, List[tuple]] = defaultdict(list)
     
-    for pedido in camion.pedidos:
-        if not hasattr(pedido, 'skus') or not pedido.skus:
-            continue
-        
-        for sku in pedido.skus:
-            if sku.cantidad_pallets % 1 > 0.001:
-                skus_picking[sku.sku_id].append((pedido.pedido, sku.cantidad_pallets))
-    
-    for sku_id, pedidos_info in skus_picking.items():
-        if len(pedidos_info) > 1:
-            alertas.append({
-                'tipo': 'PICKING_DUPLICADO',
-                'sku_id': sku_id,
-                'pedidos': [
-                    {'pedido_id': pid, 'cajas': round(cant, 3)}
-                    for pid, cant in pedidos_info
-                ]
-            })
-    
-    if alertas:
-        camion.metadata['alertas_picking'] = alertas
-    elif 'alertas_picking' in camion.metadata:
-        del camion.metadata['alertas_picking']  # Limpiar si ya no hay conflictos
+

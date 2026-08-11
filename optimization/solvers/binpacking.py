@@ -20,6 +20,7 @@ from optimization.solvers.constraints import (
     agregar_restricciones_crr_walmart)
 from optimization.utils.helpers import preparar_datos_solver, heuristica_ffd
 from optimization.solvers.output import construir_camiones_desde_solver
+from optimization.utils.helpers import pedido_a_dict_excluido
 
 
 def optimizar_grupo_binpacking(
@@ -76,7 +77,7 @@ def optimizar_grupo_binpacking(
             'status': 'NO_SOLUTION',
             'pedidos_asignados_ids': [],
             'pedidos_asignados': [],
-            'pedidos_excluidos': [_pedido_a_dict_excluido(p, capacidad) for p in pedidos_inviables],
+            'pedidos_excluidos': [pedido_a_dict_excluido(p, capacidad) for p in pedidos_inviables],
             'camiones': []
         }
     
@@ -153,7 +154,7 @@ def optimizar_grupo_binpacking(
 
         # Agregar inviables a excluidos
         if pedidos_inviables:
-            excluidos_inviables = [_pedido_a_dict_excluido(p, capacidad) for p in pedidos_inviables]
+            excluidos_inviables = [pedido_a_dict_excluido(p, capacidad) for p in pedidos_inviables]
             resultado['pedidos_excluidos'].extend(excluidos_inviables)
         
         return resultado
@@ -161,9 +162,9 @@ def optimizar_grupo_binpacking(
     else:
 
         # Incluir tanto los que no se asignaron como los inviables
-        todos_excluidos = [_pedido_a_dict_excluido(p, capacidad) for p in pedidos]
+        todos_excluidos = [pedido_a_dict_excluido(p, capacidad) for p in pedidos]
         if pedidos_inviables:
-            todos_excluidos.extend([_pedido_a_dict_excluido(p, capacidad) for p in pedidos_inviables])
+            todos_excluidos.extend([pedido_a_dict_excluido(p, capacidad) for p in pedidos_inviables])
         
         return {
             'status': estado,
@@ -257,45 +258,3 @@ def _agregar_restricciones_generales_binpacking(
         agregar_restriccion_misma_po_diferente_camion(
             model, x, datos, pedidos_ids, n_cam
         )
-
-        
-
-
-def _pedido_a_dict_excluido(pedido: Pedido, capacidad: TruckCapacity) -> Dict[str, Any]:
-    vcu_peso, vcu_vol, _ = pedido.calcular_vcu(capacidad)
-    
-    # Serializar SKUs si existen
-    skus_serializados = []
-    if pedido.tiene_skus:
-        for sku in pedido.skus:
-            skus_serializados.append({
-                "sku_id": sku.sku_id,
-                "pedido_id": sku.pedido_id,
-                "cantidad_pallets": sku.cantidad_pallets,
-                "altura_full_pallet_cm": sku.altura_full_pallet_cm,
-                "altura_picking_cm": sku.altura_picking_cm,
-                "peso_kg": sku.peso_kg,
-                "volumen_m3": sku.volumen_m3,
-                "valor": sku.valor,
-                "base": sku.base,
-                "superior": sku.superior,
-                "flexible": sku.flexible,
-                "no_apilable": sku.no_apilable,
-                "si_mismo": sku.si_mismo,
-                "max_altura_apilable_cm": sku.max_altura_apilable_cm,
-                "descripcion": sku.descripcion,
-            })
-    
-    return {
-        'PEDIDO': pedido.pedido,
-        'CE': pedido.ce,
-        'CD': pedido.cd,
-        'OC': pedido.oc,
-        'VCU_VOL': vcu_vol,
-        'VCU_PESO': vcu_peso,
-        'PO': pedido.po,
-        'PALLETS': pedido.pallets,
-        'VALOR': pedido.valor,
-        'SKUS': skus_serializados,   # ← NUEVO
-        **pedido.metadata
-    }

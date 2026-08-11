@@ -63,6 +63,9 @@ def get_effective_config(client_config, venta: str = None) -> dict:
             # Configuración por subcliente (SMU)
             "SUBCLIENTE_CONFIG": channel.get("SUBCLIENTE_CONFIG", {}),
 
+            "SEPARAR_APILABILIDAD_POR_FLUJO": channel.get("SEPARAR_APILABILIDAD_POR_FLUJO", False),
+            "FLUJO_CONFIG": channel.get("FLUJO_CONFIG", {}),
+
             # Camiones y rutas
             "TRUCK_TYPES": channel.get("TRUCK_TYPES", getattr(client_config, 'TRUCK_TYPES', {})),
             "RUTAS_POSIBLES": channel.get("RUTAS_POSIBLES", getattr(client_config, 'RUTAS_POSIBLES', {})),
@@ -86,6 +89,8 @@ def get_effective_config(client_config, venta: str = None) -> dict:
         "ALTURA_MAX_PICKING_APILADO_CM": getattr(client_config, 'ALTURA_MAX_PICKING_APILADO_CM', None),
         "CDS_SIN_APILAMIENTO": getattr(client_config, 'CDS_SIN_APILAMIENTO', []),
         "SEPARAR_APILABILIDAD_POR_VALOR": getattr(client_config, 'SEPARAR_APILABILIDAD_POR_VALOR', False),
+        "SEPARAR_APILABILIDAD_POR_FLUJO": getattr(client_config, 'SEPARAR_APILABILIDAD_POR_FLUJO', False),
+        "FLUJO_CONFIG": getattr(client_config, 'FLUJO_CONFIG', {}),
         "ALVI_ALTURA_MAX_CM": getattr(client_config, 'ALVI_ALTURA_MAX_CM', 230),
         "ALVI_ELIMINAR_SKU_DUPLICADO": getattr(client_config, 'ALVI_ELIMINAR_SKU_DUPLICADO', False),
         "ALVI_FLUJOS_SEPARADOS": getattr(client_config, 'ALVI_FLUJOS_SEPARADOS', False),

@@ -15,6 +15,7 @@ from typing import List, Optional, Dict, Any
 from models.domain import Camion, TruckCapacity
 from models.enums import TipoCamion
 from optimization.validation.height_validator import HeightValidator
+from optimization.validation.layout_serialization import construir_layout_info
 
 
 # Flag para activar/desactivar prints de debug
@@ -63,6 +64,7 @@ class BackhaulAdherenceManager:
         # Se inicializarán en aplicar_adherencia con effective_config
         self.permite_consolidacion = False
         self.max_skus_por_pallet = 1
+        self.flujo_config: dict = {}
     
     def aplicar_adherencia(
         self,
@@ -84,6 +86,7 @@ class BackhaulAdherenceManager:
         if effective_config:
             self.permite_consolidacion = effective_config.get('PERMITE_CONSOLIDACION', False)
             self.max_skus_por_pallet = effective_config.get('MAX_SKUS_POR_PALLET', 1)
+            self.flujo_config = effective_config.get('FLUJO_CONFIG', {}) or {}
 
         from utils.config_helpers import get_capacity_for_type
         
@@ -211,7 +214,8 @@ class BackhaulAdherenceManager:
         validator = HeightValidator(
             altura_maxima_cm=cap_a_usar.altura_cm,
             permite_consolidacion=self.permite_consolidacion,
-            max_skus_por_pallet=self.max_skus_por_pallet
+            max_skus_por_pallet=self.max_skus_por_pallet,
+            flujo_config=self.flujo_config,
         )
         
         es_valido, errores, layout, debug_info = validator.validar_camion_rapido(cam)
@@ -248,53 +252,13 @@ class BackhaulAdherenceManager:
         if layout is None:
             return
         
-        cam.metadata['layout_info'] = {
-            'altura_validada': True,
-            'errores_validacion': [],
-            'fragmentos_fallidos': debug_info.get('fragmentos_fallidos', []) if debug_info else [],
-            'fragmentos_totales': debug_info.get('fragmentos_totales', 0) if debug_info else 0,
-            'posiciones_usadas': layout.posiciones_usadas,
-            'posiciones_disponibles': layout.posiciones_disponibles,
-            'altura_maxima_cm': layout.altura_maxima_cm,
-            'total_pallets_fisicos': layout.total_pallets,
-            'altura_maxima_usada_cm': round(layout.altura_maxima_usada, 1),
-            'altura_promedio_usada': round(layout.altura_promedio_usada, 1),
-            'aprovechamiento_altura': round(layout.aprovechamiento_altura * 100, 1),
-            'aprovechamiento_posiciones': round(layout.aprovechamiento_posiciones * 100, 1),
-            'posiciones': self._serializar_posiciones(layout)
-        }
-    
-    def _serializar_posiciones(self, layout) -> List[Dict[str, Any]]:
-        """Serializa las posiciones del layout a diccionarios."""
-        return [
-            {
-                'id': pos.id,
-                'altura_usada_cm': pos.altura_usada_cm,
-                'altura_disponible_cm': pos.espacio_disponible_cm,
-                'num_pallets': pos.num_pallets,
-                'pallets': [
-                    {
-                        'id': pallet.id,
-                        'nivel': pallet.nivel,
-                        'altura_cm': pallet.altura_total_cm,
-                        'skus': [
-                            {
-                                'sku_id': frag.sku_id,
-                                'pedido_id': frag.pedido_id,
-                                'altura_cm': frag.altura_cm,
-                                'categoria': frag.categoria.value,
-                                'es_picking': frag.es_picking,
-                                'es_valioso': frag.es_valioso,
-                            }
-                            for frag in pallet.fragmentos
-                        ]
-                    }
-                    for pallet in pos.pallets_apilados
-                ]
-            }
-            for pos in layout.posiciones
-            if not pos.esta_vacia
-        ]
+        cam.metadata['layout_info'] = construir_layout_info(
+            layout,
+            extras={
+                'fragmentos_fallidos': debug_info.get('fragmentos_fallidos', []) if debug_info else [],
+                'fragmentos_totales': debug_info.get('fragmentos_totales', 0) if debug_info else 0,
+            },
+        )
 
 
 # Función de conveniencia

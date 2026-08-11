@@ -80,6 +80,7 @@ class SKU:
     peso_kg: float = 0.0  # Columna: "Peso neto Conf." (a nivel SKU)
     volumen_m3: float = 0.0  # Columna: "Vol. Conf." (a nivel SKU)
     valor: float = 0.0  # Columna: "$$ Conf." (a nivel SKU)
+    cajas_conf: float = 0.0  # Columna: "CJ Conf." (a nivel SKU)
     
     # Apilabilidad (en pallets, no booleano)
     # Estas columnas indican CUÁNTOS pallets de este SKU tienen esta característica
@@ -170,6 +171,7 @@ class SKU:
             descripcion=self.descripcion,
             es_picking=self.es_picking,
             es_valioso=self.valioso,
+            cajas=self.cajas_conf * fraccion,
         )
     
     def validar_integridad(self) -> tuple[bool, Optional[str]]:
@@ -547,6 +549,7 @@ class Pedido:
                     "max_altura_apilable_cm": sku.max_altura_apilable_cm,
                     "descripcion": sku.descripcion,
                     "valioso": sku.valioso,
+                    "cajas_conf": sku.cajas_conf,
                 }
                 for sku in self.skus
             ]

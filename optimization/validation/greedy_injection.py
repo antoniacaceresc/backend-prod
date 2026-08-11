@@ -7,12 +7,11 @@ VERSIÓN 2: Con diagnóstico detallado de fallos.
 from __future__ import annotations
 
 from typing import List, Dict, Set, Tuple, Optional
-from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from models.domain import Camion, Pedido, TruckCapacity
+from models.domain import Camion, Pedido
 from optimization.validation.height_validator import HeightValidator
 from optimization.utils.helpers import calcular_posiciones_apilabilidad
+from optimization.validation.layout_serialization import metricas_layout
 
 
 # Flag para debug
@@ -65,6 +64,7 @@ class GreedyInjector:
         self.altura_maxima = self.effective_config.get('ALTURA_MAXIMA_CM', 270)
         self.permite_consolidacion = self.effective_config.get('PERMITE_CONSOLIDACION', False)
         self.max_skus_por_pallet = self.effective_config.get('MAX_SKUS_POR_PALLET', 1)
+        self.flujo_config = self.effective_config.get('FLUJO_CONFIG', {}) or {}
         self.max_altura_picking = self.effective_config.get('MAX_ALTURA_PICKING_APILADO_CM')
         
         # Crear validador de altura
@@ -73,6 +73,7 @@ class GreedyInjector:
             permite_consolidacion=self.permite_consolidacion,
             max_skus_por_pallet=self.max_skus_por_pallet,
             max_altura_picking_apilado_cm=effective_config.get("ALTURA_MAX_PICKING_APILADO_CM") if effective_config else None,
+            flujo_config=self.flujo_config,
         )
     
     def inyectar(
@@ -424,6 +425,7 @@ class GreedyInjector:
             max_skus_por_pallet=consolidacion.get("MAX_SKUS_POR_PALLET", 1),
             max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM"),
             altura_maxima_mismo_sku_cm=altura_maxima_mismo_sku_cm,
+            flujo_config=self.flujo_config,
         )
         
         es_valido, errores, layout, debug_info = validator.validar_camion_rapido(camion_temp)
@@ -479,6 +481,7 @@ class GreedyInjector:
             max_skus_por_pallet=consolidacion.get("MAX_SKUS_POR_PALLET", 1),
             max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM"),
             altura_maxima_mismo_sku_cm=altura_maxima_mismo_sku_cm,
+            flujo_config=self.flujo_config,
         )
         
         es_valido, errores, layout, debug_info = validator.validar_camion_rapido(camion)
@@ -492,53 +495,11 @@ class GreedyInjector:
         }
 
         if layout is not None:
-            layout_info.update({
-                'posiciones_usadas': layout.posiciones_usadas,
-                'posiciones_disponibles': layout.posiciones_disponibles,
-                'altura_maxima_cm': layout.altura_maxima_cm,
-                'total_pallets_fisicos': layout.total_pallets,
-                'altura_maxima_usada_cm': round(layout.altura_maxima_usada, 1),
-                'altura_promedio_usada': round(layout.altura_promedio_usada, 1),
-                'aprovechamiento_altura': round(layout.aprovechamiento_altura * 100, 1),
-                'aprovechamiento_posiciones': round(layout.aprovechamiento_posiciones * 100, 1),
-                'posiciones': self._serializar_posiciones(layout)
-            })
+            layout_info.update(metricas_layout(layout))
             camion.pos_total = layout.posiciones_usadas
 
         camion.metadata['layout_info'] = layout_info
 
-    def _serializar_posiciones(self, layout) -> list:
-            """Serializa las posiciones del layout a diccionarios."""
-            return [
-                {
-                    'id': pos.id,
-                    'altura_usada_cm': pos.altura_usada_cm,
-                    'altura_disponible_cm': pos.espacio_disponible_cm,
-                    'num_pallets': pos.num_pallets,
-                    'pallets': [
-                        {
-                            'id': pallet.id,
-                            'nivel': pallet.nivel,
-                            'altura_cm': pallet.altura_total_cm,
-                            'skus': [
-                                {
-                                    'sku_id': frag.sku_id,
-                                    'pedido_id': frag.pedido_id,
-                                    'altura_cm': frag.altura_cm,
-                                    'categoria': frag.categoria.value,
-                                    'es_picking': frag.es_picking,
-                                    'es_valioso': frag.es_valioso,
-                                    'descripcion': frag.descripcion
-                                }
-                                for frag in pallet.fragmentos
-                            ]
-                        }
-                        for pallet in pos.pallets_apilados
-                    ]
-                }
-                for pos in layout.posiciones
-                if not pos.esta_vacia
-            ]
 
 def inyectar_pedidos_greedy(
     camiones: List[Camion],

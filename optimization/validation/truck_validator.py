@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from models.domain import Camion, TruckCapacity
 from optimization.validation.height_validator import HeightValidator
 from utils.config_helpers import get_consolidacion_config
+from optimization.validation.layout_serialization import construir_layout_info
 
 
 # Flag para activar/desactivar prints de debug
@@ -63,6 +64,7 @@ class TruckValidator:
         self.permite_consolidacion = False
         self.max_skus_por_pallet = 1
         self.venta = None
+        self.flujo_config: dict = {}
     
     def validar_camiones(
         self,
@@ -84,6 +86,7 @@ class TruckValidator:
         if effective_config:
             self.permite_consolidacion = effective_config.get('PERMITE_CONSOLIDACION', False)
             self.max_skus_por_pallet = effective_config.get('MAX_SKUS_POR_PALLET', 1)
+            self.flujo_config = effective_config.get('FLUJO_CONFIG', {}) or {}
             self.venta = venta
 
         # Filtrar camiones que tienen pedidos con SKUs
@@ -195,6 +198,7 @@ class TruckValidator:
                 max_skus_por_pallet=consolidacion.get("MAX_SKUS_POR_PALLET", self.max_skus_por_pallet),
                 max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM"),
                 altura_maxima_mismo_sku_cm=altura_maxima_mismo_sku_cm,
+                flujo_config=self.flujo_config,
             )
             
             # Ejecutar validación
@@ -334,68 +338,21 @@ class TruckValidator:
         """
         Construye el diccionario layout_info para metadata del camión.
         """
-        layout_info = {
-            'altura_validada': bool(es_valido),
-            'errores_validacion': errores,
+        extras = {
             'fragmentos_fallidos': debug_info.get('fragmentos_fallidos', []) if debug_info else [],
             'fragmentos_totales': debug_info.get('fragmentos_totales', 0) if debug_info else 0,
         }
-        
         if layout is not None:
-            layout_info.update({
-                'posiciones_usadas': layout.posiciones_usadas,
-                'posiciones_disponibles': layout.posiciones_disponibles,
-                'altura_maxima_cm': layout.altura_maxima_cm,
-                'total_pallets_fisicos': layout.total_pallets,
-                'altura_maxima_usada_cm': round(layout.altura_maxima_usada, 1),
-                'altura_promedio_usada': round(layout.altura_promedio_usada, 1),
-                'aprovechamiento_altura': round(layout.aprovechamiento_altura * 100, 1),
-                'aprovechamiento_posiciones': round(layout.aprovechamiento_posiciones * 100, 1),
-                'posiciones': self._serializar_posiciones(layout)
-            })
-        else:
-            # Si no hay layout válido pero pasó validación
-            if es_valido:
-                layout_info['posiciones_usadas'] = 0
-            else:
-                # Layout inválido - mantener estimación anterior
-                layout_info['posiciones_usadas'] = cam.pos_total
-        
+            return construir_layout_info(
+                layout, altura_validada=bool(es_valido), errores=errores, extras=extras
+            )
+        layout_info = {
+            'altura_validada': bool(es_valido),
+            'errores_validacion': errores,
+            **extras,
+            'posiciones_usadas': 0 if es_valido else cam.pos_total,
+        }
         return layout_info
-    
-    def _serializar_posiciones(self, layout) -> List[Dict[str, Any]]:
-        """Serializa las posiciones del layout a diccionarios."""
-        return [
-            {
-                'id': pos.id,
-                'altura_usada_cm': pos.altura_usada_cm,
-                'altura_disponible_cm': pos.espacio_disponible_cm,
-                'num_pallets': pos.num_pallets,
-                'pallets': [
-                    {
-                        'id': pallet.id,
-                        'nivel': pallet.nivel,
-                        'altura_cm': pallet.altura_total_cm,
-                        'skus': [
-                            {
-                                'sku_id': frag.sku_id,
-                                'pedido_id': frag.pedido_id,
-                                'altura_cm': frag.altura_cm,
-                                'categoria': frag.categoria.value,
-                                'es_picking': frag.es_picking,
-                                'es_valioso': frag.es_valioso,
-                                'descripcion': frag.descripcion,
-                            }
-                            for frag in pallet.fragmentos
-                        ]
-                    }
-                    for pallet in pos.pallets_apilados
-                ]
-            }
-            for pos in layout.posiciones
-            if not pos.esta_vacia
-        ]
-
         
 
 # Función de conveniencia para uso directo (mantiene compatibilidad)
