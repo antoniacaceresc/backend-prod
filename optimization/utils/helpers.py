@@ -70,39 +70,89 @@ def calcular_posiciones_apilabilidad(
     max_positions: int
 ) -> float:
     """
-    Calcula las posiciones totales usadas segÃºn reglas de apilabilidad.
-    Replica la logica del solver CP-SAT.
+    Calcula posiciones usando lógica en cascada con categorías compuestas.
     
-    Returns:
-        Posiciones totales usadas (float)
+    Cascada:
+    1. Emparejar base pura + superior pura
+    2. Composites llenan huecos (sup_simismo como superior, base_simismo como base)
+    3. Composites sobrantes → pool si_mismo
+    4. Flexible cubre diferencias
+    5. Si_mismo en pares
+    6. No_apilable
     """
-    def suma_escalada(attr: str) -> int:
-        return int(sum(getattr(p, attr, 0) for p in pedidos) * SCALE_PALLETS)
-    
-    base_sum = suma_escalada('base')
-    sup_sum = suma_escalada('superior')
-    flex_sum = suma_escalada('flexible')
-    noap_sum = suma_escalada('no_apilable')
-    self_sum = suma_escalada('si_mismo')
-    
-    # CÃ¡lculo segun logica del solver
-    diff = base_sum - sup_sum
-    abs_diff = abs(diff)
-    
-    m0 = min(base_sum, sup_sum)
-    m1 = min(abs_diff, flex_sum)
-    rem = flex_sum - m1
-    half = (rem + 1) // 2  # ceil(rem/2)
-    m2 = max(abs_diff - flex_sum, 0)
-    
-    # SI_MISMO: pares cuentan como posiciones
-    pair_q = self_sum // (2 * SCALE_PALLETS)
-    self_pairs_scaled = pair_q * SCALE_PALLETS
-    self_rem = self_sum - pair_q * (2 * SCALE_PALLETS)
-    
-    total_stack = m0 + m1 + half + m2 + noap_sum + self_pairs_scaled + self_rem
-    
-    return total_stack / SCALE_PALLETS
+    base_total = sum(getattr(p, 'base', 0) for p in pedidos)
+    sup_total = sum(getattr(p, 'superior', 0) for p in pedidos)
+    flex_total = sum(getattr(p, 'flexible', 0) for p in pedidos)
+    noap_total = sum(getattr(p, 'no_apilable', 0) for p in pedidos)
+    self_total = sum(getattr(p, 'si_mismo', 0) for p in pedidos)
+    base_sim_total = sum(getattr(p, 'base_simismo', 0) for p in pedidos)
+    sup_sim_total = sum(getattr(p, 'superior_simismo', 0) for p in pedidos)
+
+    return _calcular_posiciones_cascada(
+        base_total, sup_total, flex_total, noap_total, self_total,
+        base_sim_total, sup_sim_total
+    )
+
+
+def _calcular_posiciones_cascada(
+    base: float, superior: float, flexible: float,
+    no_apilable: float, si_mismo: float,
+    base_simismo: float = 0.0, superior_simismo: float = 0.0,
+) -> float:
+    """
+    Fórmula pura de posiciones con categorías compuestas.
+    Reutilizable desde helpers, constraints, smu_splitter, etc.
+    """
+    s = SCALE_PALLETS
+
+    # Paso 0: Separar base pura y composite
+    # base ya incluye base_simismo (se asignó en el parser)
+    # Necesitamos saber cuánto es "solo base" vs "base que también es si_mismo"
+    base_pura = base - base_simismo
+    sup_pura = superior - superior_simismo
+
+    # Escalar todo
+    base_pura_s = int(base_pura * s)
+    sup_pura_s = int(sup_pura * s)
+    base_sim_s = int(base_simismo * s)
+    sup_sim_s = int(superior_simismo * s)
+    flex_s = int(flexible * s)
+    noap_s = int(no_apilable * s)
+    self_s = int(si_mismo * s)
+
+    # Paso 1: Emparejar base pura + superior pura
+    pares1 = min(base_pura_s, sup_pura_s)
+    base_sob = base_pura_s - pares1
+    sup_sob = sup_pura_s - pares1
+
+    # Paso 2 en adelante: evaluar las combinaciones y quedarse con la mejor
+    cand_sup = {0, min(sup_sim_s, base_sob)}
+    cand_base = {0, min(base_sim_s, sup_sob)}
+
+    mejor = None
+    for uso_sup_sim in cand_sup:
+        for uso_base_sim in cand_base:
+            b_sob = base_sob - uso_sup_sim
+            s_sob = sup_sob - uso_base_sim
+            pool = self_s + (base_sim_s - uso_base_sim) + (sup_sim_s - uso_sup_sim)
+
+            sobrante = b_sob + s_sob
+            uso_flex = min(flex_s, sobrante)
+            sobrante_sin_flex = sobrante - uso_flex
+            half_flex = (flex_s - uso_flex + 1) // 2
+
+            pair_q = pool // (2 * s)
+            self_pairs = pair_q * s
+            self_rem = pool - pair_q * (2 * s)
+
+            total = (pares1 + uso_sup_sim + uso_base_sim + uso_flex
+                     + half_flex + sobrante_sin_flex + noap_s
+                     + self_pairs + self_rem)
+
+            if mejor is None or total < mejor:
+                mejor = total
+
+    return mejor / s
 
 
 def filtrar_pedidos_validos(
@@ -207,6 +257,8 @@ def preparar_datos_solver(
         datos[pid]['flexible_int'] = int(round(pedido.flexible * SCALE_PALLETS))
         datos[pid]['no_apil_int'] = int(round(pedido.no_apilable * SCALE_PALLETS))
         datos[pid]['si_mismo_int'] = int(round(pedido.si_mismo * SCALE_PALLETS))
+        datos[pid]['base_sim_int'] = int(round(pedido.base_simismo * SCALE_PALLETS))
+        datos[pid]['sup_sim_int'] = int(round(pedido.superior_simismo * SCALE_PALLETS))
 
         # Apilabilidad separada por valor (para SEPARAR_APILABILIDAD_POR_VALOR)
         for suf in ('val', 'noval'):
@@ -215,6 +267,8 @@ def preparar_datos_solver(
             datos[pid][f'flexible_{suf}_int'] = int(round(getattr(pedido, f'flexible_{suf}', 0) * SCALE_PALLETS))
             datos[pid][f'no_apil_{suf}_int']  = int(round(getattr(pedido, f'no_apilable_{suf}', 0) * SCALE_PALLETS))
             datos[pid][f'si_mismo_{suf}_int'] = int(round(getattr(pedido, f'si_mismo_{suf}', 0) * SCALE_PALLETS))
+            datos[pid][f'base_sim_{suf}_int']  = int(round(getattr(pedido, f'base_simismo_{suf}', 0) * SCALE_PALLETS))
+            datos[pid][f'sup_sim_{suf}_int']   = int(round(getattr(pedido, f'superior_simismo_{suf}', 0) * SCALE_PALLETS))
     
     return datos
 
@@ -301,6 +355,8 @@ def pedido_a_dict_excluido(pedido: Pedido, capacidad: TruckCapacity) -> Dict[str
                 "flexible": sku.flexible,
                 "no_apilable": sku.no_apilable,
                 "si_mismo": sku.si_mismo,
+                "base_simismo": sku.base_simismo,
+                "superior_simismo": sku.superior_simismo,
                 "max_altura_apilable_cm": sku.max_altura_apilable_cm,
                 "descripcion": sku.descripcion,
                 "valioso": sku.valioso,

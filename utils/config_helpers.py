@@ -23,6 +23,7 @@ def get_effective_config(client_config, venta: str = None) -> dict:
         return {
             # Configuración algoritmo básica
             "USA_OC": channel.get("USA_OC", getattr(client_config, 'USA_OC', True)),
+            "MODO_GREEDY": channel.get("MODO_GREEDY", False),
             "AGRUPAR_POR_PO": channel.get("AGRUPAR_POR_PO", getattr(client_config, 'AGRUPAR_POR_PO', False)),
             "MAX_ORDENES": channel.get("MAX_ORDENES", getattr(client_config, 'MAX_ORDENES', None)),
             "MIX_GRUPOS": channel.get("MIX_GRUPOS", getattr(client_config, 'MIX_GRUPOS', [])),
@@ -74,6 +75,7 @@ def get_effective_config(client_config, venta: str = None) -> dict:
     # Para clientes sin CHANNEL_CONFIG (legacy)
     return {
         "USA_OC": getattr(client_config, 'USA_OC', True),
+        "MODO_GREEDY": getattr(client_config, 'MODO_GREEDY', False),
         "AGRUPAR_POR_PO": getattr(client_config, 'AGRUPAR_POR_PO', False),
         "MAX_ORDENES": getattr(client_config, 'MAX_ORDENES', None),
         "MIX_GRUPOS": getattr(client_config, 'MIX_GRUPOS', []),

@@ -61,114 +61,124 @@ def agregar_restricciones_apilabilidad(
     """
     Agrega restricciones de apilabilidad para un camión.
     Retorna la variable total_stack para tracking.
-    
-    Args:
-        model: Modelo CP-SAT
-        x: Variables de asignación
-        datos: Datos de pedidos preparados
-        pedidos_ids: IDs de pedidos en el grupo
-        j: Índice del camión
-        y_truck_j: Variable booleana del camión
-        max_positions: Máximo de posiciones
-        levels: Niveles de apilamiento
-        scale: Factor de escala (SCALE_PALLETS)
-    
-    Returns:
-        Variable total_stack (para debugging/tracking)
 
     Si separar_por_valor=True, calcula posiciones de forma independiente para
     pallets valiosos y no-valiosos (no se apilan entre sí) y suma ambos totales.
     """
     lim_pos_scaled = max_positions * scale
 
-    def _calc_total_stack(suffix, base_sum, sup_sum, flex_sum, noap_sum, self_sum):
+    def _calc_total_stack(suffix, base_sum, sup_sum, flex_sum, noap_sum, self_sum,
+                          base_sim_sum=0, sup_sim_sum=0):
         """
-        Calcula la variable total_stack de un universo de apilabilidad.
-        suffix evita colisiones de nombres entre llamadas para el mismo j.
+        Cascada con AddMinEquality (sin BoolVars → más rápido).
         """
-        # diff = base_sum - sup_sum
-        diff = model.NewIntVar(-lim_pos_scaled, lim_pos_scaled, f"diff_{j}_{suffix}")
-        model.Add(diff == base_sum + (-1) * sup_sum)
+        # ── Paso 0: Separar pura vs composite ──
+        base_pura = model.NewIntVar(0, lim_pos_scaled, f"bp_{j}_{suffix}")
+        model.Add(base_pura == base_sum - base_sim_sum)
 
-        abs_diff = model.NewIntVar(0, lim_pos_scaled, f"abs_diff_{j}_{suffix}")
-        model.AddAbsEquality(abs_diff, diff)
+        sup_pura = model.NewIntVar(0, lim_pos_scaled, f"sp_{j}_{suffix}")
+        model.Add(sup_pura == sup_sum - sup_sim_sum)
 
-        # m0 = min(base_sum, sup_sum)
-        m0 = model.NewIntVar(0, lim_pos_scaled, f"m0_{j}_{suffix}")
-        b0 = model.NewBoolVar(f"b0_{j}_{suffix}")
-        model.Add(base_sum <= sup_sum).OnlyEnforceIf(b0)
-        model.Add(base_sum > sup_sum).OnlyEnforceIf(b0.Not())
-        model.Add(m0 == base_sum).OnlyEnforceIf(b0)
-        model.Add(m0 == sup_sum).OnlyEnforceIf(b0.Not())
+        # ── Paso 1: min(base_pura, sup_pura) ──
+        pares1 = model.NewIntVar(0, lim_pos_scaled, f"p1_{j}_{suffix}")
+        model.AddMinEquality(pares1, [base_pura, sup_pura])
 
-        # m1 = min(abs_diff, flex_sum)
-        m1 = model.NewIntVar(0, lim_pos_scaled, f"m1_{j}_{suffix}")
-        b1 = model.NewBoolVar(f"b1_{j}_{suffix}")
-        model.Add(abs_diff <= flex_sum).OnlyEnforceIf(b1)
-        model.Add(abs_diff > flex_sum).OnlyEnforceIf(b1.Not())
-        model.Add(m1 == abs_diff).OnlyEnforceIf(b1)
-        model.Add(m1 == flex_sum).OnlyEnforceIf(b1.Not())
+        base_sob1 = model.NewIntVar(0, lim_pos_scaled, f"bs1_{j}_{suffix}")
+        model.Add(base_sob1 == base_pura - pares1)
 
-        # rem = flex_sum - m1
-        rem = model.NewIntVar(0, lim_pos_scaled, f"rem_{j}_{suffix}")
-        model.Add(rem == flex_sum + (-1) * m1)
+        sup_sob1 = model.NewIntVar(0, lim_pos_scaled, f"ss1_{j}_{suffix}")
+        model.Add(sup_sob1 == sup_pura - pares1)
 
-        # half = ceil(rem/2)
-        half = model.NewIntVar(0, lim_pos_scaled, f"half_{j}_{suffix}")
-        model.Add(2 * half >= rem)
-        model.Add(2 * half <= rem + 1)
+        # ── Paso 2: Composites llenan huecos ──
+        uso_sup_sim = model.NewIntVar(0, lim_pos_scaled, f"uss_{j}_{suffix}")
+        model.Add(uso_sup_sim <= sup_sim_sum)
+        model.Add(uso_sup_sim <= base_sob1)
 
-        # m2 = max(abs_diff - flex_sum, 0)
-        m2 = model.NewIntVar(0, lim_pos_scaled, f"m2_{j}_{suffix}")
-        b2 = model.NewBoolVar(f"b2_{j}_{suffix}")
-        model.Add(abs_diff >= flex_sum).OnlyEnforceIf(b2)
-        model.Add(abs_diff < flex_sum).OnlyEnforceIf(b2.Not())
-        model.Add(m2 == abs_diff + (-1) * flex_sum).OnlyEnforceIf(b2)
-        model.Add(m2 == 0).OnlyEnforceIf(b2.Not())
+        base_sob2 = model.NewIntVar(0, lim_pos_scaled, f"bs2_{j}_{suffix}")
+        model.Add(base_sob2 == base_sob1 - uso_sup_sim)
 
-        # SI_MISMO: pares cuentan como posiciones
-        self_sum_var = model.NewIntVar(
-            0, max_positions * scale * levels * 2, f"self_sum_{j}_{suffix}"
-        )
-        model.Add(self_sum_var == self_sum)
+        sup_sim_rest = model.NewIntVar(0, lim_pos_scaled * 3, f"ssr_{j}_{suffix}")
+        model.Add(sup_sim_rest == sup_sim_sum - uso_sup_sim)
 
-        pair_q = model.NewIntVar(0, max_positions, f"self_pairs_q_{j}_{suffix}")
-        model.AddDivisionEquality(pair_q, self_sum_var, 2 * scale)
+        uso_base_sim = model.NewIntVar(0, lim_pos_scaled, f"ubs_{j}_{suffix}")
+        model.Add(uso_base_sim <= base_sim_sum)
+        model.Add(uso_base_sim <= sup_sob1)
 
-        self_rem = model.NewIntVar(0, 2 * scale - 1, f"self_rem_{j}_{suffix}")
-        model.Add(self_rem == self_sum_var + (-1) * (pair_q * (2 * scale)))
+        sup_sob2 = model.NewIntVar(0, lim_pos_scaled, f"ss2_{j}_{suffix}")
+        model.Add(sup_sob2 == sup_sob1 - uso_base_sim)
 
-        self_pairs_scaled = model.NewIntVar(0, lim_pos_scaled, f"self_pairs_scaled_{j}_{suffix}")
+        base_sim_rest = model.NewIntVar(0, lim_pos_scaled * 3, f"bsr_{j}_{suffix}")
+        model.Add(base_sim_rest == base_sim_sum - uso_base_sim)
+
+        # ── Paso 3: Composites sobrantes → pool si_mismo ──
+        pool_self = model.NewIntVar(0, lim_pos_scaled * 4, f"ps_{j}_{suffix}")
+        model.Add(pool_self == self_sum + base_sim_rest + sup_sim_rest)
+
+        # ── Paso 4: Flexible cubre sobrantes ──
+        sobrante = model.NewIntVar(0, lim_pos_scaled, f"sob_{j}_{suffix}")
+        model.Add(sobrante == base_sob2 + sup_sob2)
+
+        uso_flex = model.NewIntVar(0, lim_pos_scaled, f"uf_{j}_{suffix}")
+        model.Add(uso_flex <= flex_sum)
+        model.Add(uso_flex <= sobrante)
+
+        sobrante_sin_flex = model.NewIntVar(0, lim_pos_scaled, f"ssf_{j}_{suffix}")
+        model.Add(sobrante_sin_flex == sobrante - uso_flex)
+
+        flex_restante = model.NewIntVar(0, lim_pos_scaled, f"fr_{j}_{suffix}")
+        model.Add(flex_restante == flex_sum - uso_flex)
+
+        half_flex = model.NewIntVar(0, lim_pos_scaled, f"hf_{j}_{suffix}")
+        model.Add(2 * half_flex >= flex_restante)
+        model.Add(2 * half_flex <= flex_restante + 1)
+
+        # ── Paso 5: Si_mismo en pares ──
+        pair_q = model.NewIntVar(0, max_positions * 4, f"pq_{j}_{suffix}")
+        model.AddDivisionEquality(pair_q, pool_self, 2 * scale)
+
+        self_pairs_scaled = model.NewIntVar(0, lim_pos_scaled * 3, f"sps_{j}_{suffix}")
         model.Add(self_pairs_scaled == pair_q * scale)
 
-        # Total stack
+        self_rem = model.NewIntVar(0, lim_pos_scaled * 3, f"sr_{j}_{suffix}")
+        model.Add(self_rem == pool_self - pair_q * (2 * scale))
+
+        # ── Total ──
         total_stack = model.NewIntVar(
-            -lim_pos_scaled * 2, lim_pos_scaled * 4, f"total_stack_{j}_{suffix}"
+            0, lim_pos_scaled * 4, f"ts_{j}_{suffix}"
         )
         model.Add(
-            total_stack == m0 + m1 + half + m2 + noap_sum + self_pairs_scaled + self_rem
+            total_stack == pares1 + uso_sup_sim + uso_base_sim
+                         + uso_flex + half_flex + sobrante_sin_flex
+                         + noap_sum + self_pairs_scaled + self_rem
         )
         return total_stack
 
-    # ── Caso 1: universo único (comportamiento actual) ──
+    # ── Caso 1: universo único ──
     if not separar_por_valor:
         base_sum = sum(datos[pid]['base_int'] * x[(pid, j)] for pid in pedidos_ids if (pid, j) in x)
         sup_sum  = sum(datos[pid]['superior_int'] * x[(pid, j)] for pid in pedidos_ids if (pid, j) in x)
         flex_sum = sum(datos[pid]['flexible_int'] * x[(pid, j)] for pid in pedidos_ids if (pid, j) in x)
         noap_sum = sum(datos[pid]['no_apil_int'] * x[(pid, j)] for pid in pedidos_ids if (pid, j) in x)
         self_sum = sum(datos[pid]['si_mismo_int'] * x[(pid, j)] for pid in pedidos_ids if (pid, j) in x)
+        base_sim_sum = sum(datos[pid]['base_sim_int'] * x[(pid, j)] for pid in pedidos_ids if (pid, j) in x)
+        sup_sim_sum  = sum(datos[pid]['sup_sim_int'] * x[(pid, j)] for pid in pedidos_ids if (pid, j) in x)
 
-        # Límites individuales
-        model.Add(base_sum <= lim_pos_scaled * y_truck_j)
-        model.Add(sup_sum <= lim_pos_scaled * y_truck_j)
+        # Límites individuales (solo categorías puras, no composites)
+        base_pura_lim = model.NewIntVar(0, lim_pos_scaled, f"bpl_{j}")
+        model.Add(base_pura_lim == base_sum - base_sim_sum)
+        sup_pura_lim = model.NewIntVar(0, lim_pos_scaled, f"spl_{j}")
+        model.Add(sup_pura_lim == sup_sum - sup_sim_sum)
+
+        model.Add(base_pura_lim <= lim_pos_scaled * y_truck_j)
+        model.Add(sup_pura_lim <= lim_pos_scaled * y_truck_j)
         model.Add(noap_sum <= lim_pos_scaled * y_truck_j)
         model.Add(flex_sum <= max_positions * levels * scale * y_truck_j)
 
-        # Combinaciones
-        model.Add((base_sum + noap_sum) <= lim_pos_scaled * y_truck_j)
-        model.Add((sup_sum + noap_sum) <= lim_pos_scaled * y_truck_j)
+        # Combinaciones (con puras)
+        model.Add((base_pura_lim + noap_sum) <= lim_pos_scaled * y_truck_j)
+        model.Add((sup_pura_lim + noap_sum) <= lim_pos_scaled * y_truck_j)
 
-        total_stack = _calc_total_stack("all", base_sum, sup_sum, flex_sum, noap_sum, self_sum)
+        total_stack = _calc_total_stack("all", base_sum, sup_sum, flex_sum, noap_sum, self_sum, base_sim_sum, sup_sim_sum)
         model.Add(total_stack <= lim_pos_scaled * y_truck_j)
         return total_stack
 
@@ -180,17 +190,24 @@ def agregar_restricciones_apilabilidad(
         flex_sum = sum(datos[pid][f'flexible_{suf}_int'] * x[(pid, j)] for pid in pedidos_ids if (pid, j) in x)
         noap_sum = sum(datos[pid][f'no_apil_{suf}_int'] * x[(pid, j)] for pid in pedidos_ids if (pid, j) in x)
         self_sum = sum(datos[pid][f'si_mismo_{suf}_int'] * x[(pid, j)] for pid in pedidos_ids if (pid, j) in x)
+        base_sim_sum = sum(datos[pid][f'base_sim_{suf}_int'] * x[(pid, j)] for pid in pedidos_ids if (pid, j) in x)
+        sup_sim_sum = sum(datos[pid][f'sup_sim_{suf}_int'] * x[(pid, j)] for pid in pedidos_ids if (pid, j) in x)
 
-        # Combinaciones DENTRO del universo
-        model.Add((base_sum + noap_sum) <= lim_pos_scaled * y_truck_j)
-        model.Add((sup_sum + noap_sum) <= lim_pos_scaled * y_truck_j)
+        # Límites individuales (solo puras)
+        base_pura_lim = model.NewIntVar(0, lim_pos_scaled, f"bpl_{j}_{suf}")
+        model.Add(base_pura_lim == base_sum - base_sim_sum)
+        sup_pura_lim = model.NewIntVar(0, lim_pos_scaled, f"spl_{j}_{suf}")
+        model.Add(sup_pura_lim == sup_sum - sup_sim_sum)
 
-        totales.append(_calc_total_stack(suf, base_sum, sup_sum, flex_sum, noap_sum, self_sum))
+        # Combinaciones DENTRO del universo (con puras)
+        model.Add((base_pura_lim + noap_sum) <= lim_pos_scaled * y_truck_j)
+        model.Add((sup_pura_lim + noap_sum) <= lim_pos_scaled * y_truck_j)
+
+        totales.append(_calc_total_stack(suf, base_sum, sup_sum, flex_sum, noap_sum, self_sum, base_sim_sum, sup_sim_sum))
 
     # La suma de posiciones de ambos universos ocupa el camión
     model.Add(sum(totales) <= lim_pos_scaled * y_truck_j)
     return totales
-
 
 def agregar_restricciones_walmart_multicd(
     model: cp_model.CpModel,
@@ -361,3 +378,133 @@ def agregar_restricciones_crr_walmart(
         model.Add(
             sum(sku_en_camion.values()) <= max_skus * y_truck_j
         )
+
+
+def agregar_restricciones_apilabilidad_por_origen(
+    model: cp_model.CpModel,
+    x: Dict,
+    datos: Dict[str, Dict[str, Any]],
+    pedidos_ids: List[str],
+    j: int,
+    y_truck_j,
+    max_positions: int,
+    levels: int,
+    scale: int,
+    origin_key: str,
+):
+    """
+    Restricciones de apilabilidad separadas por origen (CE o CD).
+    Cada grupo de origen tiene su propio universo de apilabilidad;
+    la suma de posiciones de todos los universos no puede exceder max_positions.
+
+    Mismo cálculo que agregar_restricciones_apilabilidad (caso sin separar_por_valor),
+    pero particionado por datos[pid][origin_key].
+
+    Args:
+        origin_key: 'ce' o 'cd' — campo en datos[pid] para particionar
+    """
+    lim_pos_scaled = max_positions * scale
+
+    # Agrupar pedidos por origen
+    origenes: Dict[str, List[str]] = {}
+    for pid in pedidos_ids:
+        if (pid, j) not in x:
+            continue
+        origen = datos[pid].get(origin_key, '__default__')
+        origenes.setdefault(origen, []).append(pid)
+
+    # Si hay un solo origen, usar la restricción estándar (sin overhead)
+    if len(origenes) <= 1:
+        agregar_restricciones_apilabilidad(
+            model, x, datos, pedidos_ids, j, y_truck_j,
+            max_positions, levels, scale
+        )
+        return
+
+    def _calc_total_stack_origen(suffix, pids):
+        """Calcula total_stack para un subconjunto de pedidos."""
+        base_sum = sum(datos[pid]['base_int'] * x[(pid, j)] for pid in pids)
+        sup_sum  = sum(datos[pid]['superior_int'] * x[(pid, j)] for pid in pids)
+        flex_sum = sum(datos[pid]['flexible_int'] * x[(pid, j)] for pid in pids)
+        noap_sum = sum(datos[pid]['no_apil_int'] * x[(pid, j)] for pid in pids)
+        self_sum = sum(datos[pid]['si_mismo_int'] * x[(pid, j)] for pid in pids)
+
+        # Límites individuales dentro del universo
+        model.Add(base_sum <= lim_pos_scaled * y_truck_j)
+        model.Add(sup_sum <= lim_pos_scaled * y_truck_j)
+        model.Add(noap_sum <= lim_pos_scaled * y_truck_j)
+        model.Add(flex_sum <= max_positions * levels * scale * y_truck_j)
+        model.Add((base_sum + noap_sum) <= lim_pos_scaled * y_truck_j)
+        model.Add((sup_sum + noap_sum) <= lim_pos_scaled * y_truck_j)
+
+        # diff = base - sup
+        diff = model.NewIntVar(-lim_pos_scaled, lim_pos_scaled, f"diff_{j}_{suffix}")
+        model.Add(diff == base_sum + (-1) * sup_sum)
+
+        abs_diff = model.NewIntVar(0, lim_pos_scaled, f"abs_diff_{j}_{suffix}")
+        model.AddAbsEquality(abs_diff, diff)
+
+        # m0 = min(base, sup)
+        m0 = model.NewIntVar(0, lim_pos_scaled, f"m0_{j}_{suffix}")
+        b0 = model.NewBoolVar(f"b0_{j}_{suffix}")
+        model.Add(base_sum <= sup_sum).OnlyEnforceIf(b0)
+        model.Add(base_sum > sup_sum).OnlyEnforceIf(b0.Not())
+        model.Add(m0 == base_sum).OnlyEnforceIf(b0)
+        model.Add(m0 == sup_sum).OnlyEnforceIf(b0.Not())
+
+        # m1 = min(abs_diff, flex)
+        m1 = model.NewIntVar(0, lim_pos_scaled, f"m1_{j}_{suffix}")
+        b1 = model.NewBoolVar(f"b1_{j}_{suffix}")
+        model.Add(abs_diff <= flex_sum).OnlyEnforceIf(b1)
+        model.Add(abs_diff > flex_sum).OnlyEnforceIf(b1.Not())
+        model.Add(m1 == abs_diff).OnlyEnforceIf(b1)
+        model.Add(m1 == flex_sum).OnlyEnforceIf(b1.Not())
+
+        # rem = flex - m1
+        rem = model.NewIntVar(0, lim_pos_scaled, f"rem_{j}_{suffix}")
+        model.Add(rem == flex_sum + (-1) * m1)
+
+        # half = ceil(rem/2)
+        half = model.NewIntVar(0, lim_pos_scaled, f"half_{j}_{suffix}")
+        model.Add(2 * half >= rem)
+        model.Add(2 * half <= rem + 1)
+
+        # m2 = max(abs_diff - flex, 0)
+        m2 = model.NewIntVar(0, lim_pos_scaled, f"m2_{j}_{suffix}")
+        b2 = model.NewBoolVar(f"b2_{j}_{suffix}")
+        model.Add(abs_diff >= flex_sum).OnlyEnforceIf(b2)
+        model.Add(abs_diff < flex_sum).OnlyEnforceIf(b2.Not())
+        model.Add(m2 == abs_diff + (-1) * flex_sum).OnlyEnforceIf(b2)
+        model.Add(m2 == 0).OnlyEnforceIf(b2.Not())
+
+        # SI_MISMO: pares
+        self_sum_var = model.NewIntVar(
+            0, max_positions * scale * levels * 2, f"self_sum_{j}_{suffix}"
+        )
+        model.Add(self_sum_var == self_sum)
+
+        pair_q = model.NewIntVar(0, max_positions, f"self_pairs_q_{j}_{suffix}")
+        model.AddDivisionEquality(pair_q, self_sum_var, 2 * scale)
+
+        self_rem = model.NewIntVar(0, 2 * scale - 1, f"self_rem_{j}_{suffix}")
+        model.Add(self_rem == self_sum_var + (-1) * (pair_q * (2 * scale)))
+
+        self_pairs_scaled = model.NewIntVar(0, lim_pos_scaled, f"self_pairs_scaled_{j}_{suffix}")
+        model.Add(self_pairs_scaled == pair_q * scale)
+
+        total_stack = model.NewIntVar(
+            -lim_pos_scaled * 2, lim_pos_scaled * 4, f"total_stack_{j}_{suffix}"
+        )
+        model.Add(
+            total_stack == m0 + m1 + half + m2 + noap_sum + self_pairs_scaled + self_rem
+        )
+        return total_stack
+
+    # Calcular total_stack por cada origen
+    totales = []
+    for origen, pids in origenes.items():
+        suffix = f"orig_{origin_key}_{origen}"
+        totales.append(_calc_total_stack_origen(suffix, pids))
+
+    # La suma de posiciones de todos los orígenes no excede el camión
+    model.Add(sum(totales) <= lim_pos_scaled * y_truck_j)

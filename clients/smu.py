@@ -17,11 +17,7 @@ class SmuConfig:
             "VALOR": "$$ Conf.",
             "VALOR_CAFE": "Valor Cafe",
             "CHOCOLATES": "Chocolates",
-            "BASE": "Base",
-            "SUPERIOR": "Superior",
-            "FLEXIBLE": "Flexible",
-            "NO_APILABLE": "No Apilable",
-            "SI_MISMO": "Apilable si mismo",
+            "APILABILIDAD": "Apilabilidad",
             "PDQ": "PDQ",
             "SKU": "SKU",
             "ALTURA_PICKING": "Altura Picking",
@@ -50,6 +46,7 @@ class SmuConfig:
         "Secos": {
             "USA_OC": True,
             "AGRUPAR_POR_PO": False,
+            "MODO_GREEDY": True,
             "MIX_GRUPOS": [],
             
             "ADHERENCIA_BACKHAUL": None,

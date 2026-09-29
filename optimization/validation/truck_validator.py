@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import time
 import threading
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List, Optional, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from models.domain import Camion, TruckCapacity
+from models.domain import Camion
+from models.enums import TipoRuta
 from optimization.validation.height_validator import HeightValidator
 from utils.config_helpers import get_consolidacion_config
 from optimization.validation.layout_serialization import construir_layout_info
@@ -88,6 +89,8 @@ class TruckValidator:
             self.max_skus_por_pallet = effective_config.get('MAX_SKUS_POR_PALLET', 1)
             self.flujo_config = effective_config.get('FLUJO_CONFIG', {}) or {}
             self.venta = venta
+            self.separar_apilabilidad_por_ce = effective_config.get('SEPARAR_APILABILIDAD_POR_CE', False)
+            self.separar_apilabilidad_por_cd = effective_config.get('SEPARAR_APILABILIDAD_POR_CD', False)
 
         # Filtrar camiones que tienen pedidos con SKUs
         camiones_a_validar = [
@@ -199,6 +202,9 @@ class TruckValidator:
                 max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM"),
                 altura_maxima_mismo_sku_cm=altura_maxima_mismo_sku_cm,
                 flujo_config=self.flujo_config,
+                separar_por_ce=(self.separar_apilabilidad_por_ce and cam.tipo_ruta in (TipoRuta.MULTI_CE, TipoRuta.MULTI_CE_PRIORIDAD)),
+                separar_por_cd=(self.separar_apilabilidad_por_cd and cam.tipo_ruta == TipoRuta.MULTI_CD),
+                
             )
             
             # Ejecutar validación

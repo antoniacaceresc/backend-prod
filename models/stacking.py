@@ -48,9 +48,17 @@ class FragmentoSKU:
     categoria: CategoriaApilamiento
     max_altura_apilable_cm: Optional[float] = None  # Solo para SI_MISMO
 
+    # Roles adicionales (categorías compuestas): el fragmento es si_mismo
+    # pero TAMBIÉN puede actuar como base o como superior
+    puede_base: bool = False
+    puede_superior: bool = False
+
     es_valioso: bool = False
     cajas: float = 0.0  # Cajas confirmadas de este fragmento
     flujo: Optional[str] = None   # "INV" | "CRR" | (None = no aplica)
+
+    ce: Optional[str] = None
+    cd: Optional[str] = None
     
     # Metadata
     descripcion: Optional[str] = None
@@ -174,6 +182,7 @@ class PalletFisico:
         return True, None
 
 
+
 @dataclass
 class PosicionCamion:
     """
@@ -231,6 +240,18 @@ class PosicionCamion:
         # 2. Si posición vacía, cualquier pallet puede ir
         if self.esta_vacia:
             return True, None
+
+        # 2a.1 Regla Disvet: no mezclar CEs en misma posición
+        ces_entrantes = {f.ce for f in pallet.fragmentos if f.ce}
+        ces_inferior = {f.ce for f in self.pallets_apilados[-1].fragmentos if f.ce}
+        if ces_entrantes and ces_inferior and ces_entrantes != ces_inferior:
+            return False, f"No se pueden mezclar CEs: {ces_entrantes} vs {ces_inferior}"
+
+        # 2a.2 Regla Disvet: no mezclar CDs en misma posición
+        cds_entrantes = {f.cd for f in pallet.fragmentos if f.cd}
+        cds_inferior = {f.cd for f in self.pallets_apilados[-1].fragmentos if f.cd}
+        if cds_entrantes and cds_inferior and cds_entrantes != cds_inferior:
+            return False, f"No se pueden mezclar CDs: {cds_entrantes} vs {cds_inferior}"
         
         # 2b. Regla Cencosud: no mezclar valiosos con no-valiosos
         entrante_val = any(f.es_valioso for f in pallet.fragmentos)
@@ -247,7 +268,17 @@ class PosicionCamion:
         # 3. Validar reglas de apilamiento con pallet inferior
         pallet_inferior = self.pallets_apilados[-1]
         return self._validar_apilamiento_sobre(pallet_inferior, pallet)
-    
+
+    def _acepta_encima(self, pallet) -> bool:
+        """El pallet puede recibir algo encima (es base real o compuesto con rol base)."""
+        return all(f.puede_base for f in pallet.fragmentos)
+
+
+    def _puede_ir_encima(self, pallet) -> bool:
+        """El pallet puede montarse sobre otro (es superior real o compuesto con rol superior)."""
+        return all(f.puede_superior for f in pallet.fragmentos)
+
+
     def _validar_apilamiento_sobre(
         self, 
         inferior: PalletFisico, 
@@ -300,10 +331,24 @@ class PosicionCamion:
         if cat_inf == CategoriaApilamiento.BASE:
             if cat_sup in (CategoriaApilamiento.SUPERIOR, CategoriaApilamiento.FLEXIBLE):
                 return True, None
+            # Compuesto con rol superior puede montarse sobre una base
+            if cat_sup == CategoriaApilamiento.SI_MISMO and self._puede_ir_encima(superior):
+                return True, None
             return False, f"BASE no acepta {cat_sup.value} encima (solo SUPERIOR o FLEXIBLE)"
         
         # Regla 4: SI_MISMO solo acepta mismo SKU (validar límite de altura)
         if cat_inf == CategoriaApilamiento.SI_MISMO:
+
+            # Compuesto con rol base: acepta SUPERIOR/FLEXIBLE encima
+            if self._acepta_encima(inferior) and cat_sup in (
+                CategoriaApilamiento.SUPERIOR, CategoriaApilamiento.FLEXIBLE
+            ):
+                return True, None
+            # Compuesto con rol superior encima de compuesto con rol base
+            if self._acepta_encima(inferior) and cat_sup == CategoriaApilamiento.SI_MISMO \
+                    and self._puede_ir_encima(superior):
+                return True, None
+            
             # Permitir máximo 1 picking encima de SI_MISMO (cualquier SKU)
             if superior.tiene_pickings and not superior.tiene_full_pallets:
                 return True, None
@@ -343,6 +388,8 @@ class PosicionCamion:
         # Regla 5: FLEXIBLE actúa como BASE
         if cat_inf == CategoriaApilamiento.FLEXIBLE:
             if cat_sup in (CategoriaApilamiento.SUPERIOR, CategoriaApilamiento.FLEXIBLE):
+                return True, None
+            if cat_sup == CategoriaApilamiento.SI_MISMO and self._puede_ir_encima(superior):
                 return True, None
             return False, f"FLEXIBLE no acepta {cat_sup.value} encima (solo SUPERIOR o FLEXIBLE)"
         
@@ -524,6 +571,8 @@ class LayoutCamion:
                                     'categoria': f.categoria.value,
                                     'es_picking': f.es_picking,
                                     'es_valioso': f.es_valioso,
+                                    'ce': f.ce,
+                                    'cd': f.cd,
                                     'flujo': f.flujo,
                                     "cajas_conf": f.cajas_conf,
                                 }

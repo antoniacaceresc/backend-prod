@@ -26,7 +26,7 @@ from optimization.groups import calcular_tiempo_por_grupo
 from utils.math_utils import format_dates
 from utils.config_helpers import extract_truck_capacities, get_camiones_permitidos_para_ruta, get_capacity_for_type, get_effective_config
 from optimization.pipelines import VCUPipeline, BinPackingPipeline
-
+from optimization.preprocessing.smu_splitter import dividir_pedidos_smu
 
 # ============================================================================
 # CONSTANTES
@@ -116,6 +116,20 @@ def optimizar_con_dos_fases(
     pedidos_objetos, pedidos_dicts = _preprocesar_datos(
         df_raw, client_config, cliente, venta
     )
+
+    # 1.5) PRE-SPLIT para SMU (modo greedy)
+    effective_config = get_effective_config(client_config, venta)
+    splits_info = []
+
+    if effective_config.get("MODO_GREEDY", False):
+        
+        capacidades = extract_truck_capacities(client_config, venta)
+        cap_default = capacidades.get(
+            TipoCamion.PAQUETERA, next(iter(capacidades.values()))
+        )
+        pedidos_objetos, splits_info = dividir_pedidos_smu(
+            pedidos_objetos, cap_default
+        )
     
     # 2) Calcular tiempo por grupo
     effective_config = get_effective_config(client_config, venta)
@@ -161,7 +175,18 @@ def optimizar_con_dos_fases(
         pedidos_objetos, pedidos_dicts, client_config, tpg, request_timeout, venta
     )
 
-    
+    # Enriquecer con info de splits si aplica
+    if splits_info:
+        from optimization.preprocessing.smu_splitter import reconstruir_splits_en_resultado
+        for key in ("vcu", "binpacking"):
+            res = locals().get(f"resultado_{key.replace('binpacking','bp')}")
+            if res and "estadisticas" in res:
+                res["estadisticas"]["splits_info"] = reconstruir_splits_en_resultado(
+                    res.get("camiones", []),
+                    res.get("pedidos_no_incluidos", []),
+                    splits_info,
+                )
+
     return {
         "vcu": resultado_vcu,
         "binpacking": resultado_bp
@@ -273,7 +298,7 @@ def _crear_pedido_desde_dict(p_dict: Dict[str, Any], client_config) -> Pedido:
         "PEDIDO", "CD", "CE", "PO", "PESO", "VOL", "PALLETS", "VALOR",
         "VALOR_CAFE", "OC", "CHOCOLATES", "VALIOSO", "PDQ", "BAJA_VU",
         "LOTE_DIR", "ES_PURINA", "BASE", "SUPERIOR", "FLEXIBLE", "NO_APILABLE",
-        "SI_MISMO", "_skus", "SUBCLIENTE"
+        "SI_MISMO", "BASE_SIMISMO", "SUPERIOR_SIMISMO", "_skus", "SUBCLIENTE"
     }
     
     # Extraer metadata (campos extra)
@@ -301,6 +326,8 @@ def _crear_pedido_desde_dict(p_dict: Dict[str, Any], client_config) -> Pedido:
                 flexible=float(sku_data.get("FLEXIBLE", 0)),
                 no_apilable=float(sku_data.get("NO_APILABLE", 0)),
                 si_mismo=float(sku_data.get("SI_MISMO", 0)),
+                base_simismo=float(sku_data.get("BASE_SIMISMO", 0)),
+                superior_simismo=float(sku_data.get("SUPERIOR_SIMISMO", 0)),
                 pallets_estimados=float(sku_data.get("PALLETS_ESTIMADOS", 0)) or None,
                 pallets_solicitados=float(sku_data.get("PALLETS_SOLIC", 0)) or None,
                 peso_solicitado=float(sku_data.get("PESO_SOLIC", 0)) or None,
@@ -333,6 +360,8 @@ def _crear_pedido_desde_dict(p_dict: Dict[str, Any], client_config) -> Pedido:
         flexible=float(p_dict.get("FLEXIBLE", 0)),
         no_apilable=float(p_dict.get("NO_APILABLE", 0)),
         si_mismo=float(p_dict.get("SI_MISMO", 0)),
+        base_simismo=float(p_dict.get("BASE_SIMISMO", 0)),
+        superior_simismo=float(p_dict.get("SUPERIOR_SIMISMO", 0)),
         skus=skus,
         metadata=metadata
     )

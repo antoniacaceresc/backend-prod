@@ -89,6 +89,9 @@ class SKU:
     flexible: float = 0.0          # Columna: "Flexible"
     no_apilable: float = 0.0       # Columna: "No Apilable"
     si_mismo: float = 0.0          # Columna: "Apilable por si mismo"
+    # Categorías compuestas (subconjunto de base/superior que también puede actuar como si_mismo)
+    base_simismo: float = 0.0
+    superior_simismo: float = 0.0
 
     valioso: bool = False
     
@@ -124,15 +127,10 @@ class SKU:
     
     @property
     def categoria_apilamiento_dominante(self) -> str:
-        """
-        Determina la categoría de apilamiento dominante del SKU.
-        Prioridad: NO_APILABLE > BASE > SUPERIOR > SI_MISMO > FLEXIBLE
-        
-        Returns:
-            Nombre de la categoría ("no_apilable", "base", etc.)
-        """
         if self.no_apilable > 0:
             return "no_apilable"
+        if self.base_simismo > 0 or self.superior_simismo > 0:
+            return "si_mismo"
         if self.base > 0:
             return "base"
         if self.superior > 0:
@@ -141,8 +139,6 @@ class SKU:
             return "si_mismo"
         if self.flexible > 0:
             return "flexible"
-        
-        # Default: flexible
         return "flexible"
     
     def to_fragmento(self, fraccion: float = 1.0) -> FragmentoSKU:
@@ -171,6 +167,8 @@ class SKU:
             descripcion=self.descripcion,
             es_picking=self.es_picking,
             es_valioso=self.valioso,
+            puede_base=self.base_simismo > 0,
+            puede_superior=self.superior_simismo > 0,
             cajas=self.cajas_conf * fraccion,
         )
     
@@ -261,17 +259,25 @@ class Pedido:
     no_apilable: float = 0.0
     si_mismo: float = 0.0
 
+    # Categorías compuestas
+    base_simismo: float = 0.0
+    superior_simismo: float = 0.0
+
     # ========== Apilabilidad Valiosos y no ==========
     base_val: float = 0.0
     superior_val: float = 0.0
     flexible_val: float = 0.0
     no_apilable_val: float = 0.0
     si_mismo_val: float = 0.0
+    base_simismo_val: float = 0.0
+    superior_simismo_val: float = 0.0
     base_noval: float = 0.0
     superior_noval: float = 0.0
     flexible_noval: float = 0.0
     no_apilable_noval: float = 0.0
     si_mismo_noval: float = 0.0
+    base_simismo_noval: float = 0.0
+    superior_simismo_noval: float = 0.0
     
     # ========== Asignación (None si no está asignado) ==========
     camion_id: Optional[str] = None
@@ -460,17 +466,23 @@ class Pedido:
             flexible=float(row.get("FLEXIBLE", 0)),
             no_apilable=float(row.get("NO_APILABLE", 0)),
             si_mismo=float(row.get("SI_MISMO", 0)),
+            base_simismo=float(row.get("BASE_SIMISMO", 0)),
+            superior_simismo=float(row.get("SUPERIOR_SIMISMO", 0)),
 
             base_val=float(row.get("BASE_VAL", 0)),
             superior_val=float(row.get("SUPERIOR_VAL", 0)),
             flexible_val=float(row.get("FLEXIBLE_VAL", 0)),
             no_apilable_val=float(row.get("NO_APILABLE_VAL", 0)),
             si_mismo_val=float(row.get("SI_MISMO_VAL", 0)),
+            base_simismo_val=float(row.get("BASE_SIMISMO_VAL", 0)),
+            superior_simismo_val=float(row.get("SUPERIOR_SIMISMO_VAL", 0)),
             base_noval=float(row.get("BASE_NOVAL", 0)),
             superior_noval=float(row.get("SUPERIOR_NOVAL", 0)),
             flexible_noval=float(row.get("FLEXIBLE_NOVAL", 0)),
             no_apilable_noval=float(row.get("NO_APILABLE_NOVAL", 0)),
             si_mismo_noval=float(row.get("SI_MISMO_NOVAL", 0)),
+            base_simismo_noval=float(row.get("BASE_SIMISMO_NOVAL", 0)),
+            superior_simismo_noval=float(row.get("SUPERIOR_SIMISMO_NOVAL", 0)),
             
             # Metadata (todo lo que no usamos arriba)
             skus = [],
@@ -515,6 +527,8 @@ class Pedido:
             "FLEXIBLE": self.flexible,
             "NO_APILABLE": self.no_apilable,
             "SI_MISMO": self.si_mismo,
+            "BASE_SIMISMO": self.base_simismo,
+            "SUPERIOR_SIMISMO": self.superior_simismo,
         }
         
         # Campos opcionales
@@ -546,6 +560,8 @@ class Pedido:
                     "flexible": sku.flexible,
                     "no_apilable": sku.no_apilable,
                     "si_mismo": sku.si_mismo,
+                    "base_simismo": sku.base_simismo,
+                    "superior_simismo": sku.superior_simismo,
                     "max_altura_apilable_cm": sku.max_altura_apilable_cm,
                     "descripcion": sku.descripcion,
                     "valioso": sku.valioso,
@@ -584,6 +600,8 @@ class Pedido:
             "FLEXIBLE": self.flexible,
             "NO_APILABLE": self.no_apilable,
             "SI_MISMO": self.si_mismo,
+            "BASE_SIMISMO": self.base_simismo,
+            "SUPERIOR_SIMISMO": self.superior_simismo,
         }
         
         if self.oc:

@@ -219,18 +219,27 @@ def _limpiar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
     ]
     for col in numeric_cols:
         if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-    
-    # Apilabilidad (a nivel SKU)
-    apilabilidad_cols = ["BASE", "SUPERIOR", "FLEXIBLE", "NO_APILABLE", "SI_MISMO"]
-    for col in apilabilidad_cols:
-        if col in df.columns:
             df[col] = pd.to_numeric(
                 df[col].astype(str).str.replace(",", ".", regex=False),
                 errors="coerce"
             ).fillna(0)
-        else:
-            df[col] = 0.0
+    
+    # Apilabilidad: inicializar todas las columnas internas
+    for col in ["BASE", "SUPERIOR", "FLEXIBLE", "NO_APILABLE", "SI_MISMO",
+                "BASE_SIMISMO", "SUPERIOR_SIMISMO"]:
+        df[col] = 0.0
+
+    if "APILABILIDAD" in df.columns:
+        # Nuevo formato: columna unificada con valores como "base", "superior, si mismo"
+        df = _parsear_apilabilidad_unificada(df)
+    else:
+        # Retrocompatibilidad: columnas separadas
+        for col in ["BASE", "SUPERIOR", "FLEXIBLE", "NO_APILABLE", "SI_MISMO"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(
+                    df[col].astype(str).str.replace(",", ".", regex=False),
+                    errors="coerce"
+                ).fillna(0)
 
     # Flags (a nivel SKU, se agregarán con MAX)
     flag_cols = ["VALIOSO", "PDQ", "BAJA_VU", "LOTE_DIR"]
@@ -280,7 +289,10 @@ def _limpiar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
     campos_extra_numericos = ["Cant. Sol.", "CJ Conf.", "%NS", "Suma de Sol (Pallet)", "Suma de Conf (Pallet)"]
     for col in campos_extra_numericos:
         if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+            df[col] = pd.to_numeric(
+                df[col].astype(str).str.replace(",", ".", regex=False),
+                errors="coerce"
+            ).fillna(0)
 
     # Asegurar que _CANT_SOL_SIN_STOCK sea numérico
     if "_CANT_SOL_SIN_STOCK" in df.columns:
@@ -288,106 +300,191 @@ def _limpiar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
+def _parsear_apilabilidad_unificada(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Parsea columna 'APILABILIDAD' con valores como 'base', 'superior, si mismo'.
+    Asigna los pallets del SKU a las categorías correspondientes.
+
+    Para compuestos (ej: 'base, si mismo'):
+    - Los pallets se asignan a la categoría primaria (BASE)
+    - Se marca la columna compuesta (BASE_SIMISMO) con el mismo valor
+    """
+    CATEGORIAS_MAP = {
+        "base": "BASE",
+        "superior": "SUPERIOR",
+        "flexible": "FLEXIBLE",
+        "no apilable": "NO_APILABLE",
+        "no_apilable": "NO_APILABLE",
+        "si mismo": "SI_MISMO",
+        "si_mismo": "SI_MISMO",
+        "apilable si mismo": "SI_MISMO",
+    }
+
+    for idx in df.index:
+        raw = str(df.at[idx, "APILABILIDAD"]).strip().lower()
+        pallets = df.at[idx, "PALLETS"]
+
+        if not raw or raw == "nan":
+            df.at[idx, "NO_APILABLE"] = pallets
+            continue
+
+        cats_raw = [c.strip() for c in raw.split(",") if c.strip()]
+        cats = set()
+        for c in cats_raw:
+            mapped = CATEGORIAS_MAP.get(c)
+            if mapped:
+                cats.add(mapped)
+
+        if not cats:
+            df.at[idx, "NO_APILABLE"] = pallets
+            continue
+
+        # Detectar compuestos
+        if "BASE" in cats and "SI_MISMO" in cats:
+            df.at[idx, "BASE"] = pallets
+            df.at[idx, "BASE_SIMISMO"] = pallets
+        elif "SUPERIOR" in cats and "SI_MISMO" in cats:
+            df.at[idx, "SUPERIOR"] = pallets
+            df.at[idx, "SUPERIOR_SIMISMO"] = pallets
+        elif len(cats) == 1:
+            df.at[idx, cats.pop()] = pallets
+        else:
+            # Combinación no contemplada → usar primera por prioridad
+            prioridad = ["NO_APILABLE", "BASE", "SUPERIOR", "FLEXIBLE", "SI_MISMO"]
+            for cat in prioridad:
+                if cat in cats:
+                    df.at[idx, cat] = pallets
+                    break
+
+    return df
 
 def _optimizar_apilabilidad_skus(df: pd.DataFrame, altura_maxima_cm: float = 260) -> pd.DataFrame:
     """
     Optimiza categorías de apilabilidad ANTES de la optimización.
-    
+
     Reglas:
-    1. SI_MISMO > 200cm → NO_APILABLE
-    2. SI_MISMO × 2 > altura_max → intentar convertir a BASE/SUPERIOR
-    3. SI_MISMO con cantidad impar → convertir último a BASE/SUPERIOR
-    
+    1. Altura > 200cm → NO_APILABLE (aplica a puros y compuestos)
+    2. 2 × altura > altura_max → no puede apilarse consigo mismo:
+       - SI_MISMO puro → intentar convertir a BASE/SUPERIOR
+       - Compuesto → se queda como BASE/SUPERIOR puro (se limpia el flag)
+    3. Cantidad impar o con picking → solo para SI_MISMO puro.
+       Los compuestos NO se tocan: conservan su doble rol y el validador
+       decide en el layout si aparean entre sí o se montan sobre una base.
+
     Args:
         df: DataFrame de SKUs con columnas de apilabilidad
         altura_maxima_cm: Altura máxima del camión
-    
+
     Returns:
         DataFrame con apilabilidad optimizada
     """
     df = df.copy()
-    
-    # Contador de cambios
+
     cambios = {
         'si_mismo_a_no_apilable': 0,
         'si_mismo_a_base_superior': 0,
-        'impares_ajustados': 0
+        'impares_ajustados': 0,
+        'compuestos_degradados': 0,
     }
 
-    for col in ['BASE', 'SUPERIOR', 'FLEXIBLE', 'NO_APILABLE', 'SI_MISMO']:
+    cols_apil = ['BASE', 'SUPERIOR', 'FLEXIBLE', 'NO_APILABLE', 'SI_MISMO',
+                 'BASE_SIMISMO', 'SUPERIOR_SIMISMO']
+    for col in cols_apil:
         if col in df.columns:
-            df[col] = df[col].astype(float)
-    
-    # Iterar sobre SKUs con SI_MISMO > 0
-    for idx in df[df['SI_MISMO'] > 0].index:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0).astype(float)
+        else:
+            df[col] = 0.0
 
-        altura = df.at[idx, 'ALTURA_FULL_PALLET']
-        si_mismo = df.at[idx, 'SI_MISMO']
-        
-        # Separar parte entera (pallets completos) y decimal (picking)
+    # SKUs que pueden apilarse consigo mismos: puros o compuestos
+    mask = (df['SI_MISMO'] > 0) | (df['BASE_SIMISMO'] > 0) | (df['SUPERIOR_SIMISMO'] > 0)
+
+    for idx in df[mask].index:
+
+        altura = float(df.at[idx, 'ALTURA_FULL_PALLET'] or 0)
+
+        es_base_sim = float(df.at[idx, 'BASE_SIMISMO']) > 0
+        es_sup_sim = float(df.at[idx, 'SUPERIOR_SIMISMO']) > 0
+        es_compuesto = es_base_sim or es_sup_sim
+
+        if es_base_sim:
+            col_sim = 'BASE_SIMISMO'
+            col_primaria = 'BASE'
+        elif es_sup_sim:
+            col_sim = 'SUPERIOR_SIMISMO'
+            col_primaria = 'SUPERIOR'
+        else:
+            col_sim = 'SI_MISMO'
+            col_primaria = None
+
+        si_mismo = float(df.at[idx, col_sim])
+
         pallets_completos = int(si_mismo)
-        picking = si_mismo - pallets_completos  # Parte decimal
+        picking = si_mismo - pallets_completos
         es_solo_picking = pallets_completos == 0
-        
-        # REGLAS 1 y 2: Solo aplican si hay pallets completos
+
+        # ── REGLAS 1 y 2: solo con pallets completos ──
         if not es_solo_picking:
-            # REGLA 1: Si altura > 200cm → NO_APILABLE (solo pallets completos)
+
+            # REGLA 1: altura > 200cm → NO_APILABLE
             if altura > 200:
-                df.at[idx, 'NO_APILABLE'] += si_mismo
-                df.at[idx, 'SI_MISMO'] = 0
+                df.at[idx, 'NO_APILABLE'] = float(df.at[idx, 'NO_APILABLE']) + si_mismo
+                df.at[idx, col_sim] = 0.0
+                if col_primaria:
+                    df.at[idx, col_primaria] = float(df.at[idx, col_primaria]) - si_mismo
                 cambios['si_mismo_a_no_apilable'] += 1
                 continue
-            
-            # REGLA 2: Si 2 × altura > altura_max → intentar BASE/SUPERIOR
+
+            # REGLA 2: 2 × altura > altura_max → no puede auto-apilarse
             if 2 * altura > altura_maxima_cm:
-                puede_ser_base = df.at[idx, 'BASE'] > 0 or _tiene_columna_base(df, idx)
-                puede_ser_superior = df.at[idx, 'SUPERIOR'] > 0 or _tiene_columna_superior(df, idx)
-                
-                if puede_ser_base:
-                    df.at[idx, 'BASE'] += si_mismo
-                    df.at[idx, 'SI_MISMO'] = 0
-                    cambios['si_mismo_a_base_superior'] += 1
-                elif puede_ser_superior:
-                    df.at[idx, 'SUPERIOR'] += si_mismo
-                    df.at[idx, 'SI_MISMO'] = 0
-                    cambios['si_mismo_a_base_superior'] += 1
+                if es_compuesto:
+                    # Ya está contabilizado en BASE/SUPERIOR: solo pierde el rol si_mismo
+                    df.at[idx, col_sim] = 0.0
+                    cambios['compuestos_degradados'] += 1
+                else:
+                    puede_ser_base = float(df.at[idx, 'BASE']) > 0 or _tiene_columna_base(df, idx)
+                    puede_ser_superior = float(df.at[idx, 'SUPERIOR']) > 0 or _tiene_columna_superior(df, idx)
+
+                    if puede_ser_base:
+                        df.at[idx, 'BASE'] = float(df.at[idx, 'BASE']) + si_mismo
+                        df.at[idx, 'SI_MISMO'] = 0.0
+                        cambios['si_mismo_a_base_superior'] += 1
+                    elif puede_ser_superior:
+                        df.at[idx, 'SUPERIOR'] = float(df.at[idx, 'SUPERIOR']) + si_mismo
+                        df.at[idx, 'SI_MISMO'] = 0.0
+                        cambios['si_mismo_a_base_superior'] += 1
                 continue
-        
-        # REGLA 3: Convertir sobrantes (impar + picking) a BASE/SUPERIOR
-        # - Solo picking (0.3): convertir todo
-        # - Impar + picking (2.3): convertir 1 + 0.3 = 1.3
-        # - Par + picking (2.3 con par=2): convertir solo 0.3
-        # - Impar sin picking (3.0): convertir 1
-        puede_ser_base = df.at[idx, 'BASE'] > 0 or _tiene_columna_base(df, idx)
-        puede_ser_superior = df.at[idx, 'SUPERIOR'] > 0 or _tiene_columna_superior(df, idx)
-        
+
+        # ── REGLA 3: sobrantes impares ──
         if es_solo_picking:
-            # Solo picking: convertir todo a BASE/SUPERIOR
             a_convertir = picking
         elif pallets_completos % 2 != 0:
-            # Impar: convertir 1 pallet + picking
             a_convertir = 1 + picking
         elif picking > 0.001:
-            # Par con picking: convertir solo el picking
             a_convertir = picking
         else:
-            # Par sin picking: nada que convertir
-            a_convertir = 0
-        
+            a_convertir = 0.0
+
         if a_convertir > 0.001:
+            puede_ser_base = float(df.at[idx, 'BASE']) > 0 or _tiene_columna_base(df, idx)
+            puede_ser_superior = float(df.at[idx, 'SUPERIOR']) > 0 or _tiene_columna_superior(df, idx)
+
             if puede_ser_base:
-                df.at[idx, 'BASE'] += a_convertir
-                df.at[idx, 'SI_MISMO'] -= a_convertir
+                df.at[idx, 'BASE'] = float(df.at[idx, 'BASE']) + a_convertir
+                df.at[idx, 'SI_MISMO'] = float(df.at[idx, 'SI_MISMO']) - a_convertir
                 cambios['impares_ajustados'] += 1
             elif puede_ser_superior:
-                df.at[idx, 'SUPERIOR'] += a_convertir
-                df.at[idx, 'SI_MISMO'] -= a_convertir
+                df.at[idx, 'SUPERIOR'] = float(df.at[idx, 'SUPERIOR']) + a_convertir
+                df.at[idx, 'SI_MISMO'] = float(df.at[idx, 'SI_MISMO']) - a_convertir
                 cambios['impares_ajustados'] += 1
-    for col in ['BASE', 'SUPERIOR', 'FLEXIBLE', 'NO_APILABLE', 'SI_MISMO']:
-       df[col] = df[col].clip(lower=0)
-    
-    return df
 
+    for col in cols_apil:
+        df[col] = df[col].clip(lower=0)
+
+    # Invariante: un compuesto nunca puede exceder su categoría primaria
+    df['BASE_SIMISMO'] = df[['BASE_SIMISMO', 'BASE']].min(axis=1)
+    df['SUPERIOR_SIMISMO'] = df[['SUPERIOR_SIMISMO', 'SUPERIOR']].min(axis=1)
+
+    return df
 
 def _tiene_columna_base(df: pd.DataFrame, idx: int) -> bool:
     """Verifica si el SKU puede ser BASE según columna APILABLE_BASE"""
@@ -459,13 +556,15 @@ def _validar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
             df.at[idx, 'FLEXIBLE'] *= factor
             df.at[idx, 'NO_APILABLE'] *= factor
             df.at[idx, 'SI_MISMO'] *= factor
+            df.at[idx, 'BASE_SIMISMO'] *= factor
+            df.at[idx, 'SUPERIOR_SIMISMO'] *= factor
             
     
     df = df.drop(columns=["SUMA_APILABILIDAD", "EXCEDE_PALLETS"])
     
     # Separar apilabilidad por valor (valioso / no valioso) a nivel SKU.
     # Solo se poblarán de forma útil cuando el cliente use SEPARAR_APILABILIDAD_POR_VALOR, para el resto quedan en 0 y no afectan nada.
-    apilabilidad_cols = ["BASE", "SUPERIOR", "FLEXIBLE", "NO_APILABLE", "SI_MISMO"]
+    apilabilidad_cols = ["BASE", "SUPERIOR", "FLEXIBLE", "NO_APILABLE", "SI_MISMO", "BASE_SIMISMO", "SUPERIOR_SIMISMO"]
     es_val = df["VALIOSO"] == 1
     for col in apilabilidad_cols:
         df[f"{col}_VAL"] = df[col].where(es_val, 0.0)
@@ -495,9 +594,13 @@ def _agregar_skus_a_pedidos(
     # Campos que se suman
     campos_suma = [
         "PALLETS", "PESO", "VOL", "VALOR", "VALOR_CAFE",
-        "BASE", "SUPERIOR", "FLEXIBLE", "NO_APILABLE", "SI_MISMO", "PALLETS_ESTIMADO",
+        "BASE", "SUPERIOR", "FLEXIBLE", "NO_APILABLE", "SI_MISMO",
+        "BASE_SIMISMO", "SUPERIOR_SIMISMO",
+        "PALLETS_ESTIMADO",
         "BASE_VAL", "SUPERIOR_VAL", "FLEXIBLE_VAL", "NO_APILABLE_VAL", "SI_MISMO_VAL",
         "BASE_NOVAL", "SUPERIOR_NOVAL", "FLEXIBLE_NOVAL", "NO_APILABLE_NOVAL", "SI_MISMO_NOVAL",
+        "BASE_SIMISMO_VAL", "SUPERIOR_SIMISMO_VAL",
+        "BASE_SIMISMO_NOVAL", "SUPERIOR_SIMISMO_NOVAL",
     ]
     
     # Campos que se toman con MAX (flags)

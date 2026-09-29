@@ -41,6 +41,8 @@ class HeightValidator:
         altura_maxima_mismo_sku_cm: Optional[float] = None,
         flujo_config: Optional[dict] = None,
         separar_por_flujo: bool = False,
+        separar_por_ce: bool = False,
+        separar_por_cd: bool = False,
     ):
         """
         Args:
@@ -55,6 +57,8 @@ class HeightValidator:
         self.altura_maxima_mismo_sku_cm: Optional[float] = altura_maxima_mismo_sku_cm
         self.flujo_config: dict = flujo_config or {}
         self.separar_por_flujo = separar_por_flujo
+        self.separar_por_ce = separar_por_ce
+        self.separar_por_cd = separar_por_cd
 
     
     def validar_camion_rapido(
@@ -138,55 +142,71 @@ class HeightValidator:
 
     def _categorias_por_pallet(self, sku) -> list:
         """
-        Genera lista de categorías para cada pallet completo del SKU,
-        respetando la distribución real (ej: 1 SUPERIOR + 6 SI_MISMO → [SUPERIOR, SI_MISMO, SI_MISMO, ...]).
-        
-        El orden es: NO_APILABLE → BASE → SUPERIOR → SI_MISMO → FLEXIBLE
-        (los más restrictivos primero, para que se coloquen antes en el layout)
+        Genera lista de (categoria, puede_base, puede_superior) por pallet completo.
+
+        Los pallets compuestos (base_simismo / superior_simismo) se emiten como
+        SI_MISMO con el rol adicional marcado: pueden apilarse consigo mismos
+        O actuar como base/superior, lo que convenga al layout.
+
+        Orden: NO_APILABLE → BASE pura → SUPERIOR pura → compuestos → SI_MISMO → FLEXIBLE
         """
         categorias = []
-        orden = [
-            ("no_apilable", CategoriaApilamiento.NO_APILABLE),
-            ("base",        CategoriaApilamiento.BASE),
-            ("superior",    CategoriaApilamiento.SUPERIOR),
-            ("si_mismo",    CategoriaApilamiento.SI_MISMO),
-            ("flexible",    CategoriaApilamiento.FLEXIBLE),
-        ]
-        for attr, cat_enum in orden:
-            cantidad = int(getattr(sku, attr, 0))
-            categorias.extend([cat_enum] * cantidad)
-        return categorias
 
+        base_sim = int(getattr(sku, "base_simismo", 0))
+        sup_sim = int(getattr(sku, "superior_simismo", 0))
+
+        # Las puras son el remanente tras descontar los compuestos
+        base_pura = max(int(getattr(sku, "base", 0)) - base_sim, 0)
+        sup_pura = max(int(getattr(sku, "superior", 0)) - sup_sim, 0)
+
+        orden = [
+            (int(getattr(sku, "no_apilable", 0)), CategoriaApilamiento.NO_APILABLE, False, False),
+            (base_pura,                            CategoriaApilamiento.BASE,        False, False),
+            (sup_pura,                             CategoriaApilamiento.SUPERIOR,    False, False),
+            (base_sim,                             CategoriaApilamiento.SI_MISMO,    True,  False),
+            (sup_sim,                              CategoriaApilamiento.SI_MISMO,    False, True),
+            (int(getattr(sku, "si_mismo", 0)),     CategoriaApilamiento.SI_MISMO,    False, False),
+            (int(getattr(sku, "flexible", 0)),     CategoriaApilamiento.FLEXIBLE,    False, False),
+        ]
+        for cantidad, cat_enum, p_base, p_sup in orden:
+            categorias.extend([(cat_enum, p_base, p_sup)] * cantidad)
+        return categorias
+    
     def _extraer_fragmentos_batch(
         self,
         pedidos: List[Pedido]
     ) -> List[FragmentoSKU]:
         """
         Extrae fragmentos de todos los pedidos.
-        
+
         ✅ MANEJA CASOS EDGE:
         - Altura full pallet = 0 → usar altura picking o 1cm mínimo
         - Altura picking = 0 → usar altura full pallet proporcionalmente
         - Cantidad < 1 → fragmento único con altura ajustada
+        - Categorías compuestas (base_simismo / superior_simismo) → SI_MISMO con rol extra
         """
         fragmentos = []
-        
+
         for pedido in pedidos:
             if pedido.tiene_skus:
                 # Pedido con SKUs detallados
                 for sku in pedido.skus:
                     try:
                         cantidad_pallets = sku.cantidad_pallets
-                        
+
                         # VALIDACIÓN: Verificar que haya al menos UNA altura válida
                         altura_full = sku.altura_full_pallet_cm if sku.altura_full_pallet_cm > 0 else 0
                         altura_pick = sku.altura_picking_cm if (sku.altura_picking_cm and sku.altura_picking_cm > 0) else 0
-                        
+
                         if altura_full == 0 and altura_pick == 0:
                             # CASO CRÍTICO: Sin ninguna altura válida
                             print(f"[WARN] SKU {sku.sku_id} sin alturas válidas, usando 100cm por defecto")
                             altura_full = 100.0  # Altura por defecto conservadora
-                        
+
+                        # Roles compuestos a nivel de SKU (para los casos sin lista por pallet)
+                        sku_puede_base = getattr(sku, "base_simismo", 0) > 0
+                        sku_puede_superior = getattr(sku, "superior_simismo", 0) > 0
+
                         # CASO 1: Cantidad < 1 (solo picking)
                         if cantidad_pallets < 1.0:
                             # Es un picking parcial
@@ -198,11 +218,11 @@ class HeightValidator:
                             else:
                                 # Fallback
                                 altura_cm = 50.0
-                            
+
                             if altura_cm <= 0:
                                 print(f"[WARN] PICKING SKU {sku.sku_id}: altura = 0, usando 50cm")
                                 altura_cm = 50.0
-                            
+
                             frag = FragmentoSKU(
                                 sku_id=sku.sku_id,
                                 pedido_id=pedido.pedido,
@@ -211,20 +231,24 @@ class HeightValidator:
                                 peso_kg=sku.peso_kg,
                                 volumen_m3=sku.volumen_m3,
                                 categoria=CategoriaApilamiento(sku.categoria_apilamiento_dominante),
+                                puede_base=sku_puede_base,
+                                puede_superior=sku_puede_superior,
                                 max_altura_apilable_cm=sku.max_altura_apilable_cm,
                                 descripcion=sku.descripcion,
                                 es_picking=True,
                                 es_valioso=sku.valioso,
+                                ce=pedido.ce,
+                                cd=pedido.cd,
                                 flujo=pedido.oc,
                                 cajas=sku.cajas_conf,
                             )
                             fragmentos.append(frag)
                             continue
-                        
+
                         # CASO 2: Cantidad >= 1 (pallets completos + picking opcional)
                         pallets_completos = int(cantidad_pallets)
                         fraccion_picking = cantidad_pallets - pallets_completos
-                        
+
                         # DETERMINAR altura para pallets completos
                         if altura_full > 0:
                             altura_full_usar = altura_full
@@ -235,11 +259,16 @@ class HeightValidator:
                         else:
                             altura_full_usar = 100.0
                             print(f"[WARN] SKU {sku.sku_id}: sin altura full, usando 100cm")
-                        
+
                         # Pallets completos (full pallet)
                         categorias_lista = self._categorias_por_pallet(sku)
                         for i in range(pallets_completos):
-                            cat = categorias_lista[i] if i < len(categorias_lista) else CategoriaApilamiento(sku.categoria_apilamiento_dominante)
+                            if i < len(categorias_lista):
+                                cat, p_base, p_sup = categorias_lista[i]
+                            else:
+                                cat = CategoriaApilamiento(sku.categoria_apilamiento_dominante)
+                                p_base, p_sup = sku_puede_base, sku_puede_superior
+
                             frag = FragmentoSKU(
                                 sku_id=sku.sku_id,
                                 pedido_id=pedido.pedido,
@@ -248,22 +277,26 @@ class HeightValidator:
                                 peso_kg=sku.peso_kg / cantidad_pallets,
                                 volumen_m3=sku.volumen_m3 / cantidad_pallets,
                                 categoria=cat,
+                                puede_base=p_base,
+                                puede_superior=p_sup,
                                 max_altura_apilable_cm=sku.max_altura_apilable_cm,
                                 descripcion=sku.descripcion,
                                 es_picking=False,
                                 es_valioso=sku.valioso,
+                                ce=pedido.ce,
+                                cd=pedido.cd,
                                 flujo=pedido.oc,
                                 cajas=sku.cajas_conf / cantidad_pallets,
                             )
                             fragmentos.append(frag)
-                        
+
                         # Categoría del picking: la siguiente en la lista tras los pallets completos
-                        cat_picking = (
-                            categorias_lista[pallets_completos]
-                            if pallets_completos < len(categorias_lista)
-                            else CategoriaApilamiento(sku.categoria_apilamiento_dominante)
-                        )
-                        
+                        if pallets_completos < len(categorias_lista):
+                            cat_picking, pick_base, pick_sup = categorias_lista[pallets_completos]
+                        else:
+                            cat_picking = CategoriaApilamiento(sku.categoria_apilamiento_dominante)
+                            pick_base, pick_sup = sku_puede_base, sku_puede_superior
+
                         # PICKING: fracción sobrante
                         if fraccion_picking > 0.01:
                             # Usar altura_picking si existe, sino proporcional
@@ -271,11 +304,11 @@ class HeightValidator:
                                 altura_picking = altura_pick
                             else:
                                 altura_picking = altura_full_usar * fraccion_picking
-                            
+
                             if altura_picking <= 0:
                                 print(f"[WARN] SKU {sku.sku_id}: altura picking = 0, usando 50cm")
                                 altura_picking = 50.0
-                            
+
                             frag_picking = FragmentoSKU(
                                 sku_id=sku.sku_id,
                                 pedido_id=pedido.pedido,
@@ -284,15 +317,19 @@ class HeightValidator:
                                 peso_kg=sku.peso_kg * fraccion_picking / cantidad_pallets,
                                 volumen_m3=sku.volumen_m3 * fraccion_picking / cantidad_pallets,
                                 categoria=cat_picking,
+                                puede_base=pick_base,
+                                puede_superior=pick_sup,
                                 max_altura_apilable_cm=sku.max_altura_apilable_cm,
                                 descripcion=sku.descripcion,
                                 es_picking=True,
                                 es_valioso=sku.valioso,
+                                ce=pedido.ce,
+                                cd=pedido.cd,
                                 flujo=pedido.oc,
                                 cajas=sku.cajas_conf * fraccion_picking / cantidad_pallets,
                             )
                             fragmentos.append(frag_picking)
-                    
+
                     except Exception as e:
                         # CAPTURAR errores por SKU individual
                         print(f"[ERROR] ❌ Error procesando SKU {sku.sku_id} del pedido {pedido.pedido}: {e}")
@@ -300,7 +337,7 @@ class HeightValidator:
                         traceback.print_exc()
                         # Continuar con siguiente SKU
                         continue
-            
+
             else:
                 # Pedido legacy (sin SKUs): crear fragmento único
                 try:
@@ -308,9 +345,9 @@ class HeightValidator:
                     fragmentos.append(frag)
                 except Exception as e:
                     continue
-        
-        return fragmentos
 
+        return fragmentos
+    
     def _pedido_a_fragmento_legacy(self, pedido: Pedido) -> FragmentoSKU:
         """
         Convierte pedido legacy (sin SKUs) a fragmento único.
@@ -343,6 +380,8 @@ class HeightValidator:
             descripcion=f"Pedido legacy {pedido.pedido}",
             es_picking=False,
             es_valioso=pedido.valioso,
+            ce=pedido.ce,
+            cd=pedido.cd,
             flujo=pedido.oc,
             cajas=getattr(pedido, 'cajas_conf', 0.0),
         )
@@ -518,6 +557,18 @@ class HeightValidator:
                     if posicion.altura_usada_cm + frag.altura_cm > altura_limite:
                         continue
 
+                    # Regla Disvet: no mezclar CEs en multi_ce
+                    if self.separar_por_ce and frag.ce:
+                        ces_pos = {f.ce for p in posicion.pallets_apilados for f in p.fragmentos if f.ce}
+                        if ces_pos and frag.ce not in ces_pos:
+                            continue
+
+                    # Regla Disvet: no mezclar CDs en multi_cd
+                    if self.separar_por_cd and frag.cd:
+                        cds_pos = {f.cd for p in posicion.pallets_apilados for f in p.fragmentos if f.cd}
+                        if cds_pos and frag.cd not in cds_pos:
+                            continue
+
                     # Regla Cencosud: no mezclar valiosos con no-valiosos
                     pos_val = any(f.es_valioso for p in posicion.pallets_apilados for f in p.fragmentos)
                     if frag.es_valioso != pos_val:
@@ -579,6 +630,18 @@ class HeightValidator:
                         cat_existente = self._categoria_dominante_pallet(pallet_existente)
                         
                         if cat_existente == CategoriaApilamiento.SUPERIOR:
+                            # Regla Disvet: no mezclar CEs en multi_ce
+                            if self.separar_por_ce and frag.ce:
+                                ces_pos = {f.ce for p in posicion.pallets_apilados for f in p.fragmentos if f.ce}
+                                if ces_pos and frag.ce not in ces_pos:
+                                    continue
+
+                            # Regla Disvet: no mezclar CDs en multi_cd
+                            if self.separar_por_cd and frag.cd:
+                                cds_pos = {f.cd for p in posicion.pallets_apilados for f in p.fragmentos if f.cd}
+                                if cds_pos and frag.cd not in cds_pos:
+                                    continue
+
                             # Regla Cencosud: no mezclar valiosos con no-valiosos
                             existente_val = any(f.es_valioso for f in pallet_existente.fragmentos)
                             if frag.es_valioso != existente_val:
@@ -897,25 +960,31 @@ class HeightValidator:
     def _prioridad_colocacion(self, frag: FragmentoSKU) -> int:
         """
         Determina prioridad de colocación (menor = primero).
-        
-        Dos fases:
-        FASE 1 - Full pallets por categoría (van primero a piso):
-            NO_APILABLE > BASE > SI_MISMO > SUPERIOR > FLEXIBLE
-        FASE 2 - Pickings por categoría (se apilan sobre los full pallets):
-            Mismo orden de categoría, filtrados después
+
+        Los fragmentos compuestos (SI_MISMO con rol base/superior) se colocan
+        DESPUÉS de los SUPERIOR puros: así los superiores puros reclaman las
+        bases disponibles y los compuestos se aparean entre sí, que es lo que
+        menos posiciones consume.
         """
-        prioridades = {
-            CategoriaApilamiento.NO_APILABLE: 0,
-            CategoriaApilamiento.BASE: 1,
-            CategoriaApilamiento.SI_MISMO: 2,
-            CategoriaApilamiento.SUPERIOR: 3,
-            CategoriaApilamiento.FLEXIBLE: 4,
-        }
+        es_compuesto = frag.puede_base or frag.puede_superior
+
+        if frag.categoria == CategoriaApilamiento.SI_MISMO and es_compuesto:
+            cat_prio = 4          # después de SUPERIOR puro
+        else:
+            cat_prio = {
+                CategoriaApilamiento.NO_APILABLE: 0,
+                CategoriaApilamiento.BASE: 1,
+                CategoriaApilamiento.SI_MISMO: 2,
+                CategoriaApilamiento.SUPERIOR: 3,
+                CategoriaApilamiento.FLEXIBLE: 5,
+            }[frag.categoria]
+
         fase = 0 if not frag.es_picking else 1
-        cat_prio = prioridades[frag.categoria]
-        
-        # Ordenar por (fase, categoría, altura desc para mejor empaquetamiento)
-        return (fase, cat_prio, -frag.altura_cm)
+
+        # Agrupar compuestos por SKU para que los gemelos queden contiguos
+        # y se apareen entre sí antes de buscar una base.
+        return (fase, cat_prio, frag.sku_id, -frag.altura_cm)
+
 
     def _calcular_altura_picking_posicion(self, posicion: PosicionCamion) -> float:
         """

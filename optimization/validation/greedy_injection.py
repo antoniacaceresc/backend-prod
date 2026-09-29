@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import List, Dict, Set, Tuple, Optional
 
 from models.domain import Camion, Pedido
+from models.enums import TipoRuta
 from optimization.validation.height_validator import HeightValidator
 from optimization.utils.helpers import calcular_posiciones_apilabilidad
 from optimization.validation.layout_serialization import metricas_layout
@@ -66,6 +67,8 @@ class GreedyInjector:
         self.max_skus_por_pallet = self.effective_config.get('MAX_SKUS_POR_PALLET', 1)
         self.flujo_config = self.effective_config.get('FLUJO_CONFIG', {}) or {}
         self.max_altura_picking = self.effective_config.get('MAX_ALTURA_PICKING_APILADO_CM')
+        self.separar_apilabilidad_por_ce = self.effective_config.get('SEPARAR_APILABILIDAD_POR_CE', False)
+        self.separar_apilabilidad_por_cd = self.effective_config.get('SEPARAR_APILABILIDAD_POR_CD', False)
         
         # Crear validador de altura
         self.height_validator = HeightValidator(
@@ -74,6 +77,8 @@ class GreedyInjector:
             max_skus_por_pallet=self.max_skus_por_pallet,
             max_altura_picking_apilado_cm=effective_config.get("ALTURA_MAX_PICKING_APILADO_CM") if effective_config else None,
             flujo_config=self.flujo_config,
+            separar_por_ce= False,
+            separar_por_cd= False,
         )
     
     def inyectar(
@@ -426,6 +431,8 @@ class GreedyInjector:
             max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM"),
             altura_maxima_mismo_sku_cm=altura_maxima_mismo_sku_cm,
             flujo_config=self.flujo_config,
+            separar_por_ce= False,
+            separar_por_cd= False,
         )
         
         es_valido, errores, layout, debug_info = validator.validar_camion_rapido(camion_temp)
@@ -482,6 +489,8 @@ class GreedyInjector:
             max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM"),
             altura_maxima_mismo_sku_cm=altura_maxima_mismo_sku_cm,
             flujo_config=self.flujo_config,
+            separar_por_ce= False,
+            separar_por_cd= False,
         )
         
         es_valido, errores, layout, debug_info = validator.validar_camion_rapido(camion)

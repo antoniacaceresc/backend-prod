@@ -17,11 +17,7 @@ class DisvetConfig:
             "VALOR_CAFE": "Valor Cafe",
             "BAJA_VU": "Baja VU Disvet",
             "LOTE_DIR": "Lote Dirigido Disvet",
-            "BASE": "Base",
-            "SUPERIOR": "Superior",
-            "FLEXIBLE": "Flexible",
-            "NO_APILABLE": "No Apilable",
-            "SI_MISMO": "Apilable si mismo",
+            "APILABILIDAD": "Apilabilidad",
             "SKU": "SKU",
             "ALTURA_PICKING": "Altura Picking",
             "ALTURA_FULL_PALLET": "Altura full Pallet",
@@ -49,6 +45,9 @@ class DisvetConfig:
             
             "ADHERENCIA_BACKHAUL": None,
             "MODO_ADHERENCIA": None,
+
+            "SEPARAR_APILABILIDAD_POR_CE": True,
+            "SEPARAR_APILABILIDAD_POR_CD": True,
             
             "VALIDAR_ALTURA": True,
             "PERMITE_CONSOLIDACION": True,

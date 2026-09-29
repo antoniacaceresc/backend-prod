@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import List, Optional, Dict, Any
 
 from models.domain import Camion, TruckCapacity
-from models.enums import TipoCamion
+from models.enums import TipoCamion, TipoRuta
 from optimization.utils.helpers import calcular_posiciones_apilabilidad
 from optimization.validation.height_validator import HeightValidator
 from optimization.validation.layout_serialization import construir_layout_info
@@ -245,6 +245,14 @@ class NestleReclassifier:
             max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM"),
             altura_maxima_mismo_sku_cm=altura_maxima_mismo_sku_cm,
             flujo_config=effective.get("FLUJO_CONFIG", {}) or {},
+            separar_por_ce=(
+                effective.get("SEPARAR_APILABILIDAD_POR_CE", False)
+                and camion.tipo_ruta in (TipoRuta.MULTI_CE, TipoRuta.MULTI_CE_PRIORIDAD)
+            ),
+            separar_por_cd=(
+                effective.get("SEPARAR_APILABILIDAD_POR_CD", False)
+                and camion.tipo_ruta == TipoRuta.MULTI_CD
+            ),
         )
         
         # Ejecutar validación de altura

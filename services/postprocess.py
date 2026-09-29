@@ -167,6 +167,8 @@ def _pedido_from_dict(p_dict: Dict[str, Any]) -> Pedido:
                 flexible=float(sku_dict.get("flexible", 0)),
                 no_apilable=float(sku_dict.get("no_apilable", 0)),
                 si_mismo=float(sku_dict.get("si_mismo", 0)),
+                base_simismo=float(sku_dict.get("base_simismo", 0)),
+                superior_simismo=float(sku_dict.get("superior_simismo", 0)),
                 max_altura_apilable_cm=float(sku_dict["max_altura_apilable_cm"]) if sku_dict.get("max_altura_apilable_cm") else None,
                 descripcion=sku_dict.get("descripcion"),
                 valioso=bool(sku_dict.get("valioso", False)),
@@ -179,7 +181,7 @@ def _pedido_from_dict(p_dict: Dict[str, Any]) -> Pedido:
         "PEDIDO", "CD", "CE", "PO", "PESO", "VOL", "PALLETS", "VALOR",
         "VALOR_CAFE", "PALLETS_REAL", "OC", "CHOCOLATES", "VALIOSO", "PDQ",
         "BAJA_VU", "LOTE_DIR", "BASE", "SUPERIOR", "FLEXIBLE", "NO_APILABLE",
-        "SI_MISMO", "SKUS", "VCU_VOL", "VCU_PESO", "CAMION", "GRUPO",
+        "SI_MISMO","SUPERIOR_SIMISMO", "BASE_SIMISMO", "SKUS", "VCU_VOL", "VCU_PESO", "CAMION", "GRUPO",
         "TIPO_RUTA", "TIPO_CAMION"
     }
     
@@ -208,6 +210,8 @@ def _pedido_from_dict(p_dict: Dict[str, Any]) -> Pedido:
         flexible=float(p_dict.get("FLEXIBLE", 0)),
         no_apilable=float(p_dict.get("NO_APILABLE", 0)),
         si_mismo=float(p_dict.get("SI_MISMO", 0)),
+        base_simismo=float(p_dict.get("BASE_SIMISMO", 0)),
+        superior_simismo=float(p_dict.get("SUPERIOR_SIMISMO", 0)),
         skus=skus,
         metadata=metadata
     )
@@ -705,7 +709,9 @@ def _validar_altura_pre_agregar(
         max_skus_por_pallet=consolidacion["MAX_SKUS_POR_PALLET"],
         max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM"),
         altura_maxima_mismo_sku_cm=altura_maxima_mismo_sku_cm,
-        flujo_config=effective.get("FLUJO_CONFIG", {})
+        flujo_config= effective.get("FLUJO_CONFIG", {}),
+        separar_por_ce=(effective.get("SEPARAR_APILABILIDAD_POR_CE", False) and camion_simulado.tipo_ruta in (TipoRuta.MULTI_CE, TipoRuta.MULTI_CE_PRIORIDAD) ),
+        separar_por_cd=(effective.get("SEPARAR_APILABILIDAD_POR_CD", False) and camion_simulado.tipo_ruta == TipoRuta.MULTI_CD),
     )
     
     # Ejecutar validación

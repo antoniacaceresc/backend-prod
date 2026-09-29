@@ -14,7 +14,6 @@ from optimization.pipelines.base import (
     PipelineResult,
     PhaseContext
 )
-
 from optimization.pipelines.vcu_pipeline import VCUPipeline
 from optimization.pipelines.binpacking_pipeline import BinPackingPipeline
 
