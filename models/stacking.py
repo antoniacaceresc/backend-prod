@@ -51,6 +51,8 @@ class FragmentoSKU:
     es_valioso: bool = False
     cajas: float = 0.0  # Cajas confirmadas de este fragmento
     flujo: Optional[str] = None   # "INV" | "CRR" | (None = no aplica)
+    ti: Optional[float] = None
+    hi: Optional[float] = None
     
     # Metadata
     descripcion: Optional[str] = None

@@ -171,6 +171,8 @@ def _pedido_from_dict(p_dict: Dict[str, Any]) -> Pedido:
                 descripcion=sku_dict.get("descripcion"),
                 valioso=bool(sku_dict.get("valioso", False)),
                 cajas_conf=float(sku_dict.get("cajas_conf", 0) or 0),
+                ti=float(sku_dict.get("ti", 0) or 0) or None,
+                hi=float(sku_dict.get("hi", 0) or 0) or None,
             )
             skus.append(sku)
     

@@ -308,6 +308,8 @@ def _crear_pedido_desde_dict(p_dict: Dict[str, Any], client_config) -> Pedido:
                 descripcion=str(sku_data.get("DESCRIPCION", "")) or None,
                 valioso=bool(int(float(sku_data.get("VALIOSO", 0)))),
                 cajas_conf=float(sku_data.get("CJ Conf.", 0) or 0),
+                ti=float(sku_data.get("TI", 0) or 0) or None,
+                hi=float(sku_data.get("HI", 0) or 0) or None,
             )
             skus.append(sku)
     

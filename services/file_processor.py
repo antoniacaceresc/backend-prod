@@ -116,6 +116,8 @@ def build_column_mapping(client_config, venta: str) -> Dict[str, str]:
         "ALTURA_FULL_PALLET": "Altura full Pallet",
         "ALTURA_PICKING": "Altura Picking",
         "DESCRIPCION": "Descripción",
+        "TI": "Base.1",
+        "HI": "Camas",
     }
     
     # Agregar solo si no están en el mapping (para permitir override por cliente)
@@ -215,7 +217,7 @@ def _limpiar_datos_skus(df: pd.DataFrame) -> pd.DataFrame:
     # Numéricos (a nivel SKU)
     numeric_cols = [
         "PESO", "VOL", "PALLETS", "VALOR", "VALOR_CAFE",
-        "ALTURA_FULL_PALLET", "ALTURA_PICKING", "PALLETS_ESTIMADO", "PALLETS_SOLIC", "PESO_SOLIC", "VOL_SOLIC"
+        "ALTURA_FULL_PALLET", "ALTURA_PICKING", "PALLETS_ESTIMADO", "PALLETS_SOLIC", "PESO_SOLIC", "VOL_SOLIC", "TI", "HI"
     ]
     for col in numeric_cols:
         if col in df.columns:

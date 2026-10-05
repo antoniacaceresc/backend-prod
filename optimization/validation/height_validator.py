@@ -217,6 +217,8 @@ class HeightValidator:
                                 es_valioso=sku.valioso,
                                 flujo=pedido.oc,
                                 cajas=sku.cajas_conf,
+                                ti=sku.ti,
+                                hi=sku.hi,
                             )
                             fragmentos.append(frag)
                             continue
@@ -254,6 +256,8 @@ class HeightValidator:
                                 es_valioso=sku.valioso,
                                 flujo=pedido.oc,
                                 cajas=sku.cajas_conf / cantidad_pallets,
+                                ti=sku.ti,
+                                hi=sku.hi,
                             )
                             fragmentos.append(frag)
                         
@@ -290,6 +294,8 @@ class HeightValidator:
                                 es_valioso=sku.valioso,
                                 flujo=pedido.oc,
                                 cajas=sku.cajas_conf * fraccion_picking / cantidad_pallets,
+                                ti=sku.ti,
+                                hi=sku.hi,
                             )
                             fragmentos.append(frag_picking)
                     

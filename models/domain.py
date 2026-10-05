@@ -96,6 +96,9 @@ class SKU:
     pallets_solicitados: Optional[float] = None
     peso_solicitado: Optional[float] = None
     volumen_solicitado: Optional[float] = None
+
+    ti: Optional[float] = None
+    hi: Optional[float] = None
     
     # Límites de apilamiento (si aplica)
     max_altura_apilable_cm: Optional[float] = None  # Calculado o configurado
@@ -158,6 +161,8 @@ class SKU:
         from models.stacking import FragmentoSKU, CategoriaApilamiento
         
         categoria = CategoriaApilamiento(self.categoria_apilamiento_dominante)
+        print(f"to_fragmento SKU {self.sku_id}: ti={self.ti}, hi={self.hi}")
+        
         
         return FragmentoSKU(
             sku_id=self.sku_id,
@@ -172,6 +177,8 @@ class SKU:
             es_picking=self.es_picking,
             es_valioso=self.valioso,
             cajas=self.cajas_conf * fraccion,
+            ti=self.ti,
+            hi=self.hi,
         )
     
     def validar_integridad(self) -> tuple[bool, Optional[str]]:
