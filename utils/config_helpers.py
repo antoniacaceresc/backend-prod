@@ -47,6 +47,10 @@ def get_effective_config(client_config, venta: str = None) -> dict:
 
             # Restricciones específicas Cencosud
             "SEPARAR_APILABILIDAD_POR_VALOR": channel.get("SEPARAR_APILABILIDAD_POR_VALOR", getattr(client_config, 'SEPARAR_APILABILIDAD_POR_VALOR', False)),
+
+            # Restricción específica disvet multi ce o cd
+            "SEPARAR_APILABILIDAD_POR_CE": channel.get("SEPARAR_APILABILIDAD_POR_CE", getattr(client_config, 'SEPARAR_APILABILIDAD_POR_CE', False)),
+            "SEPARAR_APILABILIDAD_POR_CD": channel.get("SEPARAR_APILABILIDAD_POR_CD", getattr(client_config, 'SEPARAR_APILABILIDAD_POR_CD', False)),
             
             # Restricciones específicas SMU
             "PROHIBIR_PICKING_DUPLICADO": channel.get("PROHIBIR_PICKING_DUPLICADO", getattr(client_config, 'PROHIBIR_PICKING_DUPLICADO', False)),
@@ -89,6 +93,8 @@ def get_effective_config(client_config, venta: str = None) -> dict:
         "ALTURA_MAX_PICKING_APILADO_CM": getattr(client_config, 'ALTURA_MAX_PICKING_APILADO_CM', None),
         "CDS_SIN_APILAMIENTO": getattr(client_config, 'CDS_SIN_APILAMIENTO', []),
         "SEPARAR_APILABILIDAD_POR_VALOR": getattr(client_config, 'SEPARAR_APILABILIDAD_POR_VALOR', False),
+        "SEPARAR_APILABILIDAD_POR_CE": getattr(client_config, 'SEPARAR_APILABILIDAD_POR_CE', False),
+        "SEPARAR_APILABILIDAD_POR_CD": getattr(client_config, 'SEPARAR_APILABILIDAD_POR_CD', False),
         "SEPARAR_APILABILIDAD_POR_FLUJO": getattr(client_config, 'SEPARAR_APILABILIDAD_POR_FLUJO', False),
         "FLUJO_CONFIG": getattr(client_config, 'FLUJO_CONFIG', {}),
         "ALVI_ALTURA_MAX_CM": getattr(client_config, 'ALVI_ALTURA_MAX_CM', 230),

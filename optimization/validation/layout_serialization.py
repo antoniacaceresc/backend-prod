@@ -32,6 +32,8 @@ def serializar_posiciones(layout) -> List[Dict[str, Any]]:
                             'descripcion': frag.descripcion,
                             'ti': frag.ti,
                             'hi': frag.hi,
+                            'ce': frag.ce,
+                            'cd': frag.cd
                         }
                         for frag in pallet.fragmentos
                     ]

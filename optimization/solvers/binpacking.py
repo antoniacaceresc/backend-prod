@@ -17,7 +17,8 @@ from optimization.solvers.constraints import (
     agregar_restricciones_apilabilidad,
     agregar_restricciones_walmart_multicd,
     agregar_restriccion_misma_po_diferente_camion,
-    agregar_restricciones_crr_walmart)
+    agregar_restricciones_crr_walmart,
+    agregar_restricciones_apilabilidad_por_origen,)
 from optimization.utils.helpers import preparar_datos_solver, heuristica_ffd
 from optimization.solvers.output import construir_camiones_desde_solver
 from optimization.utils.helpers import pedido_a_dict_excluido
@@ -247,11 +248,27 @@ def _agregar_restricciones_generales_binpacking(
         permite_apilamiento = effective_config.get("PERMITE_APILAMIENTO", True)
         
         if permite_apilamiento:
-            agregar_restricciones_apilabilidad(
-                model, x, datos, pedidos_ids, j, y_truck[j],
-                capacidad.max_positions, capacidad.levels, datos['PALLETS_SCALE'],
-                separar_por_valor=effective_config.get("SEPARAR_APILABILIDAD_POR_VALOR", False)
-            )
+            separar_ce = effective_config.get("SEPARAR_APILABILIDAD_POR_CE", False)
+            separar_cd = effective_config.get("SEPARAR_APILABILIDAD_POR_CD", False)
+
+            if separar_ce and grupo_cfg.tipo in (TipoRuta.MULTI_CE, TipoRuta.MULTI_CE_PRIORIDAD):
+                agregar_restricciones_apilabilidad_por_origen(
+                    model, x, datos, pedidos_ids, j, y_truck[j],   # en vcu.py: lista_i en vez de pedidos_ids
+                    capacidad.max_positions, capacidad.levels, datos['PALLETS_SCALE'],
+                    origin_key='ce',
+                )
+            elif separar_cd and grupo_cfg.tipo == TipoRuta.MULTI_CD:
+                agregar_restricciones_apilabilidad_por_origen(
+                    model, x, datos, pedidos_ids, j, y_truck[j],   # en vcu.py: lista_i en vez de pedidos_ids
+                    capacidad.max_positions, capacidad.levels, datos['PALLETS_SCALE'],
+                    origin_key='cd',
+                )
+            else:
+                agregar_restricciones_apilabilidad(
+                    model, x, datos, pedidos_ids, j, y_truck[j],
+                    capacidad.max_positions, capacidad.levels, datos['PALLETS_SCALE'],
+                    separar_por_valor=effective_config.get("SEPARAR_APILABILIDAD_POR_VALOR", False)
+                )
 
         # Restricción de pedidos divididos (misma PO) no van en el mismo camión
     if effective_config.get("RESTRICT_PO_GROUP", False):

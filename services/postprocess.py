@@ -659,7 +659,6 @@ def _validar_altura_pre_agregar(
     """
     from copy import deepcopy
     from utils.config_helpers import get_effective_config, get_consolidacion_config
-    from optimization.validation.height_validator import HeightValidator
     
     # Crear copia del camión con los pedidos agregados
     camion_simulado = deepcopy(camion)
@@ -707,7 +706,9 @@ def _validar_altura_pre_agregar(
         max_skus_por_pallet=consolidacion["MAX_SKUS_POR_PALLET"],
         max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM"),
         altura_maxima_mismo_sku_cm=altura_maxima_mismo_sku_cm,
-        flujo_config=effective.get("FLUJO_CONFIG", {})
+        flujo_config=effective.get("FLUJO_CONFIG", {}),
+        separar_por_ce=effective.get("SEPARAR_APILABILIDAD_POR_CE", False),
+        separar_por_cd=effective.get("SEPARAR_APILABILIDAD_POR_CD", False),
     )
     
     # Ejecutar validación

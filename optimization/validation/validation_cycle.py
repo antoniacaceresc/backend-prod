@@ -136,7 +136,7 @@ class ValidationCycle:
         if validar_altura:
             camiones = self.validator.validar_camiones(camiones, f"{fase}_validacion", self.effective_config, self.venta)
             # 2. Ajustar inválidos
-            adjustment_result = self.adjuster.ajustar_camiones(camiones, modo)
+            adjustment_result = self.adjuster.ajustar_camiones(camiones, modo, effective_config=self.effective_config)
             camiones_validos = adjustment_result.camiones_validos
             pedidos_removidos = adjustment_result.pedidos_removidos
         else:
@@ -195,7 +195,7 @@ class ValidationCycle:
             # Validar recuperados
             if validar_altura:
                 camiones_recuperados = self.validator.validar_camiones(camiones_recuperados, f"{fase}_recuperacion_{intento}", self.effective_config, self.venta)
-                adj_result = self.adjuster.ajustar_camiones(camiones_recuperados, modo)
+                adj_result = self.adjuster.ajustar_camiones(camiones_recuperados, modo, effective_config=self.effective_config)
             else:
                 adj_result = AdjustmentResult(camiones_recuperados, [])
             

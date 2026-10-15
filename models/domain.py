@@ -974,6 +974,10 @@ class Camion:
             "valor_cafe": self.valor_cafe,
             "chocolates": "SI" if self.tiene_chocolates else "NO",
             "skus_valiosos": self.tiene_valiosos,
+            "multi_origen": (
+                len({p.cd for p in self.pedidos} or set(self.cd)) > 1
+                or len({p.ce for p in self.pedidos} or set(self.ce)) > 1
+            ),
             "pdq": self.tiene_pdq,
             "baja_vu": self.tiene_baja_vu,
             "lote_dir": self.tiene_lote_dir,

@@ -48,6 +48,9 @@ class FragmentoSKU:
     categoria: CategoriaApilamiento
     max_altura_apilable_cm: Optional[float] = None  # Solo para SI_MISMO
 
+    ce: Optional[str] = None
+    cd: Optional[str] = None
+
     es_valioso: bool = False
     cajas: float = 0.0  # Cajas confirmadas de este fragmento
     flujo: Optional[str] = None   # "INV" | "CRR" | (None = no aplica)
@@ -527,7 +530,9 @@ class LayoutCamion:
                                     'es_picking': f.es_picking,
                                     'es_valioso': f.es_valioso,
                                     'flujo': f.flujo,
-                                    "cajas_conf": f.cajas_conf,
+                                    'cajas': f.cajas,
+                                    'ce': f.ce,
+                                    'cd': f.cd,
                                 }
                                 for f in pallet.fragmentos
                             ]

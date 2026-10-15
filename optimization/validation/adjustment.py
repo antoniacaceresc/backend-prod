@@ -8,12 +8,10 @@ Maneja la remoción de pedidos de camiones inválidos y su recuperación.
 from __future__ import annotations
 
 from itertools import combinations
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Tuple
 
 from models.domain import Camion, Pedido, TruckCapacity, TipoCamion
-from models.enums import TipoRuta
 from optimization.validation.height_validator import HeightValidator
-from optimization.utils.helpers import calcular_posiciones_apilabilidad
 from optimization.validation.layout_serialization import metricas_layout
 
 
@@ -60,6 +58,8 @@ class PostValidationAdjuster:
         self.permite_consolidacion = False
         self.max_skus_por_pallet = 1
         self.flujo_config: dict = {}
+        self.separar_apilabilidad_por_ce = False
+        self.separar_apilabilidad_por_cd = False
     
     def ajustar_camiones(
         self,
@@ -81,6 +81,8 @@ class PostValidationAdjuster:
             self.permite_consolidacion = effective_config.get('PERMITE_CONSOLIDACION', False)
             self.max_skus_por_pallet = effective_config.get('MAX_SKUS_POR_PALLET', 1)
             self.flujo_config = effective_config.get('FLUJO_CONFIG', {}) or {}
+            self.separar_apilabilidad_por_ce = effective_config.get('SEPARAR_APILABILIDAD_POR_CE', False)
+            self.separar_apilabilidad_por_cd = effective_config.get('SEPARAR_APILABILIDAD_POR_CD', False)
 
         # Identificar camiones inválidos
         camiones_invalidos = [
@@ -345,6 +347,8 @@ class PostValidationAdjuster:
             max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM"),
             altura_maxima_mismo_sku_cm=altura_maxima_mismo_sku_cm,
             flujo_config=self.flujo_config,
+            separar_por_ce=self.separar_apilabilidad_por_ce,
+            separar_por_cd=self.separar_apilabilidad_por_cd,
         )
         
         es_valido, errores, layout, debug_info = validator.validar_camion_rapido(cam)

@@ -41,6 +41,8 @@ class HeightValidator:
         altura_maxima_mismo_sku_cm: Optional[float] = None,
         flujo_config: Optional[dict] = None,
         separar_por_flujo: bool = False,
+        separar_por_ce: bool = False,
+        separar_por_cd: bool = False,
     ):
         """
         Args:
@@ -55,6 +57,8 @@ class HeightValidator:
         self.altura_maxima_mismo_sku_cm: Optional[float] = altura_maxima_mismo_sku_cm
         self.flujo_config: dict = flujo_config or {}
         self.separar_por_flujo = separar_por_flujo
+        self.separar_por_ce = separar_por_ce 
+        self.separar_por_cd = separar_por_cd
 
     
     def validar_camion_rapido(
@@ -62,7 +66,13 @@ class HeightValidator:
         camion: Camion
     ) -> Tuple[bool, List[str], Optional[LayoutCamion], Optional[Dict]]:
         """Validación RÁPIDA con logging detallado."""
-        
+
+        cds = {p.cd for p in camion.pedidos}
+        if len(cds) > 1 and not self.separar_por_cd:
+            import traceback
+            print(f"[DEBUG CD] camión {camion.id} multi-CD {cds} validado SIN separar")
+            traceback.print_stack(limit=6)
+    
         errores = []
         debug_info = {
             'fragmentos_totales': 0,
@@ -217,6 +227,8 @@ class HeightValidator:
                                 es_valioso=sku.valioso,
                                 flujo=pedido.oc,
                                 cajas=sku.cajas_conf,
+                                ce=pedido.ce,
+                                cd=pedido.cd,
                                 ti=sku.ti,
                                 hi=sku.hi,
                             )
@@ -256,6 +268,8 @@ class HeightValidator:
                                 es_valioso=sku.valioso,
                                 flujo=pedido.oc,
                                 cajas=sku.cajas_conf / cantidad_pallets,
+                                ce=pedido.ce,
+                                cd=pedido.cd,
                                 ti=sku.ti,
                                 hi=sku.hi,
                             )
@@ -294,6 +308,8 @@ class HeightValidator:
                                 es_valioso=sku.valioso,
                                 flujo=pedido.oc,
                                 cajas=sku.cajas_conf * fraccion_picking / cantidad_pallets,
+                                ce=pedido.ce,
+                                cd=pedido.cd,
                                 ti=sku.ti,
                                 hi=sku.hi,
                             )
@@ -351,6 +367,8 @@ class HeightValidator:
             es_valioso=pedido.valioso,
             flujo=pedido.oc,
             cajas=getattr(pedido, 'cajas_conf', 0.0),
+            ce=pedido.ce,
+            cd=pedido.cd,
         )
     
     def _agrupar_por_categoria(
@@ -535,6 +553,18 @@ class HeightValidator:
                         if flujos_pos and frag.flujo not in flujos_pos:
                             continue
 
+                    # Regla Disvet: no mezclar CEs en multi_ce
+                    if self.separar_por_ce and frag.ce:
+                        ces_pos = {f.ce for p in posicion.pallets_apilados for f in p.fragmentos if f.ce}
+                        if ces_pos and frag.ce not in ces_pos:
+                            continue
+
+                    # Regla Disvet: no mezclar CDs en multi_cd
+                    if self.separar_por_cd and frag.cd:
+                        cds_pos = {f.cd for p in posicion.pallets_apilados for f in p.fragmentos if f.cd}
+                        if cds_pos and frag.cd not in cds_pos:
+                            continue
+
                     # Crear nuevo pallet en esta posición
                     pallet_nuevo = PalletFisico(
                         id=f"pallet_{pallet_id_counter}",
@@ -594,6 +624,18 @@ class HeightValidator:
                             if frag.flujo:
                                 flujos_existente = {f.flujo for f in pallet_existente.fragmentos if f.flujo}
                                 if flujos_existente and frag.flujo not in flujos_existente:
+                                    continue
+
+                            # Regla Disvet: no mezclar CEs en multi_ce
+                            if self.separar_por_ce and frag.ce:
+                                ces_pos = {f.ce for p in posicion.pallets_apilados for f in p.fragmentos if f.ce}
+                                if ces_pos and frag.ce not in ces_pos:
+                                    continue
+
+                            # Regla Disvet: no mezclar CDs en multi_cd
+                            if self.separar_por_cd and frag.cd:
+                                cds_pos = {f.cd for p in posicion.pallets_apilados for f in p.fragmentos if f.cd}
+                                if cds_pos and frag.cd not in cds_pos:
                                     continue
 
                             altura_nueva_total = frag.altura_cm + pallet_existente.altura_total_cm
@@ -678,6 +720,18 @@ class HeightValidator:
             for pos_idx, posicion in posiciones_ordenadas:
                 if posicion.esta_vacia:
                     continue
+
+                # Regla Disvet: no mezclar CEs en multi_ce
+                if self.separar_por_ce and frag.ce:
+                    ces_pos = {f.ce for p in posicion.pallets_apilados for f in p.fragmentos if f.ce}
+                    if ces_pos and frag.ce not in ces_pos:
+                        continue
+                # Regla Disvet: no mezclar CDs en multi_cd
+                if self.separar_por_cd and frag.cd:
+                    cds_pos = {f.cd for p in posicion.pallets_apilados for f in p.fragmentos if f.cd}
+                    if cds_pos and frag.cd not in cds_pos:
+                        continue
+
                 
                 # 1a Intento: Picking como capa independiente sobre pallet de piso
                 if not colocado and frag.es_picking and not posicion.esta_vacia:

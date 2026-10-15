@@ -49,6 +49,9 @@ class DisvetConfig:
             
             "ADHERENCIA_BACKHAUL": None,
             "MODO_ADHERENCIA": None,
+
+            "SEPARAR_APILABILIDAD_POR_CE": True,
+            "SEPARAR_APILABILIDAD_POR_CD": True,
             
             "VALIDAR_ALTURA": True,
             "PERMITE_CONSOLIDACION": True,
