@@ -8,16 +8,21 @@ from typing import Any, Dict, List, Optional
 
 def serializar_posiciones(layout) -> List[Dict[str, Any]]:
     """Serializa las posiciones del layout a diccionarios (superset de campos)."""
+    posiciones = sorted(
+        (p for p in layout.posiciones if not p.esta_vacia),
+        key=_clave_orden_posicion,
+    )
+
     return [
         {
-            'id': pos.id,
+            'id': idx,
             'altura_usada_cm': pos.altura_usada_cm,
             'altura_disponible_cm': pos.espacio_disponible_cm,
             'num_pallets': pos.num_pallets,
             'pallets': [
                 {
                     'id': pallet.id,
-                    'nivel': pallet.nivel,
+                    'nivel': nivel,
                     'altura_cm': pallet.altura_total_cm,
                     'skus': [
                         {
@@ -38,13 +43,35 @@ def serializar_posiciones(layout) -> List[Dict[str, Any]]:
                         for frag in pallet.fragmentos
                     ]
                 }
-                for pallet in pos.pallets_apilados
+                for nivel, pallet in enumerate(_ordenar_pallets(pos.pallets_apilados))
             ]
         }
-        for pos in layout.posiciones
+        for idx, pos in enumerate(posiciones)
         if not pos.esta_vacia
     ]
 
+def _clave_orden_posicion(pos):
+    """Agrupa posiciones: valiosos primero, luego por CD y CE."""
+    frags = [f for p in pos.pallets_apilados for f in p.fragmentos]
+    valioso = any(f.es_valioso for f in frags)
+    cd = min((f.cd or '' for f in frags), default='')
+    ce = min((f.ce or '' for f in frags), default='')
+    return (0 if valioso else 1, cd, ce)
+
+
+def _ordenar_pallets(pallets):
+    """
+    Orden de abajo hacia arriba:
+    1. Pallets completos (en su orden original)
+    2. Pickings no-SUPERIOR, de mayor a menor altura
+    3. Pickings SUPERIOR, de mayor a menor altura
+    """
+    def clave(p):
+        if p.tiene_full_pallets:
+            return (0, 0, 0)
+        es_superior = any(f.categoria.value == 'superior' for f in p.fragmentos)
+        return (1, 1 if es_superior else 0, -p.altura_total_cm)
+    return sorted(pallets, key=clave)
 
 def metricas_layout(layout) -> Dict[str, Any]:
     """Métricas estándar del layout + posiciones serializadas (sin estado de validación)."""
