@@ -216,7 +216,7 @@ class NestleReclassifier:
         if camion.pedidos:
             primer_pedido = camion.pedidos[0]
             subcliente = primer_pedido.metadata.get("SUBCLIENTE") if primer_pedido.metadata else None
-            oc = getattr(primer_pedido, 'oc', None)
+            oc = {p.oc for p in camion.pedidos if p.oc}
         
         consolidacion = get_consolidacion_config(
             self.config,
@@ -242,6 +242,7 @@ class NestleReclassifier:
             altura_maxima_cm=altura_maxima,
             permite_consolidacion=consolidacion.get("PERMITE_CONSOLIDACION", True),
             max_skus_por_pallet=consolidacion.get("MAX_SKUS_POR_PALLET", 3),
+            max_skus_por_flujo=consolidacion.get("MAX_SKUS_POR_FLUJO"),
             max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM"),
             altura_maxima_mismo_sku_cm=altura_maxima_mismo_sku_cm,
             flujo_config=effective.get("FLUJO_CONFIG", {}) or {},

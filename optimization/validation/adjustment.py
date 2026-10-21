@@ -332,7 +332,7 @@ class PostValidationAdjuster:
         if cam.pedidos:
             primer_pedido = cam.pedidos[0]
             subcliente = primer_pedido.metadata.get("SUBCLIENTE") if primer_pedido.metadata else None
-            oc = getattr(primer_pedido, 'oc', None)
+            oc = {p.oc for p in cam.pedidos if p.oc}
 
         consolidacion = get_consolidacion_config(self.config, subcliente=subcliente, oc=oc, venta=self.venta)
 
@@ -344,6 +344,7 @@ class PostValidationAdjuster:
             altura_maxima_cm=altura_maxima,
             permite_consolidacion=consolidacion.get("PERMITE_CONSOLIDACION", self.permite_consolidacion),
             max_skus_por_pallet=consolidacion.get("MAX_SKUS_POR_PALLET", self.max_skus_por_pallet),
+            max_skus_por_flujo=consolidacion.get("MAX_SKUS_POR_FLUJO"),
             max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM"),
             altura_maxima_mismo_sku_cm=altura_maxima_mismo_sku_cm,
             flujo_config=self.flujo_config,

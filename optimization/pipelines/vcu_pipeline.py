@@ -17,7 +17,7 @@ from typing import List, Dict, Any, Tuple, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from models.domain import Pedido, Camion, TruckCapacity, ConfiguracionGrupo
-from models.enums import TipoCamion, TipoRuta
+from models.enums import TipoCamion
 
 from optimization.pipelines.base import (
     OptimizationPipeline, OptimizationPhase,
@@ -737,8 +737,8 @@ class VCUPipeline(OptimizationPipeline):
         """Detecta si un grupo es Alvi CRR."""
         if not cfg.cd or not cfg.oc:
             return False
-        cd = cfg.cd[0] if isinstance(cfg.cd, list) else cfg.cd
-        return "Alvi" in cd and cfg.oc.upper() == "CRR"
+        ocs = cfg.oc if isinstance(cfg.oc, (list, tuple)) else [cfg.oc]
+        return "Alvi" in cfg.cd and any(o and o.upper() == "CRR" for o in ocs)
 
 
     def _procesar_alvi_crr_pasadas(
@@ -749,8 +749,8 @@ class VCUPipeline(OptimizationPipeline):
         """
         Procesa grupos Alvi CRR con pasadas múltiples: mediano → pequeño → chico.
         """
-        from utils.config_helpers import get_capacity_for_type
-        from models.enums import TipoCamion
+        from utils.config_helpers import get_capacity_for_type, get_camiones_permitidos_para_ruta
+        from dataclasses import replace
         
         all_camiones = []
         pedidos_asignados = set()
@@ -769,11 +769,23 @@ class VCUPipeline(OptimizationPipeline):
                     p for p in pedidos_grupo 
                     if p.pedido not in context.pedidos_asignados and p.pedido not in pedidos_asignados
                 ]
+
+                # Grupo mixto: en camiones chicos solo entran pedidos cuyo flujo los permite (CRR)
+                if isinstance(cfg.oc, (list, tuple)):
+                    pedidos_disponibles = [
+                        p for p in pedidos_disponibles
+                        if tipo_camion in get_camiones_permitidos_para_ruta(
+                            self.config, cfg.cd, cfg.ce, cfg.tipo.value, self.venta, p.oc)
+                    ]
                 
                 if not pedidos_disponibles:
                     continue
                 
                 cap = get_capacity_for_type(self.config, tipo_camion, self.venta)
+
+                if hasattr(self.config, 'get_altura_maxima'):
+                    sub = pedidos_disponibles[0].metadata.get("SUBCLIENTE", "")
+                    cap = replace(cap, altura_cm=self.config.get_altura_maxima(sub, cap.altura_cm))
                 
                 # Optimizar
                 grupos_preparados = [(cfg, pedidos_disponibles, cap, tipo_camion)]

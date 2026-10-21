@@ -178,7 +178,7 @@ class TruckValidator:
             if cam.pedidos:
                 primer_pedido = cam.pedidos[0]
                 subcliente = primer_pedido.metadata.get("SUBCLIENTE") if primer_pedido.metadata else None
-                oc = getattr(primer_pedido, 'oc', None)
+                oc = {p.oc for p in cam.pedidos if p.oc}
             
             # Obtener altura máxima según configuración
             altura_maxima = self._get_altura_maxima(cam)
@@ -200,6 +200,7 @@ class TruckValidator:
                 altura_maxima_cm=altura_maxima,
                 permite_consolidacion=consolidacion.get("PERMITE_CONSOLIDACION", self.permite_consolidacion),
                 max_skus_por_pallet=consolidacion.get("MAX_SKUS_POR_PALLET", self.max_skus_por_pallet),
+                max_skus_por_flujo=consolidacion.get("MAX_SKUS_POR_FLUJO"),
                 max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM"),
                 altura_maxima_mismo_sku_cm=altura_maxima_mismo_sku_cm,
                 flujo_config=self.flujo_config,
@@ -297,7 +298,7 @@ class TruckValidator:
         # Obtener subcliente y OC del primer pedido (asumimos homogéneo por camión)
         primer_pedido = cam.pedidos[0]
         subcliente = primer_pedido.metadata.get("SUBCLIENTE") if primer_pedido.metadata else None
-        oc = primer_pedido.oc
+        oc = {p.oc for p in cam.pedidos if p.oc}
         
         # Si no hay subcliente, usar default
         if not subcliente:

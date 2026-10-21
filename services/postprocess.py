@@ -72,10 +72,17 @@ def _to_response(
         for pedido in camion.pedidos:
             pedido.numero_camion = idx
     
+        estadisticas = _compute_stats(camiones, pedidos_no_inc)
+
+    from optimization.preprocessing.smu_splitter import splits_info_desde_estado
+    splits = splits_info_desde_estado(camiones, pedidos_no_inc)
+    if splits:
+        estadisticas["splits_info"] = splits
+
     return {
         "camiones": [c.to_api_dict() for c in camiones],
         "pedidos_no_incluidos": [p.to_api_dict(cap_default) for p in pedidos_no_inc],
-        "estadisticas": _compute_stats(camiones, pedidos_no_inc)
+        "estadisticas": estadisticas,
     }
 
 
@@ -691,7 +698,7 @@ def _validar_altura_pre_agregar(
     if camion_simulado.pedidos:
         primer_pedido = camion_simulado.pedidos[0]
         subcliente = primer_pedido.metadata.get("SUBCLIENTE") if primer_pedido.metadata else None
-        oc = primer_pedido.oc
+        oc = {p.oc for p in camion_simulado.pedidos if p.oc}
     
     consolidacion = get_consolidacion_config(config, subcliente=subcliente, oc=oc, venta=venta)
     
@@ -704,6 +711,7 @@ def _validar_altura_pre_agregar(
         altura_maxima_cm=altura_maxima,
         permite_consolidacion=consolidacion["PERMITE_CONSOLIDACION"],
         max_skus_por_pallet=consolidacion["MAX_SKUS_POR_PALLET"],
+        max_skus_por_flujo=consolidacion.get("MAX_SKUS_POR_FLUJO"),
         max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM"),
         altura_maxima_mismo_sku_cm=altura_maxima_mismo_sku_cm,
         flujo_config=effective.get("FLUJO_CONFIG", {}),
@@ -946,13 +954,16 @@ def _validar_reglas_cliente_pre_agregar(
             if flujo:
                 flujos_nuevos.add(flujo.upper())
         
-        # Verificar mezcla de flujos
+        # Verificar mezcla de flujos (permitida solo si el subcliente la habilita, ej: Alvi INV+CRR)
         if flujos_actuales and flujos_nuevos:
             todos_flujos = flujos_actuales | flujos_nuevos
             if len(todos_flujos) > 1:
-                raise ValueError(
-                    f"SMU no permite mezclar flujos en un camión. "
-                )
+                sub = (camion.pedidos[0].metadata or {}).get("SUBCLIENTE", "")
+                mix = config.get_mix_flujos(sub, venta) if hasattr(config, "get_mix_flujos") else None
+                if not mix or not todos_flujos <= {f.upper() for f in mix}:
+                    raise ValueError(
+                        f"SMU no permite mezclar los flujos {sorted(todos_flujos)} en un camión de {sub or 'este subcliente'}."
+                    )
 
         # Validar que el tipo de camión sea válido para el flujo del pedido
         tipo_ruta = camion.tipo_ruta.value if camion.tipo_ruta else "normal"

@@ -43,6 +43,7 @@ class HeightValidator:
         separar_por_flujo: bool = False,
         separar_por_ce: bool = False,
         separar_por_cd: bool = False,
+        max_skus_por_flujo: Optional[dict] = None,
     ):
         """
         Args:
@@ -59,6 +60,7 @@ class HeightValidator:
         self.separar_por_flujo = separar_por_flujo
         self.separar_por_ce = separar_por_ce 
         self.separar_por_cd = separar_por_cd
+        self.max_skus_por_flujo: dict = max_skus_por_flujo or {}
 
     
     def validar_camion_rapido(
@@ -757,7 +759,7 @@ class HeightValidator:
                         pallet_nuevo.agregar_fragmento(frag)
                         
                         # max_niveles: total de pallets permitidos en la posición
-                        if posicion.apilar(pallet_nuevo, max_niveles=self.max_skus_por_pallet + 1):
+                        if posicion.apilar(pallet_nuevo, max_niveles=self._max_skus_posicion(posicion) + 1):
                             # Validar altura picking si aplica
                             if self.max_altura_picking_apilado_cm:
                                 picking_valido, altura_picking = self._validar_altura_picking_posicion(posicion)
@@ -1013,13 +1015,20 @@ class HeightValidator:
         if pallet_piso.tiene_full_pallets:
             cat_piso = self._categoria_dominante_pallet(pallet_piso)
             if cat_piso in (CategoriaApilamiento.BASE, CategoriaApilamiento.FLEXIBLE):
-                return self.max_skus_por_pallet
+                return self._max_skus_posicion(posicion)
             else:
                 return 2
         
         # Piso es picking → permitir apilar más pickings hasta max consolidación
-        return self.max_skus_por_pallet
-    
+        return self._max_skus_posicion(posicion)
+
+    def _max_skus_posicion(self, posicion: PosicionCamion) -> int:
+      """Límite de pickings según el flujo de la posición (camiones con flujos mixtos)."""
+      if self.max_skus_por_flujo:
+          flujos = {f.flujo for p in posicion.pallets_apilados for f in p.fragmentos if f.flujo}
+          if len(flujos) == 1:
+              return self.max_skus_por_flujo.get(next(iter(flujos)).upper(), self.max_skus_por_pallet)
+      return self.max_skus_por_pallet
 
     def _reportar_fallas_detallado(
         self,

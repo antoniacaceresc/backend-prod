@@ -54,8 +54,11 @@ class SmuConfig:
             
             "ADHERENCIA_BACKHAUL": None,
             "MODO_ADHERENCIA": None,
+            "MODO_GREEDY": False,
             
             "VALIDAR_ALTURA": True,
+            "SEPARAR_APILABILIDAD_POR_CE": True,
+            "SEPARAR_APILABILIDAD_POR_CD": True,
 
             # Restricciones comunes Picking
             "PROHIBIR_PICKING_DUPLICADO": True,
@@ -65,8 +68,7 @@ class SmuConfig:
             "ALVI_ALTURA_MAX_CM": 230,
 
             # Restricciones RENDIC
-            "RENDIC_ALTURA_MAX_CM": 240, #universal
-            "RENDIC_ALTURA_MAX_MISMO_SKU_CM": 264, # altura permitida si todos los SKUs en la posición son iguales
+            "RENDIC_ALTURA_MAX_CM": 280, #universal
 
 
             # CDs sin apilamiento permitido
@@ -75,6 +77,7 @@ class SmuConfig:
             # Configuración por subcliente/flujo
             "SUBCLIENTE_CONFIG": {
                 "Alvi": {
+                    "MIX_FLUJOS": ["INV", "CRR"],
                     "INV": {
                         "PERMITE_CONSOLIDACION": True,
                         "MAX_SKUS_POR_PALLET": 2,
@@ -101,6 +104,12 @@ class SmuConfig:
 
             "RUTAS_POSIBLES": {
                 "normal": [
+                    # Alvi - mix INV+CRR (debe ir ANTES de las rutas INV/CRR individuales)
+                    *[{"cds": [cd], "ces": [ce], "ocs": [["INV", "CRR"]],
+                    "camiones_permitidos": ["paquetera", "rampla_directa", "mediano", "pequeño", "chico"]}
+                    for cd in ("Alvi Aeroparque 2", "Alvi Canastas")
+                    for ce in ("0080", "0088", "0097", "0103", "3598", "8150")],
+
                     # Rendic - bodega coquimbo
                     {"cds": ["Bodega Coquimbo 2"], "ces": ["0080"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
                     {"cds": ["Bodega Coquimbo 2"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
@@ -148,7 +157,7 @@ class SmuConfig:
                     {"cds": ["Bodega Antofagasta 2"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
                     {"cds": ["Bodega Antofagasta 2"], "ces": ["3598"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
                     {"cds": ["Bodega Antofagasta 2"], "ces": ["8150"], "camiones_permitidos": ["paquetera", "rampla_directa", "backhaul"]},
-                    
+                    """"
                     # Alvi - aeroparque INV
                     {"cds": ["Alvi Aeroparque 2"], "ces": ["0080"], "ocs": ["INV"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
                     {"cds": ["Alvi Aeroparque 2"], "ces": ["0088"], "ocs": ["INV"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
@@ -181,6 +190,7 @@ class SmuConfig:
                     {"cds": ["Alvi Canastas"], "ces": ["0103"], "ocs": ["CRR"], "camiones_permitidos": ["chico", "pequeño", "mediano", "rampla_directa", "paquetera"]},
                     {"cds": ["Alvi Canastas"], "ces": ["3598"], "ocs": ["CRR"], "camiones_permitidos": ["chico", "pequeño", "mediano", "rampla_directa", "paquetera"]},
                     {"cds": ["Alvi Canastas"], "ces": ["8150"], "ocs": ["CRR"], "camiones_permitidos": ["chico", "pequeño", "mediano", "rampla_directa", "paquetera"]},
+                    """
                 ],
 
                 "multi_ce": [
@@ -308,3 +318,8 @@ class SmuConfig:
             return crr_config.get("PASADAS_CAMIONES", None)
         
         return None
+
+    @classmethod
+    def get_mix_flujos(cls, subcliente: str, venta: str = "Secos") -> Optional[list]:
+        sub = cls.get_channel_config(venta).get("SUBCLIENTE_CONFIG", {}).get(subcliente, {})
+        return sub.get("MIX_FLUJOS")

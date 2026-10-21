@@ -24,8 +24,9 @@ from models.enums import TipoCamion
 from core.config import get_client_config
 from optimization.groups import calcular_tiempo_por_grupo
 from utils.math_utils import format_dates
-from utils.config_helpers import extract_truck_capacities, get_camiones_permitidos_para_ruta, get_capacity_for_type, get_effective_config
+from utils.config_helpers import extract_truck_capacities, get_effective_config
 from optimization.pipelines import VCUPipeline, BinPackingPipeline
+from optimization.preprocessing.smu_splitter import reconstruir_splits_en_resultado, dividir_pedidos_smu
 
 
 # ============================================================================
@@ -116,6 +117,13 @@ def optimizar_con_dos_fases(
     pedidos_objetos, pedidos_dicts = _preprocesar_datos(
         df_raw, client_config, cliente, venta
     )
+
+    # 1.5) PRE-SPLIT SMU
+    effective_config = get_effective_config(client_config, venta)
+    splits_info = []
+    if effective_config.get("MODO_GREEDY", False):
+        capacidades = extract_truck_capacities(client_config, venta)
+        pedidos_objetos, splits_info = dividir_pedidos_smu(pedidos_objetos, client_config, venta, vcu_objetivo=0.75)
     
     # 2) Calcular tiempo por grupo
     effective_config = get_effective_config(client_config, venta)
@@ -161,7 +169,13 @@ def optimizar_con_dos_fases(
         pedidos_objetos, pedidos_dicts, client_config, tpg, request_timeout, venta
     )
 
-    
+    if splits_info:
+        for res in (resultado_vcu, resultado_bp):
+            if res and "estadisticas" in res:
+                res["estadisticas"]["splits_info"] = reconstruir_splits_en_resultado(
+                    res.get("camiones", []), res.get("pedidos_no_incluidos", []), splits_info
+                )
+
     return {
         "vcu": resultado_vcu,
         "binpacking": resultado_bp

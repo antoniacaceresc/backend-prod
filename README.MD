@@ -31,7 +31,6 @@ uvicorn app.main:app --port 8001
 
 
 # Entrar al enviroment
-C:\venvs\backend-prod-env\Scripts\Activate.ps1
 
 # Entrar a la carpeta backend
 cd backend-prod

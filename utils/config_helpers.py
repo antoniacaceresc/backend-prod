@@ -53,6 +53,7 @@ def get_effective_config(client_config, venta: str = None) -> dict:
             "SEPARAR_APILABILIDAD_POR_CD": channel.get("SEPARAR_APILABILIDAD_POR_CD", getattr(client_config, 'SEPARAR_APILABILIDAD_POR_CD', False)),
             
             # Restricciones específicas SMU
+            "MODO_GREEDY": channel.get("MODO_GREEDY", getattr(client_config, 'MODO_GREEDY', False)),
             "PROHIBIR_PICKING_DUPLICADO": channel.get("PROHIBIR_PICKING_DUPLICADO", getattr(client_config, 'PROHIBIR_PICKING_DUPLICADO', False)),
             "ALTURA_MAX_PICKING_APILADO_CM": channel.get("ALTURA_MAX_PICKING_APILADO_CM", getattr(client_config, 'ALTURA_MAX_PICKING_APILADO_CM', None)),
             "CDS_SIN_APILAMIENTO": channel.get("CDS_SIN_APILAMIENTO", getattr(client_config, 'CDS_SIN_APILAMIENTO', [])),
@@ -89,6 +90,7 @@ def get_effective_config(client_config, venta: str = None) -> dict:
         "MIX_CANAL_CDS": getattr(client_config, 'MIX_CANAL_CDS', None),
         "ADHERENCIA_BACKHAUL": getattr(client_config, 'ADHERENCIA_BACKHAUL', None),
         "MODO_ADHERENCIA": getattr(client_config, 'MODO_ADHERENCIA', None),
+        "MODO_GREEDY": getattr(client_config, 'MODO_GREEDY', False),
         "PROHIBIR_PICKING_DUPLICADO": getattr(client_config, 'PROHIBIR_PICKING_DUPLICADO', False),
         "ALTURA_MAX_PICKING_APILADO_CM": getattr(client_config, 'ALTURA_MAX_PICKING_APILADO_CM', None),
         "CDS_SIN_APILAMIENTO": getattr(client_config, 'CDS_SIN_APILAMIENTO', []),
@@ -202,6 +204,15 @@ def _normalize_ce_list(lst):
         norm.append(s)
     return norm
 
+def _norm_oc(oc):
+    if isinstance(oc, (list, tuple, set, frozenset)):
+        return frozenset(o.upper() for o in oc if o)
+    return oc.upper() if oc else None
+
+def _oc_match_ruta(oc, ruta_ocs) -> bool:
+    """'INV' matchea la ruta INV; ['INV','CRR'] matchea solo la ruta mixta."""
+    objetivo = _norm_oc(oc)
+    return objetivo is not None and objetivo in {_norm_oc(o) for o in ruta_ocs}
 
 def get_camiones_permitidos_para_ruta(
     client_config, cds: List[str], ces: List[str], tipo_ruta: str, venta: str = None, oc: str = None
@@ -229,7 +240,7 @@ def get_camiones_permitidos_para_ruta(
             if ruta_cds == cds_busqueda and ruta_ces == ces_busqueda:
                 # Si la ruta tiene OCs definidos, verificar match
                 if ruta_ocs:
-                    if not oc or oc.upper() not in [o.upper() for o in ruta_ocs]:
+                    if not _oc_match_ruta(oc, ruta_ocs):
                         continue  # No matchea por OC
 
                 tipos_str = ruta.get('camiones_permitidos', [])
@@ -312,11 +323,16 @@ def get_consolidacion_config(client_config, subcliente: str = None, oc: str = No
         if subcliente_key:
             sub_config = subcliente_configs[subcliente_key]
     
-            # Si es Alvi y tiene flujo específico (INV o CRR)
-            if subcliente_key.lower() == "alvi" and oc and oc.upper() in sub_config:
-                flujo_config = sub_config[oc.upper()]
-                config["PERMITE_CONSOLIDACION"] = flujo_config.get("PERMITE_CONSOLIDACION", False)
-                config["MAX_SKUS_POR_PALLET"] = flujo_config.get("MAX_SKUS_POR_PALLET", 1)
+            ocs = oc if isinstance(oc, (list, tuple, set, frozenset)) else [oc]
+            flujos_cfg = [sub_config[o.upper()] for o in ocs if o and o.upper() in sub_config]
+            if subcliente_key.lower() == "alvi" and flujos_cfg:
+                # Camión mixto: regla más restrictiva
+                config["PERMITE_CONSOLIDACION"] = all(f.get("PERMITE_CONSOLIDACION", False) for f in flujos_cfg)
+                config["MAX_SKUS_POR_PALLET"] = min(f.get("MAX_SKUS_POR_PALLET", 1) for f in flujos_cfg)
+                config["MAX_SKUS_POR_FLUJO"] = {
+                    o.upper(): sub_config[o.upper()].get("MAX_SKUS_POR_PALLET", 1)
+                    for o in ocs if o and o.upper() in sub_config
+                }
             else:
                 # Config general del subcliente (Rendic o Alvi sin flujo)
                 config["PERMITE_CONSOLIDACION"] = sub_config.get("PERMITE_CONSOLIDACION", False)

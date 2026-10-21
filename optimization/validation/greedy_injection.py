@@ -357,7 +357,12 @@ class GreedyInjector:
             oc_camion = getattr(camion.pedidos[0], 'oc', None)
             
             if oc_pedido and oc_camion and oc_camion.upper() != oc_pedido.upper():
-                mix_grupos = self.effective_config.get('MIX_GRUPOS', [])
+                mix_grupos = list(self.effective_config.get('MIX_GRUPOS', []))
+                if hasattr(self.config, 'get_mix_flujos'):
+                    sub = (pedido.metadata or {}).get("SUBCLIENTE", "")
+                    mix_sub = self.config.get_mix_flujos(sub, self.venta)
+                    if mix_sub:
+                        mix_grupos.append(mix_sub)
                 mix_permitido = any(
                     oc_camion.upper() in [o.upper() for o in g] and 
                     oc_pedido.upper() in [o.upper() for o in g]
@@ -415,7 +420,7 @@ class GreedyInjector:
         if camion.pedidos:
             primer_pedido = camion.pedidos[0]
             subcliente = primer_pedido.metadata.get("SUBCLIENTE") if primer_pedido.metadata else None
-            oc = getattr(primer_pedido, 'oc', None)
+            oc = {p.oc for p in camion.pedidos if p.oc}
         
         consolidacion = get_consolidacion_config(self.config, subcliente=subcliente, oc=oc, venta=self.venta)
         
@@ -427,6 +432,7 @@ class GreedyInjector:
             altura_maxima_cm=altura_maxima,
             permite_consolidacion=consolidacion.get("PERMITE_CONSOLIDACION", False),
             max_skus_por_pallet=consolidacion.get("MAX_SKUS_POR_PALLET", 1),
+            max_skus_por_flujo=consolidacion.get("MAX_SKUS_POR_FLUJO"),
             max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM"),
             altura_maxima_mismo_sku_cm=altura_maxima_mismo_sku_cm,
             flujo_config=self.flujo_config,
@@ -473,7 +479,7 @@ class GreedyInjector:
         if camion.pedidos:
             primer_pedido = camion.pedidos[0]
             subcliente = primer_pedido.metadata.get("SUBCLIENTE") if primer_pedido.metadata else None
-            oc = getattr(primer_pedido, 'oc', None)
+            oc = {p.oc for p in camion.pedidos if p.oc}
         
         consolidacion = get_consolidacion_config(self.config, subcliente=subcliente, oc=oc, venta=self.venta)
         
@@ -485,6 +491,7 @@ class GreedyInjector:
             altura_maxima_cm=altura_maxima,
             permite_consolidacion=consolidacion.get("PERMITE_CONSOLIDACION", False),
             max_skus_por_pallet=consolidacion.get("MAX_SKUS_POR_PALLET", 1),
+            max_skus_por_flujo=consolidacion.get("MAX_SKUS_POR_FLUJO"),
             max_altura_picking_apilado_cm=consolidacion.get("ALTURA_MAX_PICKING_APILADO_CM"),
             altura_maxima_mismo_sku_cm=altura_maxima_mismo_sku_cm,
             flujo_config=self.flujo_config,

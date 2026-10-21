@@ -170,7 +170,7 @@ class SmuTruckSelector(TruckSelector):
         es_alvi = self._es_alvi(grupo_cfg)
         
         # Alvi con CRR: priorizar pequeño > mediano
-        if es_alvi and oc and oc.upper() == 'CRR':
+        if es_alvi and isinstance(oc, str) and oc.upper() == 'CRR':
             if TipoCamion.CHICO in camiones_permitidos:
                 return TipoCamion.CHICO
             if TipoCamion.PEQUEÑO in camiones_permitidos:

@@ -312,7 +312,7 @@ def _iter_normal_routes(
             # Si la ruta tiene OCs específicos, filtrar por ellos
             if ruta_ocs:
                 for oc in ruta_ocs:
-                    pedidos_oc = [p for p in pedidos_ruta if p.oc and p.oc.upper() == oc.upper()]
+                    pedidos_oc = [p for p in pedidos_ruta if _match_oc(p.oc, oc)]
                     if pedidos_oc:
                         yield (cds, ces, oc)
             elif usa_oc:
