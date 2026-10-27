@@ -109,6 +109,11 @@ class DisvetConfig:
                     {"cds": ["Vivancos SPA"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
                     {"cds": ["Vivancos SPA"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
                     {"cds": ["Vivancos SPA"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+
+                    
+                    {"cds": ["Feval"], "ces": ["0088"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Feval"], "ces": ["0097"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
+                    {"cds": ["Feval"], "ces": ["0103"], "camiones_permitidos": ["paquetera", "rampla_directa"]},
                     
                     # CDs que SOLO permiten backhaul
                     {"cds": ["Cerro Grande"], "ces": ["0088"], "camiones_permitidos": ["backhaul"]},
